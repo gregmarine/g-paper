@@ -290,12 +290,27 @@ full pass first round; NA5C full pass after the gate fix. 72 JVM tests green. **
 open engine work; documentation only.
 
 ### Phase 8 — Documentation & Release
-**Status:** 🔄 In progress
+**Status:** ✅ Complete (commit c4f6fa0, tag v0.1.0)
 - Full `README.md` (the front door: what/why/quickstart), `docs/integration-guide.md` (per-device
   module setup incl. BOOX repo/jetifier/hiddenapibypass and Supernote zero-dep story),
   `docs/architecture.md`, `docs/api.md` finalized, host-responsibilities guide (gestures, undo/redo,
   persistence), finalize `CLAUDE.md`.
 - Tag `v0.1.0`. Commit & push.
+
+**Outcome (2026-08-15):** Documentation-only phase, built as planned, no code changes. README
+rewritten as the front door (features, module table, quickstart, doc index, build); three new
+docs: `integration-guide.md` (mavenLocal artifacts; per-family setup — generic bare,
+Ratta zero-dep, the four BOOX consumer pieces: repo/jetifier/label override/jniLibs packaging —
+plus view wiring and the lifecycle table; `consumer-smoke/` cross-referenced as the working
+example), `architecture.md` (module graph, shared-base design, rendering model, both engines'
+device knowledge incl. all four Ratta overlay laws, gate, testing strategy),
+`host-responsibilities.md` (persistence patterns, page turns, an undo/redo replay table, the
+full palm-gating contract incl. escrow, content-renderer duties, chrome cooperation, a
+"must NOT do" list). `api.md` reframed from Phase-1 contract to v0.1.0 surface (phase jargon
+removed, docs cross-linked). CLAUDE.md gained the doc list + the rule that public-surface/build
+changes update the matching doc in the same commit. `./gradlew build` green (72 JVM tests).
+Tagged `v0.1.0` at the close-out commit. **For Phase 9:** library is released at 0.1.0;
+recognizers land as a post-release feature per the phase plan.
 
 ### Phase 9 — Gesture Recognizers: Smart Lasso & Scribble Erase (post-v0.1.0)
 **Status:** ⬜ Not started
