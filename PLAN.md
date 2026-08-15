@@ -80,7 +80,7 @@ Phase 2 replaces it. Build facts and device rules folded into `CLAUDE.md`; seria
 in `.claude/skills/device-build-install/SKILL.md`.
 
 ### Phase 1 — Public API Contract
-**Status:** ⬜ Not started
+**Status:** 🔄 In progress
 - Design the full public surface: `PaperView` interface, `Stroke`/`StrokePoint` model, tools
   (pen/eraser/lasso/none), listener callbacks (`onStrokeCommitted`, `onStrokeErased`, `onPenLifted`,
   selection/drag events, raw input passthrough), template/background API, page-size handling,
@@ -95,7 +95,12 @@ in `.claude/skills/device-build-install/SKILL.md`.
 - Port/redesign `GenericNotebookView` into core's `CanvasPaperView`: stylus-only input capture,
   RenderNode committed-content model, live-stroke drawing, eraser hit-testing (AABB pre-filter,
   throttled redraw), template rendering into page rect, pen-activity gate, host-renderer layer.
-- Demo v1: full-screen paper, pen/eraser/width/color controls, clear, stroke feed readout
+- Committed style renderers, first slice: `PEN` baseline for all styles, plus the cheap ones where
+  practical (`MARKER` translucent flat-cap, `DASH` dashed paint, `CROSS` x-marks along path,
+  `FOUNTAIN` pressure-width). Textured
+  `PENCIL`/`BRUSH`/`CALLIGRAPHY` may defer (render as `PEN`) — must be hand-rolled portable Canvas
+  code, never an SDK dependency in core.
+- Demo v1: full-screen paper, pen/eraser/width/color/style controls, clear, stroke feed readout
   (proves the data-out API), one host-rendered sample object (proves the render-in API).
 - **Test:** JVM tests (erase geometry, stroke model, bounds); on-device on generic Android
   (tablet/emulator) via adb.
@@ -107,6 +112,10 @@ in `.claude/skills/device-build-install/SKILL.md`.
   `resumeDrawing`/`releaseForHandoff` semantics, toolbar/chrome exclusion rects, barrel-button erase,
   leaked-pin healing hook for the host's Application class, HiddenApiBypass init requirement documented
   and wrapped.
+- Live style mapping: arm the firmware style per `StrokeStyle` (PEN→0 PENCIL, FOUNTAIN→1, MARKER→2,
+  BRUSH→3 NEO_BRUSH, PENCIL→4 CHARCOAL, DASH→5, CALLIGRAPHY→7 SQUARE_PEN, CROSS→4 CHARCOAL as the
+  nearest live texture — bake corrects to true x-marks) — `setStrokeStyle` is proven no-restart and
+  fast-mode-safe on all five Tier-1 BOOX devices. Verify live↔committed agreement per style.
 - Demo: engine indicator, same feature set running on the Onyx overlay.
 - **Test:** on-device BOOX checklist (first-stroke latency, erase handoff, no ghosting, exclusion
   zones, app-switch release). User eyes-on since screencap can't see the overlay.
@@ -117,6 +126,9 @@ in `.claude/skills/device-build-install/SKILL.md`.
   (firmware live ink + deferred bake handoff), the three overlay laws, clear-retry ladder,
   hover-based suppressors (barrel/eraser-end/drag), disable-area complement bands + chrome exclusion,
   pen-approach re-arm, registration compensation, process-global `inkOwner` guard.
+- Live style mapping from the pen-code sweep: PEN/MARKER/PENCIL→NEEDLE(10), FOUNTAIN/BRUSH→INK(16),
+  DASH→4, CROSS→3 (native x stream), CALLIGRAPHY→15 (confirm on-device vs 14; never arm 12 — broken).
+  EMR sizing per style from the measured formulas.
 - **Test:** on-device Nomad/Manta checklist (live ink, deferred bake at boundaries, erase, ladder
   behavior, suppressors). User eyes-on.
 
@@ -154,8 +166,21 @@ in `.claude/skills/device-build-install/SKILL.md`.
 
 ## Standing Open Questions (ask as they become relevant)
 
-- Pressure/tilt: capture and deliver on hardware that reports it (Notesprout never wired this) — decide in Phase 1.
-- Multi-page semantics: g-paper is one surface; host swaps content for "pages". Confirm in Phase 1.
-- Undo/redo: host-owned (component replays via load APIs). Confirm in Phase 1.
+- ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
+- ~~Multi-page semantics~~ **Decided (Phase 1):** confirmed — one surface; host swaps content for "pages".
+- ~~Undo/redo~~ **Decided (Phase 1):** confirmed host-owned; component exposes deterministic load/add/remove.
+- **Pen types — Decided (Phase 1, API review):** abstract `StrokeStyle` enum
+  (`PEN`/`FOUNTAIN`/`MARKER`/`PENCIL`/`BRUSH`/`CALLIGRAPHY`/`DASH`/`CROSS`) on `Stroke.style` + `PaperView.penStyle`
+  from day one, so the host data shape never breaks. The set is the union of what the hardware can
+  approximate live, from the device surveys (Onyx: 9 firmware styles verified on 5 devices, Notesprout
+  `docs/onyx-pen-tools.md`; Ratta: the 0…31 pen-code sweep — solid 0/5/8/10/11, pressure 1/2/16,
+  dash 4, x-stream 3, calligraphy 14/15, 12 broken, 6/7/9/13 dead, 17–31 alias 16 — recorded in
+  Notesprout's debug `AndroidManifest.xml` comment). Native codes never surface in the public API.
+  Committed appearance is core-rendered and portable; live ink maps per engine (mapping table in
+  `StrokeStyle` KDoc and `docs/api.md`), confirmed on-device in Phases 3/4. Both lasso-trail
+  *appearances* are host-usable pen types — `DASH` (native live on both) and `CROSS` (Ratta code 3
+  native; Onyx approximates live with CHARCOAL, exact when baked) — while the trail chrome the engines
+  arm during lasso gestures stays internal. Rendering lands incrementally: engines may render richer
+  styles as `PEN` until their committed renderer exists.
 - Publishing target (JitPack vs GitHub Packages vs mavenLocal-only) — decide in Phase 6.
 - Demo app visual language: e-ink-first like Notesprout's design system, or plain Material-free minimal — decide in Phase 2.
