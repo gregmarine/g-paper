@@ -11,8 +11,10 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import com.symmetricalpalmtree.gpaper.core.PaperListener
 import com.symmetricalpalmtree.gpaper.core.PaperView
@@ -247,6 +249,17 @@ class MainActivity : Activity() {
             maxLines = 2
         }
 
+        // Paper + the capability-notes overlay share the flexible area; the overlay
+        // sits on top and is GONE until toggled (see toggleNotes).
+        val paperArea = FrameLayout(this).apply {
+            addView(paper.asView(), FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+            addView(buildNotesOverlay(), FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+        }
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
@@ -254,7 +267,7 @@ class MainActivity : Activity() {
             addView(divider())
             addView(status)
             addView(divider())
-            addView(paper.asView(), LinearLayout.LayoutParams(
+            addView(paperArea, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
             ))
         }
@@ -309,6 +322,117 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    // ── Capability notes (Phase 6) ───────────────────────────────────────────
+
+    private lateinit var notesOverlay: ScrollView
+    private lateinit var notesText: TextView
+    private var toolBeforeNotes: Tool? = null
+
+    private fun buildNotesOverlay(): View {
+        notesText = TextView(this).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = 13f
+            setTextColor(Color.BLACK)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        notesOverlay = ScrollView(this).apply {
+            setBackgroundColor(Color.WHITE)
+            visibility = View.GONE
+            addView(notesText)
+        }
+        return notesOverlay
+    }
+
+    /**
+     * While the notes cover the paper the engine is parked in [Tool.NONE]: on the EPD
+     * engines the firmware would otherwise keep inking under (BOOX: over) the overlay —
+     * NONE is the one tool state that turns hardware ink fully off. Restored on close.
+     */
+    private fun toggleNotes() {
+        if (notesOverlay.visibility == View.VISIBLE) {
+            notesOverlay.visibility = View.GONE
+            toolBeforeNotes?.let { paper.tool = it }
+            toolBeforeNotes = null
+            applyToolSelection()
+        } else {
+            notesText.text = capabilityNotes()
+            toolBeforeNotes = paper.tool
+            paper.tool = Tool.NONE
+            paper.releaseRender()
+            notesOverlay.visibility = View.VISIBLE
+            applyToolSelection() // NONE: no tool button highlighted while notes are open
+        }
+    }
+
+    private fun capabilityNotes(): String {
+        val dm = resources.displayMetrics
+        val engines = GPaper.registeredEngines().joinToString("\n") {
+            val available = if (it.isAvailable(this)) "available" else "not available here"
+            "  ${it.id}  (priority ${it.priority}, $available)"
+        }
+        val header = """
+            |DEVICE
+            |  ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE}
+            |  panel ${dm.widthPixels}x${dm.heightPixels} @ ${dm.densityDpi}dpi
+            |
+            |REGISTERED ENGINES
+            |$engines
+            |
+            |SELECTED ENGINE: ${paper.engineId}
+        """.trimMargin()
+        val engineNotes = when (paper.engineId) {
+            "onyx" -> """
+                |ONYX (BOOX) ENGINE
+                |  Live ink: firmware raw-drawing pipeline (EPD overlay,
+                |  invisible to screencap). Committed strokes: core-rendered,
+                |  portable across engines.
+                |  Live style mapping (committed appearance corrects on bake):
+                |    PEN->PENCIL  FOUNTAIN->FOUNTAIN  MARKER->MARKER
+                |    BRUSH->NEO_BRUSH  PENCIL->CHARCOAL  DASH->DASH
+                |    CALLIGRAPHY->SQUARE_PEN  CROSS->CHARCOAL (baked as x-marks)
+                |  Barrel-button / eraser-end erase: native, any tool.
+                |  Lasso: firmware DASH trail; drag runs the panel in A2 fast mode.
+                |  Pressure: normalized per device. Tilt: reported as 0
+                |  (per-device scales, no SDK normalizer).
+                |  Host must call OnyxEngine.register(app) from Application.onCreate
+                |  and apply system-bar insets (BOOX overlays a real status bar).
+            """.trimMargin()
+            "ratta" -> """
+                |RATTA (SUPERNOTE) ENGINE
+                |  Live ink: firmware ink daemon over Binder (zero extra
+                |  dependencies; EPD overlay, invisible to screencap).
+                |  Committed strokes: core-rendered, portable; bake is deferred
+                |  to natural boundaries (tool change, content swap).
+                |  Live pen codes: PEN/MARKER/PENCIL->NEEDLE  FOUNTAIN/BRUSH->INK
+                |    DASH->dash stream  CROSS->x stream  CALLIGRAPHY->15
+                |  Registration compensation: +2 px (Nomad) / +3 px (Manta).
+                |  Barrel-button / eraser-end: firmware suppressed from hover;
+                |  software erase does the work. Lasso: firmware dash trail.
+                |  Colors map to nearest firmware grey live; true ARGB on bake.
+            """.trimMargin()
+            else -> """
+                |GENERIC ENGINE
+                |  Ink runs the ordinary View pipeline — live and committed
+                |  appearance are identical, and (unlike the EPD engines) the
+                |  ink IS visible to screencap. All 8 styles core-rendered.
+                |  Lasso: software dashed trail drawn by the shared base.
+                |  Works on any Android device; no registration call needed.
+            """.trimMargin()
+        }
+        val common = """
+            |COMMON CONTRACTS
+            |  Hosts own all data; stroke ids are the join key.
+            |  isPenActive palm gate: writing or hovering + 350 ms tail;
+            |  tap actions must re-check at finger-up and escrow the commit.
+            |  Selection active: single finger drags it, finger tap dismisses.
+            |  clear() fires no erase callbacks; page turns are
+            |  clearForContentSwap() + loadStrokes().
+            |
+            |(Notes open = tool NONE: pen input is observed, not inked.)
+        """.trimMargin()
+        return "$header\n\n$engineNotes\n\n$common"
+    }
+
     // ── Toolbar ──────────────────────────────────────────────────────────────
 
     private lateinit var penButton: TextView
@@ -352,7 +476,9 @@ class MainActivity : Activity() {
             refreshStatus()
         }
 
-        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, clearButton)) {
+        val notesButton = toolbarButton("Notes") { toggleNotes() }
+
+        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, clearButton, notesButton)) {
             bar.addView(b, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginEnd = dp(6) })
@@ -366,6 +492,12 @@ class MainActivity : Activity() {
     }
 
     private fun selectTool(tool: Tool) {
+        // Picking a tool while the notes cover the paper implies "back to drawing" —
+        // drop the overlay and its saved tool instead of restoring a stale one later.
+        if (notesOverlay.visibility == View.VISIBLE) {
+            notesOverlay.visibility = View.GONE
+            toolBeforeNotes = null
+        }
         paper.tool = tool
         applyToolSelection()
     }

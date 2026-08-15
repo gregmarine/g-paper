@@ -1,7 +1,11 @@
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
+    id("maven-publish")
 }
+
+group = property("GPAPER_GROUP") as String
+version = property("GPAPER_VERSION") as String
 
 android {
     namespace = "com.symmetricalpalmtree.gpaper.onyx"
@@ -9,6 +13,12 @@ android {
 
     defaultConfig {
         minSdk = 29
+    }
+
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
     }
 
     compileOptions {
@@ -33,4 +43,15 @@ dependencies {
     // RawInputManager); Android 14+ blocks that without this bypass. OnyxEngine
     // installs it — hosts never touch this dependency directly.
     implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
+}
+
+// mavenLocal-only publishing (Phase 6 decision). Consumers of THIS artifact must add
+// the BOOX maven repo and android.enableJetifier=true to their own build (the POM's
+// onyxsdk/hiddenapibypass deps resolve there); generic-only consumers need neither.
+publishing {
+    publications {
+        register<MavenPublication>("release") {
+            afterEvaluate { from(components["release"]) }
+        }
+    }
 }

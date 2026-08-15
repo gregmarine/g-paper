@@ -234,7 +234,7 @@ dashed trail (`rendersLiveTrail` base path) is the one Phase-5 surface not yet e
 cover it in the parity audit on a generic device (MIP11).
 
 ### Phase 6 — Hardening & Publishing
-**Status:** ⬜ Not started
+**Status:** 🔄 In progress
 - Parity audit: shared logic truly shared (no sibling drift), lifecycle/rotation/multi-view checks,
   perf rules verified (no per-stroke re-tessellation, erase throttling).
 - `maven-publish` setup so apps can consume via JitPack (or mavenLocal for development).
@@ -274,7 +274,7 @@ cover it in the parity audit on a generic device (MIP11).
   native; Onyx approximates live with CHARCOAL, exact when baked) — while the trail chrome the engines
   arm during lasso gestures stays internal. Rendering lands incrementally: engines may render richer
   styles as `PEN` until their committed renderer exists.
-- Publishing target (JitPack vs GitHub Packages vs mavenLocal-only) — decide in Phase 6.
+- ~~Publishing target~~ **Decided (Phase 6):** mavenLocal-only.
 - ~~Demo app visual language~~ **Decided (Phase 2):** e-ink-first minimal — black-on-white,
   flat 2px-bordered buttons (selected = solid black), no Material theming/deps; reads
   correctly on EPD panels in Phases 3/4 and on LCD alike.

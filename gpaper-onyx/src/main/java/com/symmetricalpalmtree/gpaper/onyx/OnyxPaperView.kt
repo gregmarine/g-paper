@@ -751,6 +751,17 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         })
     }
 
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (w == 0 || h == 0) return
+        // The pipeline's limit rect is screen geometry captured at open — a later
+        // resize (rotation, insets change) leaves raw input clipped to stale bounds.
+        // Post: getLocationOnScreen is unreliable until this layout pass settles.
+        if (isSetup && penOwner === this) {
+            post { if (isSetup && penOwner === this) applyLimitRect() }
+        }
+    }
+
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
         if (hasWindowFocus) {
