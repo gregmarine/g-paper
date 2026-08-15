@@ -80,7 +80,7 @@ Phase 2 replaces it. Build facts and device rules folded into `CLAUDE.md`; seria
 in `.claude/skills/device-build-install/SKILL.md`.
 
 ### Phase 1 — Public API Contract
-**Status:** 🔄 In progress
+**Status:** ✅ Complete (commit a99dca3)
 - Design the full public surface: `PaperView` interface, `Stroke`/`StrokePoint` model, tools
   (pen/eraser/lasso/none), listener callbacks (`onStrokeCommitted`, `onStrokeErased`, `onPenLifted`,
   selection/drag events, raw input passthrough), template/background API, page-size handling,
@@ -89,6 +89,20 @@ in `.claude/skills/device-build-install/SKILL.md`.
 - Written as code (interfaces + models + KDoc) plus `docs/api.md`.
 - **Test:** JVM unit tests for models/geometry utilities; compiles into all modules.
 - **Checkpoint:** user reviews the API before any engine work begins.
+
+**Outcome (2026-08-14):** Built as planned, reviewed and approved by the user, with one addition
+beyond the original bullet: **pen types**. The review surfaced that the single-pen draft ignored the
+device-native stroke styles, so `StrokeStyle` (8 abstract values incl. the `DASH`/`CROSS` trail
+appearances) was added to `Stroke.style` + `PaperView.penStyle`, with mapping tables and per-phase
+implementation bullets (details in the Phase-1 decision entries under Standing Open Questions).
+The full surface lives in `gpaper-core` (`PaperView`, pure-JVM models in `model/`, `PaperListener`/
+`RawInputListener`, `ContentRenderer`, `GPaper` registry, `Geometry` utils) with `docs/api.md` as the
+guided tour; 28 JVM tests green; `./gradlew build` green. Notable contract choices vs Notesprout:
+ARGB Int color, batched `onStrokesErased`, listener interfaces with default no-ops, `clear()` fires
+no erase callbacks, `clearForContentSwap()` is the page-turn path, `renderToBitmap()` included.
+**For Phase 2:** implement `PaperView` in core's `CanvasPaperView`; install the generic provider via
+the `GPaper.genericProviderFactory` internal hook (registry is ready and waiting); committed style
+renderers first slice per the Phase 2 bullets (richer styles render as `PEN` until implemented).
 
 ### Phase 2 — Generic Engine + Demo v1
 **Status:** ⬜ Not started

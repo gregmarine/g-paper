@@ -16,6 +16,23 @@ Gradle multi-module project at repo root:
 
 Reference source: `~/git/Notesprout` (see its `docs/drawing-engine.md`) — the engines being
 extracted/redesigned. Read it for device knowledge; never copy its sibling-view duplication.
+Pen-type/native-style knowledge: Notesprout `docs/onyx-pen-tools.md` (Onyx five-device survey) and
+the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidManifest.xml` comment.
+
+## Public API (Phase 1 — standing rules)
+
+- The whole host-facing surface is `gpaper-core`'s `com.symmetricalpalmtree.gpaper.core` package;
+  `docs/api.md` is the guided tour and must be kept in step with the code.
+- **`model/` and `geometry/` stay pure Kotlin — no Android imports.** That is what lets the unit
+  tests run on the JVM without Robolectric. Android bridging goes in `model/AndroidInterop.kt`.
+- Native device style/pen codes never surface in the public API. `StrokeStyle` is abstract; the
+  committed (baked) appearance is core-rendered and portable across engines, live ink is a
+  best-effort per-engine mapping (tables in `StrokeStyle` KDoc + `docs/api.md`).
+- Engine selection: explicit registration via `GPaper` (no ServiceLoader, no reflection). Engine
+  choice happens once at creation, logged at `Log.i`; **never add a silent runtime fallback** —
+  post-construction engine failures must be loud.
+- Hosts own all data; ids are the join key. `clear()` fires no erase callbacks; page turns are
+  `clearForContentSwap()` + `loadStrokes()`; `onPenLifted` is a save trigger only.
 
 ## Toolchain (mirrors Notesprout)
 
