@@ -169,7 +169,7 @@ reference). Tilt deliberately captured as 0 on Onyx (per-device scales, no SDK n
 `onPenUpRefresh`/`setPostInputEvent` analogues don't apply (Ratta hover arrives as MotionEvents).
 
 ### Phase 4 — Ratta (Supernote) Engine
-**Status:** 🧪 Awaiting device verification
+**Status:** ✅ Complete (commit f464f5b)
 - `gpaper-ratta`: `SupernoteInk` binder client + ink map, engine as a subclass of core's canvas view
   (firmware live ink + deferred bake handoff), the three overlay laws, clear-retry ladder,
   hover-based suppressors (barrel/eraser-end/drag), disable-area complement bands + chrome exclusion,
@@ -180,7 +180,25 @@ reference). Tilt deliberately captured as 0 on Onyx (per-device scales, no SDK n
 - **Test:** on-device Nomad/Manta checklist (live ink, deferred bake at boundaries, erase, ladder
   behavior, suppressors). User eyes-on.
 
-### Phase 5 — Selection & Drag Helpers
+**Outcome (2026-08-15):** Built as planned. `RattaPaperView` **subclasses `CanvasPaperView`**
+(sibling-copy trap stays dead); core gained the seams `recordCommitted()`/open `redrawCommitted`,
+`bakeAfterCommit()` (deferred-bake), `rendersLiveStrokes`, `isPenDown`, plus the model-side
+exclusion split `setExclusionRects` always promised. `gpaper-ratta` is **zero-dependency**
+(direct firmware Binder — `SupernoteInk` client; `RattaInkMap` is pure Kotlin with its grey
+thresholds pinned by 7 JVM tests). Live style mapping as planned (PEN/MARKER/PENCIL→NEEDLE 10,
+FOUNTAIN/BRUSH→INK 16, DASH→4, CROSS→3, CALLIGRAPHY→15 — 15 looked right on the Nomad, 14 remains
+the fallback). Host entry is `RattaEngine.register()` (no Application needed). Demo needed only
+the registration line — its toolbar sits above the paper, so the complement bands shield it with
+no exclusion rects. **One device-found discovery** (now in CLAUDE.md as the fourth overlay law):
+the bake handoff must issue `clearAll` *between* node record and `invalidate`, else the clear can
+pair with a stale in-flight frame and the just-written ink vanishes until a later repaint (seen
+with the demo's input-rate status updates; the reference never hit it); the clear ladder now also
+arms after every bake handoff as a ≤450 ms self-heal. Verified eyes-on on the **Nomad**: live
+ink, all 8 styles, bake at tool/toolbar boundaries, erase + ladder, barrel erase, palm gate,
+clear, app-switch. **Manta pass pending** (device not connected) — before/alongside Phase 5,
+verify on the Manta: the +3 px registration branch (min-dim ≥ 1600 split), bake handoff, ladder.
+**For Phase 5:** trail codes are already in `SupernoteInk.Pen` (`DASH` 4 at EMR 300, `CROSS` 3);
+drag-move must suppress from the hover stream (law 3); `armOverlayClearLadder()` is the lift-wipe.
 **Status:** ⬜ Not started
 - Lasso capture in all three engines: canvas trail (generic), hardware trails (BOOX `DASH`, Ratta
   `LASSO_DASH`), selection box overlay, tap-to-dismiss, drag-move mechanics (A2 mode on BOOX,

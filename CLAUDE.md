@@ -46,6 +46,20 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   `PenActiveEvent`/`PenDeactivateEvent` (greenrobot; enter/leave EMR range, 100 ms-timeout exit) —
   these feed `markPenInRange`/`markPenOutOfRange` on the shared gate. Events arrive on the raw
   input thread; the gate fields are volatile.
+- **Ratta bake-handoff ordering (fourth overlay law, found here — not in the reference).** The
+  deferred bake must issue `clearAll` **between** the node record and the `invalidate`
+  (`RattaPaperView.redrawCommitted`): the daemon pairs a clear with the next app frame it sees, and
+  a clear issued after the invalidate can pair with a stale in-flight frame recorded *before* the
+  bake — the overlay drop then reconciles against stroke-less pixels and the just-written ink
+  visibly vanishes until a later repaint damages the region. The reference never hit this because
+  its hosts present no frames mid-writing; g-paper hosts may render at input rate (the demo's raw
+  counter does), so the clear ladder also arms after **every** bake handoff — post-bake, every
+  possible frame contains the strokes, making retry pairs harmless when the handoff landed and a
+  ≤450 ms self-heal when it didn't.
+- The Ratta engine is selected only when Supernote hardware **and** the firmware ink binder are
+  both present (`isRattaDevice() && SupernoteInk.isAvailable()`); absent either, selection falls
+  through (that probe fall-through is engine *selection*, not a runtime fallback). With the binder
+  absent, `RattaPaperView` itself degrades to generic-style behavior (`rendersLiveStrokes = !firmware`).
 - Engine selection: explicit registration via `GPaper` (no ServiceLoader, no reflection). Engine
   choice happens once at creation, logged at `Log.i`; **never add a silent runtime fallback** —
   post-construction engine failures must be loud.
@@ -62,6 +76,9 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   `implementation`-scope). **Consumers that skip gpaper-onyx need neither**; consumers using it
   add both to their own build. The Onyx AAR manifests carry an application label — apps need
   `tools:replace="android:label"`. The demo ships arm64-v8a only + `libc++_shared.so` pickFirsts.
+- **`gpaper-ratta` adds zero dependencies** — it drives the Supernote firmware's ink daemon
+  directly over Binder (raw `Parcel` transactions, reflection on `ServiceManager`/the `eink`
+  service). Consumers need no extra repo, no jetifier, nothing.
 
 ## Build & device testing
 
