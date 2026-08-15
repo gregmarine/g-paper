@@ -20,6 +20,8 @@ import com.symmetricalpalmtree.gpaper.core.RawAction
 import com.symmetricalpalmtree.gpaper.core.Tool
 import com.symmetricalpalmtree.gpaper.core.engine.GPaper
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
+import com.symmetricalpalmtree.gpaper.core.model.Selection
+import com.symmetricalpalmtree.gpaper.core.model.SelectionMove
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
@@ -103,6 +105,41 @@ class MainActivity : Activity() {
 
             override fun onPenLifted() {
                 penLifts++
+                refreshStatus()
+            }
+
+            // ── Selection callbacks (Phase 5): the payloads ARE the demo ─────
+
+            override fun onSelectionCreated(selection: Selection) {
+                lastEvent = "selected ${selection.strokeIds.size} strokes" +
+                    (if (selection.contentIds.isNotEmpty()) " + ${selection.contentIds}" else "") +
+                    " · bounds ${selection.bounds.left.toInt()},${selection.bounds.top.toInt()}" +
+                    "→${selection.bounds.right.toInt()},${selection.bounds.bottom.toInt()}"
+                refreshStatus()
+            }
+
+            override fun onSelectionDragStarted() {
+                lastEvent = "selection drag started"
+                refreshStatus()
+            }
+
+            override fun onSelectionMoved(move: SelectionMove) {
+                // The component already translated its in-memory strokes; a real host
+                // would apply the same delta to its persisted rows here. The sample
+                // object is ours to move: reposition it and re-render.
+                if ("sample-object" in move.contentIds) {
+                    sampleObject.centerX += move.dx
+                    sampleObject.centerY += move.dy
+                    paper.notifyContentChanged()
+                }
+                lastEvent = "moved ${move.strokeIds.size} strokes" +
+                    (if (move.contentIds.isNotEmpty()) " + ${move.contentIds}" else "") +
+                    " by ${move.dx.toInt()},${move.dy.toInt()}"
+                refreshStatus()
+            }
+
+            override fun onSelectionDismissed() {
+                lastEvent = "selection dismissed"
                 refreshStatus()
             }
         })
@@ -251,6 +288,7 @@ class MainActivity : Activity() {
 
     private lateinit var penButton: TextView
     private lateinit var eraserButton: TextView
+    private lateinit var lassoButton: TextView
 
     private fun buildToolbar(): View {
         val bar = LinearLayout(this).apply {
@@ -260,6 +298,7 @@ class MainActivity : Activity() {
 
         penButton = toolbarButton("Pen") { selectTool(Tool.PEN) }
         eraserButton = toolbarButton("Eraser") { selectTool(Tool.ERASER) }
+        lassoButton = toolbarButton("Lasso") { selectTool(Tool.LASSO) }
 
         val styleButton = toolbarButton("Style: PEN") { }
         styleButton.setOnClickListener {
@@ -288,7 +327,7 @@ class MainActivity : Activity() {
             refreshStatus()
         }
 
-        for (b in listOf(penButton, eraserButton, styleButton, widthButton, colorButton, clearButton)) {
+        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, clearButton)) {
             bar.addView(b, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginEnd = dp(6) })
@@ -309,6 +348,7 @@ class MainActivity : Activity() {
     private fun applyToolSelection() {
         styleButton(penButton, selected = paper.tool == Tool.PEN)
         styleButton(eraserButton, selected = paper.tool == Tool.ERASER)
+        styleButton(lassoButton, selected = paper.tool == Tool.LASSO)
     }
 
     private fun toolbarButton(label: String, onClick: () -> Unit): TextView =

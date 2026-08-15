@@ -4,14 +4,18 @@
 > `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` — this document is the
 > guided tour. Everything here compiles today; the engines behind it arrive in Phases 2–5.
 >
-> **Implementation status (Phase 3):** the generic Canvas engine (Phase 2) and the BOOX
-> engine (`gpaper-onyx`, Phase 3) are live; selection/lasso lands in Phase 5 on every
-> engine (`Tool.LASSO` observes without inking, `setSelection` warns and is ignored).
-> `OnyxPaperView` subclasses the shared `CanvasPaperView` base — committed rendering,
-> erase hit-testing, and the stroke model are literally the same code; only the live-ink
-> pipeline (SDK raw drawing) and the EPD handoffs are Onyx-specific. Hosts still never
-> touch `canvas/` directly. `GPaper.create(context)` works with zero registration calls
-> on generic devices; BOOX apps add one `OnyxEngine.register(application)` call.
+> **Implementation status (Phase 5):** all engines are live — generic Canvas (Phase 2),
+> BOOX (`gpaper-onyx`, Phase 3), Supernote (`gpaper-ratta`, Phase 4) — and selection/
+> lasso (Phase 5) runs on every engine: the shared machinery (hit-testing, selection
+> box, drag-move) lives once in the `CanvasPaperView` base; the device engines add only
+> their hardware trail chrome (BOOX arms the firmware `DASH` style on the raw path,
+> Supernote arms the firmware dash pen) and their EPD drag handling (A2 fast mode on
+> BOOX; hover-issued firmware suppress on Supernote). Both device views subclass the
+> shared base — committed rendering, erase and lasso hit-testing, and the stroke model
+> are literally the same code. Hosts still never touch `canvas/` directly.
+> `GPaper.create(context)` works with zero registration calls on generic devices; BOOX
+> apps add one `OnyxEngine.register(application)` call, Supernote apps one
+> `RattaEngine.register()`.
 
 ## Philosophy
 
@@ -167,15 +171,29 @@ Committed-renderer status (Phase 2 first slice, `core/canvas/StrokeRenderer.kt`)
 `CALLIGRAPHY` currently render as `PEN`.
 The enum may grow; hosts should treat unknown persisted values as `PEN`.
 
-Selection (mechanics in the component, data in the host — Phase 5 implements):
+Selection (mechanics in the component, data in the host):
 
 1. Lasso outline → `onSelectionCreated(Selection(strokeIds, contentIds, bounds))`.
-2. Drag inside the box → `onSelectionDragStarted()` … stylus lift →
+   Strokes select on **touch** semantics (any point inside the outline); host content
+   selects when the outline touches a `hitTargets()` rect anywhere. An outline that
+   catches nothing creates no selection. The selection box is drawn slightly outside
+   the tight `bounds` so thin selections stay grabbable.
+2. Drag inside the box → `onSelectionDragStarted()` (once the pen travels past the
+   ~8 dp threshold) … stylus lift →
    `onSelectionMoved(SelectionMove(strokeIds, contentIds, dx, dy))`. The component has
    already translated its in-memory strokes and re-rendered; the host applies the same
-   delta to its persisted data (`Stroke.translated`) and its own content objects.
-3. Tap outside / tool change / `clearSelection()` → `onSelectionDismissed()`.
-4. `setSelection(ids, contentIds, bounds)` injects a selection (e.g. after paste).
+   delta to its persisted data (`Stroke.translated`) and its own content objects
+   (reposition + `notifyContentChanged()` — during the drag the component ghosts
+   selected content as translated dashed outlines; only the host can truly redraw it).
+   The selection stays active at its new position. A sub-threshold tap inside the box
+   keeps the selection; a cancelled drag dismisses it (`onSelectionDismissed`).
+3. Tap outside / a new outline / tool change / `clearSelection()` →
+   `onSelectionDismissed()`. Any data-in call (`loadStrokes`, `addStrokes`,
+   `removeStrokes`, `clear`, `clearForContentSwap`) also dismisses first — the
+   selected ids may be about to change; re-select via `setSelection` if needed.
+4. `setSelection(ids, contentIds, bounds)` injects a selection (e.g. right after an
+   `addStrokes` paste, so the pasted content lands selected and draggable). Host-
+   initiated, so it does **not** echo `onSelectionCreated`.
 
 `onPenLifted()` is a save/checkpoint trigger only — it implies nothing about overlay
 state and must not drive tool or lifecycle changes.

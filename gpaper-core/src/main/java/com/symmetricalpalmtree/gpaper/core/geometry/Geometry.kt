@@ -163,7 +163,7 @@ object Geometry {
     }
 
     /** Segment intersection (touching counts), with collinear-overlap handling. */
-    private fun segmentsIntersect(
+    fun segmentsIntersect(
         ax: Float, ay: Float, bx: Float, by: Float,
         cx: Float, cy: Float, dx: Float, dy: Float,
     ): Boolean {

@@ -25,8 +25,9 @@ enum class Tool {
     /**
      * Lasso selection: a freehand outline selects strokes (and host content that exposes
      * hit targets), then drag-move mechanics run inside the component with results
-     * reported via the selection callbacks on [PaperListener]. Implemented in Phase 5;
-     * declared now so the tool surface is stable.
+     * reported via the selection callbacks on [PaperListener]. The live trail is
+     * engine chrome (hardware dash styles on the EPD engines, a dashed Canvas overlay
+     * on generic) and never enters the stroke model.
      */
     LASSO,
 }

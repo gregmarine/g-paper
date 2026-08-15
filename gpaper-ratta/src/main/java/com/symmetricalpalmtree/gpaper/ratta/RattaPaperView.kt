@@ -71,6 +71,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         /** Floor for the firmware eraser EMR size (`radius * 50`, min 400 — PoC-validated). */
         const val ERASER_EMR_MIN = 400
 
+        /** EMR size for the firmware lasso trail (the DASH pen) — the exact size the
+         *  0…31 sweep measured that code rendering at. Independent of the ink pen's
+         *  width mapping: the trail is chrome, not ink. */
+        const val LASSO_TRAIL_EMR = 300
+
         /**
          * Horizontal registration offsets, measured by nudge-to-null on one unit per
          * model: Nomad +2 px, Manta +3 px (≈0.15% of panel width on both). Min screen
@@ -121,6 +126,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
     override val rendersLiveStrokes: Boolean get() = !firmware
 
+    /** The lasso trail is the firmware's dash pen; the base must not double-draw it. */
+    override val rendersLiveTrail: Boolean get() = !firmware
+
     private fun refreshScreenSize() {
         val d = display ?: return
         val p = Point()
@@ -138,10 +146,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     // ── Tool & pen configuration → firmware ──────────────────────────────────
 
     /** Modes whose visuals are entirely app-drawn — the firmware must paint nothing
-     *  anywhere. (Phase 5 moves LASSO out of this set: its live trail becomes the
-     *  firmware's own dash pen.) */
+     *  anywhere: the NONE tool, and the whole of a selection drag-move contact (the
+     *  drag layer is app-drawn; a firmware dash trail under it would be stray ink). */
     private val firmwareInkSuppressed: Boolean
-        get() = tool == Tool.NONE || tool == Tool.LASSO
+        get() = tool == Tool.NONE || isSelectionDragActive
 
     override var tool: Tool
         get() = super.tool
@@ -229,6 +237,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private fun applyToolToFirmware() {
         if (!firmware) return
         barrelDown = false // a tool push supersedes the transient barrel disable
+        lassoHoverSuppressed = false // ditto the lasso drag hover suppress
         if (firmwareInkSuppressed) {
             fullScreenDisable()
             return
@@ -240,6 +249,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 // along the path (and natively wipes its own overlay pixels); the
                 // base's software hit-test does the actual stroke removal.
                 SupernoteInk.setEraser(false, eraserEmr())
+            Tool.LASSO ->
+                // Live lasso trail = the firmware's own dash stream, black, chrome size.
+                SupernoteInk.setPen(SupernoteInk.Pen.DASH, LASSO_TRAIL_EMR, SupernoteInk.Color.BLACK)
             else -> applyPenToFirmware()
         }
     }
@@ -448,6 +460,34 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         else applyToolToFirmware()
     }
 
+    // ── Lasso drag-move suppress (hover — overlay law 3) ─────────────────────
+
+    private var lassoHoverSuppressed = false
+
+    /**
+     * A drag-move starting inside the selection box must not paint the firmware's
+     * dashed trail — and the firmware latches pen state at contact start (law 3), so the
+     * disable must be issued from the **hover** stream, before the tip lands. While the
+     * stylus hovers over the selection box: full-screen disable; hovering back out
+     * re-arms the trail pen. [applyToolToFirmware] resets the flag (any tool push
+     * supersedes the transient suppress; the next hover event re-asserts it). The
+     * ACTION_DOWN disable in [onTouchEvent] is only the no-hover backstop.
+     */
+    private fun updateLassoDragHoverSuppress(event: MotionEvent) {
+        if (!firmware || tool != Tool.LASSO) return
+        if (event.actionMasked != MotionEvent.ACTION_HOVER_ENTER &&
+            event.actionMasked != MotionEvent.ACTION_HOVER_MOVE
+        ) {
+            return
+        }
+        if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return
+        if (firmwareInkSuppressed || barrelDown) return // a stronger suppress owns the firmware
+        val inside = selectionBoxContains(event.x, event.y)
+        if (inside == lassoHoverSuppressed) return
+        lassoHoverSuppressed = inside
+        if (inside) fullScreenDisable() else applyToolToFirmware()
+    }
+
     // ── Pen-approach re-arm ──────────────────────────────────────────────────
 
     /**
@@ -499,6 +539,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  base's gesture latch, so the erase boundaries fire exactly once per contact. */
     private var contactErasing = false
 
+    /** Lasso-contact latches (ACTION_DOWN): an outline paints the firmware dash trail
+     *  (wiped at lift via the ladder); a drag runs under full-screen disable (restored
+     *  at lift). Mutually exclusive with [contactErasing]. */
+    private var contactLassoOutline = false
+    private var contactLassoDrag = false
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         // Correct the digitizer offset before ANY consumer — writing, erasing and
         // hit-tests must all agree on where the pen physically is.
@@ -525,6 +571,20 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                             (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
                         )
                     if (contactErasing) releaseFirmwareOverlay()
+                    contactLassoOutline = false
+                    contactLassoDrag = false
+                    if (!contactErasing && tool == Tool.LASSO) {
+                        if (selectionBoxContains(event.x, event.y)) {
+                            contactLassoDrag = true
+                            // Backstop only: the REAL suppress happened on the hover
+                            // stream before the tip landed (law 3 — a disable issued
+                            // here is too late for this contact's first dashes, but
+                            // heals a no-hover contact for the rest).
+                            fullScreenDisable()
+                        } else {
+                            contactLassoOutline = true
+                        }
+                    }
                 }
                 else -> Unit
             }
@@ -543,8 +603,20 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 // on the panel, hiding the repaint), and a contact that armed the
                 // eraser mid-approach leaves a partial pen trace. Idempotent when clean.
                 releaseGestureTrace()
+            } else if (contactLassoOutline) {
+                // The dashed trail (a tap paints a dash dot too) corresponds to nothing
+                // in the app layer — wipe it with the proven gesture-trace ladder. The
+                // base has already drawn the selection box by now (super ran first).
+                releaseGestureTrace()
+            } else if (contactLassoDrag) {
+                // Drag contact over: the base finished/cancelled the drag inside super
+                // (isSelectionDragActive is false again), so this push restores the
+                // disable areas + the armed lasso trail pen after the drag suppress.
+                applyToolToFirmware()
             }
             contactErasing = false
+            contactLassoOutline = false
+            contactLassoDrag = false
         }
         return handled
     }
@@ -553,6 +625,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         compensateRegistration(event)
         rearmOnPenApproach()
         updateBarrelSuppress(event)
+        updateLassoDragHoverSuppress(event)
         return super.onHoverEvent(event)
     }
 
@@ -562,6 +635,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         compensateRegistration(event)
         rearmOnPenApproach()
         updateBarrelSuppress(event)
+        updateLassoDragHoverSuppress(event)
         return super.onGenericMotionEvent(event)
     }
 

@@ -200,7 +200,9 @@ via the min-dim ≥ 1600 split (+3 px registration branch active, session claime
 registration/bake/erase/styles all pass — both Ratta Tier-1 devices are green.
 **For Phase 5:** trail codes are already in `SupernoteInk.Pen` (`DASH` 4 at EMR 300, `CROSS` 3);
 drag-move must suppress from the hover stream (law 3); `armOverlayClearLadder()` is the lift-wipe.
-**Status:** ⬜ Not started
+
+### Phase 5 — Selection & Drag Helpers
+**Status:** 🧪 Awaiting device verification
 - Lasso capture in all three engines: canvas trail (generic), hardware trails (BOOX `DASH`, Ratta
   `LASSO_DASH`), selection box overlay, tap-to-dismiss, drag-move mechanics (A2 mode on BOOX,
   hover suppress on Ratta) — all firing callbacks with stroke ids + translated geometry; host
