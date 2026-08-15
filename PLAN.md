@@ -63,12 +63,21 @@ lean, so PLAN.md must always be self-sufficient:
 ## Phases
 
 ### Phase 0 — Foundation
-**Status:** 🔄 In progress
+**Status:** ✅ Complete (commit 0f18be0)
 - Gradle multi-module skeleton: `gpaper-core`, `gpaper-onyx`, `gpaper-ratta`, `demo` (app).
 - `.gitignore`, seed `README.md`, `CLAUDE.md` (project intelligence, grows each phase), this `PLAN.md`.
 - `device-build-install` skill (serials/tiers mirrored from Notesprout).
 - Toolchain pinning (AGP, Kotlin, JDK 17), repo hygiene.
 - **Test:** `./gradlew build` green with empty modules; demo shell installs and launches.
+
+**Outcome (2026-08-14):** Built as planned, no deviations. Multi-module skeleton at repo root
+(core/onyx/ratta libraries + demo app); adapters `api`-depend on core. Toolchain mirrored from
+Notesprout (Gradle 8.14 wrapper copied over, AGP 8.11.1, Kotlin 2.2.20, JDK 17 Temurin pin,
+compileSdk 35 / minSdk 29). Jetifier + BOOX maven repo deliberately deferred to Phase 3.
+`./gradlew build` green; demo shell verified installed, resumed, and rendering on the Supernote
+Nomad via adb + screencap. Demo is a plain `android.app.Activity` with a placeholder TextView —
+Phase 2 replaces it. Build facts and device rules folded into `CLAUDE.md`; serial/tier table lives
+in `.claude/skills/device-build-install/SKILL.md`.
 
 ### Phase 1 — Public API Contract
 **Status:** ⬜ Not started
