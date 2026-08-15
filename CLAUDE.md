@@ -32,9 +32,20 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   Public **only** so device modules can subclass — never present it as host API; hosts go through
   `GPaper.create`. `StrokeRenderer` is the single source of truth for committed stroke appearance.
 - **Pen-activity gate includes hover.** `isPenActive` = writing ∨ hovering + 350 ms tail — the palm
-  lands before the pen tip, so proximity must close the gate. Two traps: stylus hover is delivered
-  to `onHoverEvent` (pointer-source), NOT `onGenericMotionEvent` — handle both; and tap-like host
-  gestures must re-check the gate at finger-**up** (palm can land before the pen enters hover range).
+  lands before the pen tip, so proximity must close the gate. Traps: stylus hover is delivered
+  to `onHoverEvent` (pointer-source), NOT `onGenericMotionEvent` — handle both; tap-like host
+  gestures must re-check the gate at finger-**up**; and tap-*actions* must commit after a
+  `PEN_ACTIVE_TAIL_MS` **escrow** (drop if the gate closes meanwhile) — a palm micro-tap can
+  complete ~190 ms before the pen enters hover range (measured NA5C), invisible to any proximity
+  signal at up-time. Contact size is no substitute: EPD touch panels may report zero
+  size/touchMajor with palms classified as plain finger (NA5C does).
+- **Onyx proximity is off by default.** With the raw pipeline open, BOOX delivers NO pen-approach
+  signal at all — no hover MotionEvents, no `onPenActive` — until
+  `TouchHelper.setPostInputEvent(true)` (bytecode-verified master switch, default off; set in
+  `openRawDrawing`). With it on, subscribe `TouchHelper.register(...)` to the SDK event bus for
+  `PenActiveEvent`/`PenDeactivateEvent` (greenrobot; enter/leave EMR range, 100 ms-timeout exit) —
+  these feed `markPenInRange`/`markPenOutOfRange` on the shared gate. Events arrive on the raw
+  input thread; the gate fields are volatile.
 - Engine selection: explicit registration via `GPaper` (no ServiceLoader, no reflection). Engine
   choice happens once at creation, logged at `Log.i`; **never add a silent runtime fallback** —
   post-construction engine failures must be loud.
@@ -46,8 +57,11 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
 - Gradle 8.14 (wrapper), AGP 8.11.1, Kotlin 2.2.20
 - JDK 17 Temurin, pinned via `org.gradle.java.home` in `gradle.properties`
 - compileSdk 35, minSdk 29, targetSdk 35 (demo)
-- Jetifier and the insecure BOOX maven repo (`http://repo.boox.com/...`) are **deliberately absent**
-  until Phase 3 (`gpaper-onyx` SDK work); generic-only consumers must never need them.
+- Jetifier + the insecure BOOX maven repo (`http://repo.boox.com/...`) are enabled since Phase 3
+  for `gpaper-onyx` (onyxsdk-device 1.3.3, onyxsdk-pen 1.5.4, hiddenapibypass 4.3 — all
+  `implementation`-scope). **Consumers that skip gpaper-onyx need neither**; consumers using it
+  add both to their own build. The Onyx AAR manifests carry an application label — apps need
+  `tools:replace="android:label"`. The demo ships arm64-v8a only + `libc++_shared.so` pickFirsts.
 
 ## Build & device testing
 
@@ -63,6 +77,13 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   do drive click listeners — fine for toolbar/UI checks; pen behavior needs real hands.
 - The Supernote Manta reports itself as a Nomad in every `ro.product.*` property; the ADB serial is
   the only reliable way to tell them apart. `Build.MANUFACTURER` is `"Supernote"`, not `"ratta"`.
+- BOOX devices spam logcat (`test_keymap` etc.) hard enough to wrap the buffer in seconds — debug
+  with `adb logcat -G 16M` plus a **streaming** filtered capture (`logcat -s TAG`), never `-d` after
+  the fact. Also seen on NA5C: `install -r` + immediate `am start` can race package finalization,
+  leaving the package installed but **disabled** (`enabled=3`, "Activity class does not exist") —
+  heal with `pm enable <pkg>`.
+- BOOX has a real status bar overlaying the window top (Supernote has none) — host layouts must
+  apply system-bar insets; the demo pads its root via `setOnApplyWindowInsetsListener`.
 
 ## Working style
 

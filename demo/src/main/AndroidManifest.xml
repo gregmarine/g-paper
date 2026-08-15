@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- tools:replace: the Onyx SDK AAR manifests carry their own application label. -->
     <application
+        android:name=".DemoApplication"
         android:label="g-paper demo"
-        android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+        android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar"
+        tools:replace="android:label">
 
         <activity
             android:name=".MainActivity"

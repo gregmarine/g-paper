@@ -12,7 +12,7 @@ import com.symmetricalpalmtree.gpaper.core.PaperView
  *
  * ```kotlin
  * // Application.onCreate — only for the device modules the app ships
- * OnyxEngine.register()
+ * OnyxEngine.register(this)   // takes the Application: also installs BOOX prerequisites
  * RattaEngine.register()
  *
  * // wherever the surface is embedded

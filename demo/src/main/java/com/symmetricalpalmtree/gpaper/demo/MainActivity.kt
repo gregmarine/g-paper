@@ -148,11 +148,26 @@ class MainActivity : Activity() {
                         !paper.isPenActive &&
                         event.eventTime - tapDownMs < 300L
                     ) {
-                        sampleObject.centerX = event.x
-                        sampleObject.centerY = event.y
-                        paper.notifyContentChanged()
-                        lastEvent = "host object moved to ${event.x.toInt()},${event.y.toInt()}"
-                        refreshStatus()
+                        // Deferred tap commit: a palm micro-tap can complete a beat
+                        // BEFORE the pen enters hover range (measured ~190 ms on NA5C)
+                        // — no proximity signal can catch it at up-time. Hold the tap
+                        // in escrow for the gate-tail duration and drop it if the pen
+                        // becomes active meanwhile. A deliberate tap costs 350 ms of
+                        // latency; a palm-then-write never fires.
+                        val x = event.x
+                        val y = event.y
+                        paper.asView().postDelayed({
+                            if (!paper.isPenActive) {
+                                sampleObject.centerX = x
+                                sampleObject.centerY = y
+                                paper.notifyContentChanged()
+                                lastEvent = "host object moved to ${x.toInt()},${y.toInt()}"
+                                refreshStatus()
+                            } else {
+                                lastEvent = "tap dropped — pen became active during escrow"
+                                refreshStatus()
+                            }
+                        }, PaperView.PEN_ACTIVE_TAIL_MS)
                     }
                     tapCandidate = false
                 }
@@ -181,8 +196,45 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
             ))
         }
+        // Keep the toolbar clear of the system bars — BOOX draws a status bar over the
+        // window top (the Supernote panels have none, which is why Phase 2 never hit it).
+        root.setOnApplyWindowInsetsListener { v, insets ->
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
+                v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            } else {
+                @Suppress("DEPRECATION")
+                v.setPadding(
+                    insets.systemWindowInsetLeft, insets.systemWindowInsetTop,
+                    insets.systemWindowInsetRight, insets.systemWindowInsetBottom,
+                )
+            }
+            insets
+        }
         setContentView(root)
         refreshStatus()
+    }
+
+    /**
+     * EPD chrome-release contract: while the hardware writing overlay is live, ordinary
+     * view invalidations (pressed states, label changes) don't reach the panel — a
+     * finger-down on chrome must call [PaperView.releaseRender] first so the tap's
+     * visual result shows (no-op on non-EPD engines; the overlay re-arms on the next
+     * pen-down). Done in dispatchTouchEvent because button children consume touches —
+     * a listener on the bar would never fire. Gated on [PaperView.isPenActive] so a palm
+     * resting over the chrome mid-word can't drop the live stroke.
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            val toolType = ev.getToolType(0)
+            val isFinger = toolType != MotionEvent.TOOL_TYPE_STYLUS &&
+                toolType != MotionEvent.TOOL_TYPE_ERASER
+            if (isFinger && !paper.isPenActive) {
+                val paperTop = IntArray(2).also { paper.asView().getLocationInWindow(it) }[1]
+                if (ev.y < paperTop) paper.releaseRender()
+            }
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onResume() {

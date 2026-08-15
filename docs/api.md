@@ -4,12 +4,14 @@
 > `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` — this document is the
 > guided tour. Everything here compiles today; the engines behind it arrive in Phases 2–5.
 >
-> **Implementation status (Phase 2):** the generic Canvas engine is live —
-> `CanvasPaperView` in `core/canvas/` implements everything except selection/lasso
-> (`Tool.LASSO` observes without inking, `setSelection` warns and is ignored; both land in
-> Phase 5). Hosts still never touch `canvas/` directly: it exists so device engines can
-> subclass the shared canvas logic. `GPaper.create(context)` works today with zero
-> registration calls.
+> **Implementation status (Phase 3):** the generic Canvas engine (Phase 2) and the BOOX
+> engine (`gpaper-onyx`, Phase 3) are live; selection/lasso lands in Phase 5 on every
+> engine (`Tool.LASSO` observes without inking, `setSelection` warns and is ignored).
+> `OnyxPaperView` subclasses the shared `CanvasPaperView` base — committed rendering,
+> erase hit-testing, and the stroke model are literally the same code; only the live-ink
+> pipeline (SDK raw drawing) and the EPD handoffs are Onyx-specific. Hosts still never
+> touch `canvas/` directly. `GPaper.create(context)` works with zero registration calls
+> on generic devices; BOOX apps add one `OnyxEngine.register(application)` call.
 
 ## Philosophy
 
@@ -36,8 +38,10 @@ changes into its own storage, keyed by stroke id.
 
 ```kotlin
 // Application.onCreate — register only the device modules you ship (generic is built in)
-OnyxEngine.register()   // gpaper-onyx, Phase 3
-RattaEngine.register()  // gpaper-ratta, Phase 4
+OnyxEngine.register(this)  // gpaper-onyx — also installs the BOOX SDK's hidden-API
+                           // bypass and heals EPD state leaked by a killed pen session,
+                           // which is why it takes the Application and must run here
+RattaEngine.register()     // gpaper-ratta, Phase 4
 
 // In the hosting screen
 val paper: PaperView = GPaper.create(context)          // best available engine
@@ -195,6 +199,13 @@ entirely, so a common shape is synthesized. Observational only; cannot consume.
   stylus produces no MotionEvents but a resting palm does, and an ungated handler that
   pokes the view mid-stroke drops ink. For tap-like gestures, re-check the gate at
   finger-**up**, so a palm that lands before the pen enters hover range is still caught.
+  For tap-*actions* (anything that mutates state on a tap), go one step further and
+  **commit the tap after a `PEN_ACTIVE_TAIL_MS` escrow**, dropping it if the gate closes
+  meanwhile: a palm micro-tap can *complete* a beat before the pen enters hover range
+  (~190 ms measured on BOOX), which no proximity signal can catch at up-time. The demo's
+  host-object tap is the reference implementation. Contact size can't substitute for the
+  gate — EPD touch panels may report no contact geometry at all (NA5C: zero
+  size/touchMajor, palms classified as plain finger).
 
 ## Lifecycle contract
 
@@ -215,8 +226,14 @@ covers), safe while the overlay is live; null before layout.
 Explicit registration — no ServiceLoader, no reflection, R8-safe (decided Phase 1):
 
 - Core's generic engine self-registers lazily (`GPaper.ENGINE_GENERIC`, priority 0).
-- Device modules expose a one-liner (`OnyxEngine.register()` / `RattaEngine.register()`)
-  registering a `PaperEngineProvider` at `PRIORITY_DEVICE` (100).
+- Device modules expose a one-liner (`OnyxEngine.register(application)` /
+  `RattaEngine.register()`) registering a `PaperEngineProvider` at `PRIORITY_DEVICE`
+  (100). The Onyx variant takes the `Application` because it must run in
+  `Application.onCreate`: on BOOX hardware it also installs the SDK's hidden-API bypass
+  and clears any EPD fast-mode pin leaked by a killed pen session (see `OnyxEngine`
+  KDoc). Build-side, `gpaper-onyx` consumers add the BOOX maven repo
+  (`http://repo.boox.com/repository/maven-public/`, insecure protocol allowed) and
+  `android.enableJetifier=true`; generic-only consumers need neither.
 - `GPaper.create(context)` picks the highest-priority available engine and logs the
   choice at `Log.i`; `GPaper.create(context, "onyx")` is an explicit override that
   **bypasses** the availability probe. No engine → `IllegalStateException`. **No runtime

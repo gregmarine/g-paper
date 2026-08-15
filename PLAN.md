@@ -137,7 +137,7 @@ line; adb `input` injection can't synthesize stylus toolTypes (UNKNOWN on Supern
 paths need real hands.
 
 ### Phase 3 — Onyx (BOOX) Engine
-**Status:** ⬜ Not started
+**Status:** 🧪 Awaiting device verification
 - `gpaper-onyx`: TouchHelper raw-drawing pipeline, EPD rules (fast-mode app-scope pin +
   clear-on-close, handwritingRepaint handoffs, updList sizing), process-global `penOwner` guard,
   `resumeDrawing`/`releaseForHandoff` semantics, toolbar/chrome exclusion rects, barrel-button erase,

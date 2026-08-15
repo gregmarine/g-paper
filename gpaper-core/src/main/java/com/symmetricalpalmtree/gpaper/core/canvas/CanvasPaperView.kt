@@ -89,11 +89,18 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var gestureMode = GestureMode.NONE
     private var lastEraserPoint: StrokePoint? = null
     private var lastEraseRedrawMs = 0L
-    private var exclusionRects: List<Rect> = emptyList()
-    private var penDown = false
-    private var penLastLiftMs = 0L
-    private var penHovering = false
-    private var penLastHoverMs = 0L
+
+    /** Host chrome zones where the stylus must not ink — subclasses read them to feed
+     *  hardware exclusion (e.g. the Onyx `setLimitRect`). */
+    protected var exclusionRects: List<Rect> = emptyList()
+        private set
+
+    // Pen-gate state. Volatile: device pipelines may report proximity from their raw
+    // input thread (the Onyx SDK event bus), while hosts read [isPenActive] on main.
+    @Volatile private var penDown = false
+    @Volatile private var penLastLiftMs = 0L
+    @Volatile private var penHovering = false
+    @Volatile private var penLastHoverMs = 0L
     private var released = false
 
     // ── Listeners ────────────────────────────────────────────────────────────
@@ -277,7 +284,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 if (exclusionRects.any { it.contains(event.x.toInt(), event.y.toInt()) }) {
                     return false
                 }
-                penDown = true
+                markPenDown()
                 gestureMode = when {
                     tool == Tool.NONE || tool == Tool.LASSO -> GestureMode.OBSERVE
                     toolType == MotionEvent.TOOL_TYPE_ERASER ||
@@ -315,8 +322,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                penDown = false
-                penLastLiftMs = SystemClock.uptimeMillis()
+                markPenUp()
                 dispatchRaw(event, toolType)
                 val cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL
                 when (gestureMode) {
@@ -453,30 +459,94 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             RectF(0f, 0f, width.toFloat(), height.toFloat())
         }
 
+    // ── Pen-activity gate marks (shared with device subclasses) ──────────────
+
+    /**
+     * Mark the stylus as on the glass for the [isPenActive] gate. Device engines whose
+     * ink runs a hardware pipeline (no MotionEvents) call this from their begin callbacks.
+     */
+    protected fun markPenDown() {
+        penDown = true
+    }
+
+    /** Mark the stylus as lifted and start the [PaperView.PEN_ACTIVE_TAIL_MS] tail. */
+    protected fun markPenUp() {
+        penDown = false
+        penLastLiftMs = SystemClock.uptimeMillis()
+    }
+
+    /**
+     * Mark the stylus as having entered hover/proximity range. For device pipelines
+     * with their own proximity reporting (the Onyx SDK posts `PenActiveEvent` /
+     * `PenDeactivateEvent` on its event bus — hover MotionEvents never reach the view
+     * there). Level semantics: the gate stays closed until [markPenOutOfRange] plus the
+     * [PaperView.PEN_ACTIVE_TAIL_MS] tail. Safe to call from any thread.
+     */
+    protected fun markPenInRange() {
+        penHovering = true
+        penLastHoverMs = SystemClock.uptimeMillis()
+    }
+
+    /** Mark the stylus as having left proximity range; starts the hover tail. */
+    protected fun markPenOutOfRange() {
+        penHovering = false
+        penLastHoverMs = SystemClock.uptimeMillis()
+    }
+
     // ── Stroke commit & erase ────────────────────────────────────────────────
 
     private fun commitActiveStroke() {
         if (activePoints.isEmpty()) return
+        val points = activePoints.toList()
+        activePoints.clear()
+        commitCapturedStroke(points)
+    }
+
+    /**
+     * Commit one captured polyline as a stroke with the armed pen config: add to the
+     * model, re-record, and fire [PaperListener.onStrokeCommitted]. The single commit
+     * path for this engine's own capture and for device subclasses feeding points from
+     * their hardware pipelines (a single contact may legally commit several strokes —
+     * the Onyx SDK can deliver more than one batch per contact).
+     */
+    protected fun commitCapturedStroke(points: List<StrokePoint>) {
+        if (points.isEmpty()) return
         val stroke = Stroke(
             id = UUID.randomUUID().toString(),
-            points = activePoints.toList(),
+            points = points,
             color = penColor,
             width = penWidth,
             style = penStyle,
         )
-        activePoints.clear()
         strokeList.add(stroke)
         modelChanged()
         redrawCommitted()
         paperListener?.onStrokeCommitted(stroke)
     }
 
+    /** Start a fresh eraser sweep: the next [eraseAlong] batch won't chain to the last. */
+    protected fun beginEraseSweep() {
+        lastEraserPoint = null
+    }
+
+    /** Fire [PaperListener.onPenLifted] — for device subclasses' own gesture ends. */
+    protected fun firePenLifted() {
+        paperListener?.onPenLifted()
+    }
+
+    /** Forward one synthesized event to the host's raw passthrough listener. */
+    protected fun emitRawInput(event: RawInputEvent) {
+        rawInputListener?.onRawInput(event)
+    }
+
     /**
      * Erase along one batch of eraser samples. The previous batch's last sample is
      * prepended so the sweep stays a connected polyline across events — a fast flick
-     * can't jump over a stroke between batches.
+     * can't jump over a stroke between batches. Protected so device subclasses can feed
+     * sweeps from their hardware erase callbacks; call [beginEraseSweep] at gesture start
+     * and [finalizeEraseRedraw] at gesture end.
      */
-    private fun eraseAlong(points: List<StrokePoint>) {
+    protected fun eraseAlong(points: List<StrokePoint>) {
         if (points.isEmpty()) return
         val sweep = lastEraserPoint?.let { prev -> ArrayList<StrokePoint>(points.size + 1).apply {
             add(prev)
@@ -501,7 +571,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     /** Flush any throttled removals at gesture end so the screen is exact on pen lift. */
-    private fun finalizeEraseRedraw() {
+    protected fun finalizeEraseRedraw() {
         lastEraseRedrawMs = SystemClock.uptimeMillis()
         redrawCommitted()
     }

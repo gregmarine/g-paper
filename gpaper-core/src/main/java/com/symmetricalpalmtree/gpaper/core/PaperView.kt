@@ -186,7 +186,10 @@ interface PaperView {
      * produces no MotionEvents but the resting palm does, and an ungated handler that
      * touches the view mid-stroke drops ink. For tap-like gestures, check the gate at
      * finger-**up** (not just down), so a palm that lands before the pen enters hover
-     * range is still caught.
+     * range is still caught. For taps that *mutate state*, additionally commit after a
+     * [PEN_ACTIVE_TAIL_MS] escrow and drop the tap if the gate closes meanwhile — a
+     * palm micro-tap can complete before the pen enters hover range (~190 ms measured),
+     * which no proximity signal can catch at up-time.
      */
     val isPenActive: Boolean
 

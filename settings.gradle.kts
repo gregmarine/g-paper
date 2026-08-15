@@ -11,8 +11,13 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // The BOOX SDK repo (insecure http) is added in Phase 3, scoped alongside
-        // gpaper-onyx's dependencies — generic-only consumers must never need it.
+        // BOOX SDK repo (Phase 3, gpaper-onyx only). Onyx publishes over plain http —
+        // there is no https mirror. Consumers that skip gpaper-onyx never need this
+        // repo (or jetifier); consumers that use it must add both to their own build.
+        maven {
+            url = uri("http://repo.boox.com/repository/maven-public/")
+            isAllowInsecureProtocol = true
+        }
     }
 }
 
