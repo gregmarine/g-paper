@@ -290,7 +290,7 @@ full pass first round; NA5C full pass after the gate fix. 72 JVM tests green. **
 open engine work; documentation only.
 
 ### Phase 8 — Documentation & Release
-**Status:** ⬜ Not started
+**Status:** 🔄 In progress
 - Full `README.md` (the front door: what/why/quickstart), `docs/integration-guide.md` (per-device
   module setup incl. BOOX repo/jetifier/hiddenapibypass and Supernote zero-dep story),
   `docs/architecture.md`, `docs/api.md` finalized, host-responsibilities guide (gestures, undo/redo,

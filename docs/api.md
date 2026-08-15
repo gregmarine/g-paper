@@ -1,21 +1,17 @@
 # g-paper Public API
 
-> Phase 1 contract. The authoritative surface is the code in
-> `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` — this document is the
-> guided tour. Everything here compiles today; the engines behind it arrive in Phases 2–5.
->
-> **Implementation status (Phase 5):** all engines are live — generic Canvas (Phase 2),
-> BOOX (`gpaper-onyx`, Phase 3), Supernote (`gpaper-ratta`, Phase 4) — and selection/
-> lasso (Phase 5) runs on every engine: the shared machinery (hit-testing, selection
-> box, drag-move) lives once in the `CanvasPaperView` base; the device engines add only
-> their hardware trail chrome (BOOX arms the firmware `DASH` style on the raw path,
-> Supernote arms the firmware dash pen) and their EPD drag handling (A2 fast mode on
-> BOOX; hover-issued firmware suppress on Supernote). Both device views subclass the
-> shared base — committed rendering, erase and lasso hit-testing, and the stroke model
-> are literally the same code. Hosts still never touch `canvas/` directly.
-> `GPaper.create(context)` works with zero registration calls on generic devices; BOOX
-> apps add one `OnyxEngine.register(application)` call, Supernote apps one
-> `RattaEngine.register()`.
+> The guided tour of the host-facing surface, as of **v0.1.0**. The authoritative surface
+> is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
+> included); this document must be kept in step with it. All three engines are live and
+> device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
+> both device views subclass the shared `CanvasPaperView` base, so committed rendering,
+> erase and lasso hit-testing, and the stroke model are literally the same code
+> everywhere. Hosts never touch `canvas/` directly: `GPaper.create(context)` works with
+> zero registration calls on generic devices; BOOX apps add one
+> `OnyxEngine.register(application)` call, Supernote apps one `RattaEngine.register()`.
+> Build setup per device family: [integration-guide.md](integration-guide.md). What the
+> host owns: [host-responsibilities.md](host-responsibilities.md). Internals:
+> [architecture.md](architecture.md).
 
 ## Philosophy
 
@@ -70,7 +66,7 @@ override fun onDestroy() { paper.release(); super.onDestroy() }
 `StrokePoint(x, y, pressure = 1f, tilt = 0f, timeMillis = 0L)`
 `Stroke(id, points, color = BLACK, width = 3f, style = PEN)` with an eagerly computed `bounds`.
 
-- **Pressure and tilt are captured** on hardware that reports them (decided Phase 1);
+- **Pressure and tilt are captured** on hardware that reports them;
   rendering may ignore them initially. Conventions follow `MotionEvent`: pressure `0..1`,
   tilt radians from vertical, `timeMillis` monotonic event time (not wall-clock).
 - **Color is an ARGB Int**, width is px. No serialization opinions anywhere — the host
@@ -93,8 +89,9 @@ override fun onDestroy() { paper.release(); super.onDestroy() }
 | — | `clear()` | User-facing "erase page" (host updates its own data; no erase callbacks fire) |
 | — | `clearForContentSwap()` | Page turn: pixels hold until the next `loadStrokes` — single EPD refresh, no blank flash |
 
-**Undo/redo is host-owned** (decided Phase 1): the host keeps its history and replays via
-the load/add/remove calls. **Pages are host-owned** (decided Phase 1): one surface;
+**Undo/redo is host-owned**: the host keeps its history and replays via
+the load/add/remove calls (patterns in [host-responsibilities.md](host-responsibilities.md)).
+**Pages are host-owned**: one surface;
 `clearForContentSwap()` + `loadStrokes()` is a page turn.
 
 ## Template & page geometry
@@ -167,10 +164,10 @@ live on Onyx, exact when baked — each module implements whatever comes closest
 
 Rendering lands incrementally: the model carries `style` from day one (no breaking
 migration for hosts), but engines may render richer styles as `PEN` until their
-committed renderer is implemented. Live mappings are confirmed on-device in the engine
-phases (3 = Onyx, 4 = Ratta; committed renderers per style are scheduled there too).
+committed renderer is implemented. All live mappings above are confirmed on-device
+(BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status (Phase 2 first slice, `core/canvas/StrokeRenderer.kt`):
+Committed-renderer status at v0.1.0 (`core/canvas/StrokeRenderer.kt`):
 `PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path), and
 `FOUNTAIN` (pressure-modulated width) render for real; the textured `PENCIL` / `BRUSH` /
 `CALLIGRAPHY` currently render as `PEN`.
@@ -249,7 +246,7 @@ covers), safe while the overlay is live; null before layout.
 
 ## Engine selection
 
-Explicit registration — no ServiceLoader, no reflection, R8-safe (decided Phase 1):
+Explicit registration — no ServiceLoader, no reflection, R8-safe:
 
 - Core's generic engine self-registers lazily (`GPaper.ENGINE_GENERIC`, priority 0).
 - Device modules expose a one-liner (`OnyxEngine.register(application)` /
@@ -273,7 +270,7 @@ Explicit registration — no ServiceLoader, no reflection, R8-safe (decided Phas
 Main thread for everything except `getStrokes()` (any thread). All callbacks arrive on
 the main thread. `RawInputListener` runs at input rate — keep it allocation-free.
 
-## Decisions locked in this phase
+## Design decisions (locked during development)
 
 - Pressure + tilt captured in the model; rendering may ignore them initially.
 - Pen types: abstract `StrokeStyle` in the model + API now — eight values spanning the

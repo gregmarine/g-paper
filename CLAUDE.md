@@ -14,6 +14,11 @@ Gradle multi-module project at repo root:
 - `gpaper-ratta` — Supernote adapter (`…gpaper.ratta`), depends on core
 - `demo` — demo app (`com.symmetricalpalmtree.gpaper.demo`)
 
+Docs (Phase 8, all under `docs/` + the root `README.md`): `api.md` (host-facing surface, guided
+tour), `integration-guide.md` (per-device build setup), `architecture.md` (internals),
+`host-responsibilities.md` (persistence/pages/undo/gesture patterns). **Any public-surface or
+build-requirement change must update the matching doc in the same commit.**
+
 Reference source: `~/git/Notesprout` (see its `docs/drawing-engine.md`) — the engines being
 extracted/redesigned. Read it for device knowledge; never copy its sibling-view duplication.
 Pen-type/native-style knowledge: Notesprout `docs/onyx-pen-tools.md` (Onyx five-device survey) and
