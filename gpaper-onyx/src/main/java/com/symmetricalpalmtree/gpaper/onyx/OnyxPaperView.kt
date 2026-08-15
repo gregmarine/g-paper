@@ -424,6 +424,39 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 wipeRawLassoTrail()
             }
         }
+        // A cancelled outline creates no successor selection — a smart-lasso session
+        // whose selection was dismissed at outline start must restore the pen.
+        maybeEndSmartLassoSession()
+    }
+
+    // ── Gesture-stroke retraction (smart lasso / scribble erase) ─────────────
+
+    /** Set when a recognizer consumed a stroke while the raw contact was still live:
+     *  frames presented mid-contact are withheld from the panel, so the retraction
+     *  repaint must run at the end callback. */
+    private var gestureRetractPending = false
+
+    /**
+     * The recognized gesture's ink is on the panel via the raw overlay and nothing was
+     * committed — wipe it exactly like a tap-away dismissal: render off, then the
+     * repaint + delayed retry ([presentDismissalRepaint]; the immediate repaint can
+     * race the SDK's end-of-contact processing and be eaten). Deferred to the end
+     * callback while the contact is live (withheld-frame rules); for the pen tool the
+     * render re-arms automatically at the next begin callback.
+     */
+    override fun onGestureStrokeConsumed() {
+        super.onGestureStrokeConsumed()
+        if (isPenDown) {
+            gestureRetractPending = true
+        } else {
+            retractGestureInk()
+        }
+    }
+
+    private fun retractGestureInk() {
+        if (!isSetup) return
+        touchHelper.setRawDrawingRenderEnabled(false)
+        presentDismissalRepaint()
     }
 
     /** A2 fast mode for the drag-move visual (reference-proven): responsive greyscale
@@ -460,6 +493,14 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         override fun onEndRawDrawing(shortcutDrawing: Boolean, touchPoint: TouchPoint) {
             markPenUp()
             emitRaw(RawAction.UP, RawTool.STYLUS, touchPoint)
+            // A recognizer consumed this contact's stroke (smart lasso already switched
+            // the tool to LASSO — check BEFORE the lasso branch): wipe the gesture ink
+            // now that the contact is over. Chrome, not writing — no onPenLifted.
+            if (gestureRetractPending) {
+                gestureRetractPending = false
+                retractGestureInk()
+                return
+            }
             if (tool == Tool.LASSO) {
                 // Selection gestures are chrome, not writing — no onPenLifted.
                 endRawLasso(touchPoint)
@@ -743,6 +784,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         if (!isSetup) return
         // Never carry an in-flight lasso gesture across a pipeline teardown.
         cancelRawLasso(caller)
+        gestureRetractPending = false
         if (penOwner === this) {
             touchHelper.closeRawDrawing()
             penOwner = null

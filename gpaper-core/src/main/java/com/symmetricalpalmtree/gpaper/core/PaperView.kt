@@ -84,6 +84,46 @@ interface PaperView {
     /** Eraser hit radius in px around the stylus position. */
     var eraserRadius: Float
 
+    // ── Pen-gesture recognizers (opt-in, default off) ────────────────────────
+
+    /**
+     * Smart lasso: a quick **closed** pen stroke (velocity ≥ 0.5 px/ms, first-to-last
+     * ≤ 50 dp, winding ≥ 270° around its centroid) that encloses at least one stroke or
+     * content hit target is consumed as a lasso instead of committing as ink. Default
+     * **false**; evaluated only while [tool] is [Tool.PEN].
+     *
+     * On trigger the component switches [tool] to [Tool.LASSO] itself — exactly as if
+     * the user had picked the lasso tool and drawn that outline — then creates the
+     * selection and fires [PaperListener.onSelectionCreated]. When the selection is
+     * dismissed without a successor (tap-away, model mutation, [clearSelection]) the
+     * component restores [Tool.PEN]; a host-initiated tool change ends the session
+     * without interference. Both component-initiated changes are announced via
+     * [PaperListener.onToolChanged] — sync toolbar UI there, not by re-reading [tool]
+     * in the selection callbacks (the PEN restore can land after
+     * [PaperListener.onSelectionDismissed]). The gesture stroke itself is chrome: never
+     * committed, never reported. A candidate that encloses nothing commits as ordinary
+     * ink — writing "o" over blank paper stays writing. A **scribble-shaped** stroke
+     * (the dense-oscillation gates of [scribbleEraseEnabled]) is never treated as a
+     * smart lasso: real scribbles routinely satisfy the loop gates too, while a genuine
+     * selection loop is a smooth single pass that never reads scribble-shaped.
+     */
+    var smartLassoEnabled: Boolean
+
+    /**
+     * Scribble erase: a dense zigzag pen stroke (bounding-box diagonal ≥ 40 dp,
+     * pathLength/diagonal ≥ 3.0, ≥ 2 direction reversals after jitter filtering) erases
+     * every stroke it touches (8 dp radius, whole-stroke — eraser-tool semantics).
+     * Default **false**; evaluated only while [tool] is [Tool.PEN]. Scribble shape is
+     * classified before the smart lasso and is exclusive (see [smartLassoEnabled]).
+     *
+     * Erased ids are reported through the normal [PaperListener.onStrokesErased] (one
+     * batched call), so host persistence/undo paths work unchanged. The scribble stroke
+     * itself is never committed or reported; undo of a scribble is simply restoring the
+     * erased strokes. A scribble that touches nothing commits as ordinary ink — it
+     * never falls back to a smart lasso.
+     */
+    var scribbleEraseEnabled: Boolean
+
     // ── Stroke data in ───────────────────────────────────────────────────────
 
     /**

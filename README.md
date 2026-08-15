@@ -21,6 +21,9 @@ behind one API. Extracted and redesigned from the Notesprout drawing engines.
 - **Lasso selection & drag** — outline capture, selection box, pen or single-finger drag,
   host-content participation; the component does the EPD-tricky mechanics, the host applies the
   resulting move to its data.
+- **Pen-gesture recognizers (opt-in)** — smart lasso (a quick closed pen loop around content
+  selects it) and scribble erase (a dense zigzag over strokes erases them); both default off,
+  pen-tool only, and fall through to ordinary ink when they catch nothing.
 - **Templates & page geometry** — background bitmap stretched into the authored page rect, so
   ink/template registration survives moving data between different-sized screens.
 - **Host content extension point** — renderers draw into the committed layer, z-ordered relative

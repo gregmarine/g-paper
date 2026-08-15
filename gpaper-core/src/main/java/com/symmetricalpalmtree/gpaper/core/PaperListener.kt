@@ -65,4 +65,17 @@ interface PaperListener {
      * active at its new position.
      */
     fun onSelectionMoved(move: SelectionMove) {}
+
+    /**
+     * The component changed [PaperView.tool] **itself** — sync toolbar/tool UI here.
+     * Fired only for component-initiated changes; host assignments to
+     * [PaperView.tool] are never echoed. Today the only source is the smart-lasso
+     * session ([PaperView.smartLassoEnabled]): the switch to [Tool.LASSO] on trigger
+     * (immediately before [onSelectionCreated]) and the restore to [Tool.PEN] when the
+     * session's selection lifecycle ends. The restore can arrive *after*
+     * [onSelectionDismissed] (a pen tap-away dismisses at pen-down but restores at
+     * pen-up), which is why reading [PaperView.tool] inside the selection callbacks is
+     * not a reliable substitute for this signal.
+     */
+    fun onToolChanged(tool: Tool) {}
 }

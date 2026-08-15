@@ -38,9 +38,19 @@ CanvasPaperView (core)         ← the generic engine, and the base class
 
 The base owns: the stroke model working copy, committed-layer rendering, live-stroke drawing,
 eraser sweep + hit testing, template/page geometry, host-content renderers, the pen-activity
-gate, exclusion-rect filtering, and the **entire selection/drag state machine** (lasso outline
+gate, exclusion-rect filtering, the **entire selection/drag state machine** (lasso outline
 capture, tap-vs-outline classification, selection box, drag with hidden-strokes re-record and
-translated drag layer, finger drag/dismiss with palm gating).
+translated drag layer, finger drag/dismiss with palm gating), and the **pen-gesture
+recognizer wiring** (smart lasso / scribble erase — detection sits in the single stroke-commit
+path, so every engine's capture pipeline gets it for free; the pure geometry gates live in
+`geometry/GestureRecognizer`). The reference triplicated that recognizer logic across its
+three sibling views; here a consumed gesture funnels through one seam, and each device engine
+contributes only its ink retraction: the recognized stroke is already on the panel as live
+hardware ink and must be wiped — Onyx via render-off + `handwritingRepaint` + retry at contact
+end (frames presented during a live raw contact are withheld), Ratta via the gesture-trace
+clear ladder. A smart lasso switches `tool` to `LASSO` through the normal setter, so the
+engines' proven tool-boundary handoffs run unchanged, and restores `PEN` when the session's
+selection lifecycle ends.
 
 Device engines override protected seams only — where the ink pixels come from and how the EPD
 panel is handed off. They contribute trail chrome and firmware plumbing, never model logic.
@@ -53,10 +63,12 @@ go through `GPaper.create`.
 ## Purity split
 
 `model/` and `geometry/` are pure Kotlin — no Android imports — which is what lets the unit
-tests (72 at 0.1.0) run on the JVM with no Robolectric: stroke/bounds semantics, erase narrow
-phase (segment-to-segment distance, so fast sweeps can't jump strokes between samples), lasso
-hit testing (any-point-in-polygon for strokes, polygon-vs-rect for host content), and the Ratta
-grey-threshold ink map. Android bridging lives in `model/AndroidInterop.kt`.
+tests (86 as of Phase 9) run on the JVM with no Robolectric: stroke/bounds semantics, erase
+narrow phase (segment-to-segment distance, so fast sweeps can't jump strokes between samples),
+lasso hit testing (any-point-in-polygon for strokes, polygon-vs-rect for host content), the
+pen-gesture recognizer gates (smart-lasso velocity/closure/winding, scribble
+diagonal/density/reversals with the jitter filter), and the Ratta grey-threshold ink map.
+Android bridging lives in `model/AndroidInterop.kt`.
 
 ## Rendering model (base engine)
 

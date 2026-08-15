@@ -203,6 +203,40 @@ Selection (mechanics in the component, data in the host):
 `onPenLifted()` is a save/checkpoint trigger only — it implies nothing about overlay
 state and must not drive tool or lifecycle changes.
 
+### Pen-gesture recognizers (opt-in)
+
+Two recognizers turn qualifying **pen-tool** strokes into actions instead of ink. Both
+default **off** (`smartLassoEnabled` / `scribbleEraseEnabled`) and are evaluated only in
+`Tool.PEN`. Shape classification is exclusive and scribble-shape is checked first: a
+**scribble-shaped** stroke (dense oscillation) is an erase intent and is never treated
+as a smart lasso — real scribbles routinely satisfy the loop gates too (they end near
+their start and curled turnarounds accumulate winding; device-measured), while a
+genuine selection loop is a smooth single pass that never reads scribble-shaped. A
+candidate whose hit test comes up empty always falls through to an ordinary committed
+stroke — writing "o" over blank paper stays writing, and an empty scribble never falls
+back to a lasso. A consumed gesture stroke is chrome: never committed, never reported,
+and `onPenLifted` does not fire for it.
+
+- **Smart lasso** (`smartLassoEnabled`): a quick closed loop — velocity ≥ 0.5 px/ms,
+  first-to-last ≤ 50 dp, winding ≥ 270° around its centroid, not scribble-shaped —
+  that encloses at least one stroke or `hitTargets()` rect is consumed as a lasso. The
+  component switches `tool` to `Tool.LASSO` itself (exactly as if the user had picked
+  the lasso tool and drawn that outline), creates the selection, and fires
+  `onSelectionCreated`. When the session's selection is dismissed without a successor
+  (tap-away, `clearSelection`, any data-in call) the component restores `Tool.PEN`; a
+  host-initiated tool change at any point ends the session without interference. Both
+  component-initiated tool changes fire **`onToolChanged(tool)`** — sync toolbar UI
+  there, not by re-reading `paper.tool` in the selection callbacks: the PEN restore can
+  land *after* `onSelectionDismissed` (a pen tap-away dismisses at pen-down but
+  restores at pen-up).
+- **Scribble erase** (`scribbleEraseEnabled`): a dense zigzag — bounding-box diagonal
+  ≥ 40 dp, pathLength/diagonal ≥ 3.0, ≥ 2 direction reversals after sub-2 px jitter is
+  filtered — erases every stroke it touches (8 dp radius, whole-stroke: eraser-tool
+  semantics), reported through the normal `onStrokesErased` in one batched call, so
+  host persistence/undo paths work unchanged. Undo of a scribble is simply restoring
+  the erased strokes. Host content objects are not scribble-erasable (consistent with
+  the eraser tool).
+
 **Raw input passthrough**: `setRawInputListener { event -> … }` observes the stylus
 stream (`RawInputEvent`: action, tool end, x/y/pressure/tilt/time) regardless of active
 tool. Plain data, not `MotionEvent` — on BOOX the ink path bypasses `MotionEvent`

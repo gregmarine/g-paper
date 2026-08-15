@@ -377,6 +377,22 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         armOverlayClearLadder()
     }
 
+    /**
+     * A recognizer consumed the just-captured stroke (smart lasso / scribble erase):
+     * the firmware already painted it but nothing committed — overlay ink that
+     * corresponds to nothing in the app layer, the gesture-trace ladder's exact job.
+     * Any strokes still pending bake are baked first by [releaseFirmwareOverlay]
+     * (their pixels move to the app layer before the clear), and consume-path
+     * repaints (selection box, erase redraw) supply the co-presented frames the
+     * ladder's clears pair with. Runs at pen-up, inside the daemon's
+     * stroke-finalization window — the immediate clear is usually eaten (law 2);
+     * the timed retries are what actually wipe the trace (≤450 ms self-heal).
+     */
+    override fun onGestureStrokeConsumed() {
+        super.onGestureStrokeConsumed()
+        releaseGestureTrace()
+    }
+
     /** (Re-)start the timed clearAll + invalidate retries. Idempotent; each firing is
      *  invisible once the overlay and panel agree. */
     private fun armOverlayClearLadder() {

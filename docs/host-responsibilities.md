@@ -58,6 +58,7 @@ history. Keep an operation stack and replay:
 |---|---|---|---|
 | Drew a stroke | `onStrokeCommitted(s)` | `removeStrokes([s.id])` | `addStrokes([s])` |
 | Erased strokes | `onStrokesErased(ids)` (you still have the strokes) | `addStrokes(strokes)` | `removeStrokes(ids)` |
+| Scribble-erased strokes (`scribbleEraseEnabled`) | same `onStrokesErased(ids)` — the scribble itself was never committed | `addStrokes(strokes)` | `removeStrokes(ids)` |
 | Moved a selection | `onSelectionMoved(m)` | `removeStrokes` + `addStrokes(translated back)` — or `loadStrokes` the page | re-apply the delta |
 | Cleared the page | your own clear action | `loadStrokes(saved)` | `clear()` |
 
@@ -91,6 +92,21 @@ component itself claims: while a lasso selection is active, a single finger insi
 drags it and a finger tap outside dismisses it (all palm-gated internally). A host touch
 listener on the paper view must stand down during an active selection or the component never
 sees those events.
+
+## Pen-gesture recognizers (opt-in)
+
+`smartLassoEnabled` and `scribbleEraseEnabled` (both default off, pen tool only) turn
+qualifying strokes into actions — full contract in [api.md](api.md). Two host obligations
+come with enabling them:
+
+- **Smart lasso changes `tool` on your behalf.** On trigger the component sets
+  `tool = Tool.LASSO`; when that session's selection is dismissed it restores `Tool.PEN`.
+  Both changes fire `onToolChanged(tool)` — re-style your toolbar there (the demo does
+  exactly this). Don't rely on re-reading `paper.tool` inside the selection callbacks:
+  the PEN restore can arrive after `onSelectionDismissed` fires.
+- **Scribble erases arrive through the normal `onStrokesErased`** — if your persistence and
+  undo already handle the eraser tool, they already handle scribbles. The gesture stroke
+  itself is never committed or reported.
 
 ## Host content
 
@@ -138,3 +154,11 @@ three calls are the only lifecycle wiring the host provides.
   is; live ink is a per-engine preview.
 - Don't drive tool changes or lifecycle from `onPenLifted()`.
 - Don't block in `RawInputListener` — it runs at input rate; keep it allocation-free.
+- Don't invalidate views (counters, debug readouts, any chrome) while `isPenActive` —
+  ideally present **no app frames at all during writing**. The raw stream's `MOVE` and
+  `HOVER` events arrive at input rate (EMR pens hover between every stroke), and on
+  Supernote even occasional per-stroke frames hurt: pixels under firmware overlay ink
+  are frozen against app updates, so every frame presented mid-writing pays a masking
+  cost that grows with the accumulated unbaked ink — felt as progressively lagging ink
+  (measured on the Nomad). Defer chrome updates until the pen gate opens (~350 ms after
+  the pen leaves); the demo's status line is the reference implementation.

@@ -11,6 +11,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.RenderNode
 import android.os.SystemClock
+import android.util.Log
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
@@ -23,6 +24,7 @@ import com.symmetricalpalmtree.gpaper.core.RawTool
 import com.symmetricalpalmtree.gpaper.core.Tool
 import com.symmetricalpalmtree.gpaper.core.engine.GPaper
 import com.symmetricalpalmtree.gpaper.core.geometry.EraseHitTest
+import com.symmetricalpalmtree.gpaper.core.geometry.GestureRecognizer
 import com.symmetricalpalmtree.gpaper.core.geometry.LassoHitTest
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
 import com.symmetricalpalmtree.gpaper.core.model.Selection
@@ -60,6 +62,13 @@ import java.util.UUID
 open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     private companion object {
+        const val TAG = "GPaperCore"
+
+        /** Pen-gesture recognition (candidates + hit tests) runs synchronously in the
+         *  commit path; log any pass that exceeds this so slow-hardware cost is
+         *  observable in logcat instead of read as mystery input lag. */
+        const val GESTURE_RECOGNITION_BUDGET_MS = 8L
+
         /** Redraw at most this often while the eraser sweeps (erase-path performance rule). */
         const val ERASE_REDRAW_INTERVAL_MS = 60L
 
@@ -134,6 +143,15 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     private var selection: Selection? = null
 
+    /** True from a smart-lasso trigger (which switches [tool] to [Tool.LASSO]) until
+     *  the session's selection lifecycle fully ends — the component then restores
+     *  [Tool.PEN] ([maybeEndSmartLassoSession]). Cleared by any tool assignment. */
+    private var smartLassoSession = false
+
+    /** Held around the dismissal a NEW outline performs at pen-down: that dismissal is
+     *  not the end of a smart-lasso session — the outline may create the successor. */
+    private var suppressSmartLassoRestore = false
+
     /** Outline capture for THIS class's MotionEvent path. Device engines whose pipeline
      *  owns the pen (Onyx raw callbacks) buffer their own points and drive the shared
      *  entries ([lassoTryBeginDrag] / [lassoOutlineStart] / [completeLassoOutline]). */
@@ -204,6 +222,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             if (field == value) return
             val leavingLasso = field == Tool.LASSO
             field = value
+            // Any tool assignment ends a smart-lasso session — whoever set the tool
+            // (the host, or the session's own PEN restore) now owns tool state.
+            smartLassoSession = false
             cancelActiveGesture()
             if (leavingLasso) clearSelection()
         }
@@ -215,6 +236,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     override var penStyle: StrokeStyle = StrokeStyle.PEN
 
     override var eraserRadius: Float = DEFAULT_ERASER_RADIUS_PX
+
+    override var smartLassoEnabled: Boolean = false
+
+    override var scribbleEraseEnabled: Boolean = false
 
     // ── PaperView: stroke data in ────────────────────────────────────────────
 
@@ -331,6 +356,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         selection = null
         if (hadHidden) redrawCommitted() else if (had) invalidate()
         if (had) paperListener?.onSelectionDismissed()
+        maybeEndSmartLassoSession()
     }
 
     override fun setSelection(strokeIds: Set<String>, contentIds: Set<String>, bounds: Bounds) {
@@ -354,6 +380,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         released = true
         // Drop selection state without callbacks — the host is tearing the view down.
         selection = null
+        smartLassoSession = false
         dragActive = false
         dragThresholdMet = false
         dragStrokes = emptyList()
@@ -479,8 +506,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                             if (rendersLiveStrokes) invalidate()
                         } else {
                             appendDrawPoints(listOf(event.strokePointAt(-1)))
-                            commitActiveStroke()
-                            paperListener?.onPenLifted()
+                            // A gesture-consumed stroke is chrome, not writing — the
+                            // reference contract: no onPenLifted for it.
+                            if (commitActiveStroke()) paperListener?.onPenLifted()
                         }
                     }
                     GestureMode.ERASE -> {
@@ -493,6 +521,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                         if (cancelled) {
                             lassoPoints.clear()
                             invalidate()
+                            // A cancelled outline creates no successor selection.
+                            maybeEndSmartLassoSession()
                         } else {
                             lassoPoints.add(event.strokePointAt(-1))
                             val outline = lassoPoints.toList()
@@ -725,11 +755,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     // ── Stroke commit & erase ────────────────────────────────────────────────
 
-    private fun commitActiveStroke() {
-        if (activePoints.isEmpty()) return
+    /** Returns false when a recognizer consumed the stroke (see [commitCapturedStroke]). */
+    private fun commitActiveStroke(): Boolean {
+        if (activePoints.isEmpty()) return true
         val points = activePoints.toList()
         activePoints.clear()
-        commitCapturedStroke(points)
+        return commitCapturedStroke(points)
     }
 
     /**
@@ -738,9 +769,26 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * path for this engine's own capture and for device subclasses feeding points from
      * their hardware pipelines (a single contact may legally commit several strokes —
      * the Onyx SDK can deliver more than one batch per contact).
+     *
+     * This is also the pen-gesture detection point: with a recognizer enabled and
+     * [Tool.PEN] armed, a qualifying polyline is consumed as a smart lasso or scribble
+     * erase instead ([tryConsumeGesture]) — nothing commits, no
+     * [PaperListener.onStrokeCommitted], and the return is false so callers skip their
+     * end-of-writing signals ([PaperListener.onPenLifted]). Mid-contact fragments (the
+     * exclusion-rect splits in [appendDrawPoints]) pass [allowGestures] = false: a
+     * partial polyline is not a completed gesture. Returns true whenever the normal
+     * commit ran (or there was nothing to commit).
      */
-    protected fun commitCapturedStroke(points: List<StrokePoint>) {
-        if (points.isEmpty()) return
+    protected fun commitCapturedStroke(
+        points: List<StrokePoint>,
+        allowGestures: Boolean = true,
+    ): Boolean {
+        if (points.isEmpty()) return true
+        if (allowGestures && tool == Tool.PEN &&
+            (smartLassoEnabled || scribbleEraseEnabled) && tryConsumeGesture(points)
+        ) {
+            return false
+        }
         val stroke = Stroke(
             id = UUID.randomUUID().toString(),
             points = points,
@@ -752,6 +800,131 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         modelChanged()
         bakeAfterCommit()
         paperListener?.onStrokeCommitted(stroke)
+        return true
+    }
+
+    // ── Pen-gesture recognizers (smart lasso / scribble erase) ───────────────
+
+    /**
+     * Run the enabled recognizers over a completed pen stroke. Returns true when the
+     * stroke was consumed as a gesture; any candidate whose hit test comes up empty
+     * falls through to ink — a gesture over blank paper stays writing.
+     *
+     * Recognition (and its hit tests) runs synchronously in the commit path; the
+     * elapsed-time tripwire keeps that cost observable on slow hardware.
+     */
+    private fun tryConsumeGesture(points: List<StrokePoint>): Boolean {
+        val startedMs = SystemClock.uptimeMillis()
+        val consumed = recognizeGesture(points)
+        val elapsedMs = SystemClock.uptimeMillis() - startedMs
+        if (elapsedMs > GESTURE_RECOGNITION_BUDGET_MS) {
+            Log.i(
+                TAG,
+                "gesture recognition took ${elapsedMs}ms " +
+                    "(${points.size} gesture pts, ${strokeList.size} strokes, consumed=$consumed)",
+            )
+        }
+        return consumed
+    }
+
+    /**
+     * Shape classification runs FIRST and is exclusive: a **scribble-shaped** stroke
+     * (dense oscillation — the [GestureRecognizer.isScribbleCandidate] gates) is an
+     * erase intent and is never treated as a smart lasso, even when scribble erase
+     * itself is disabled. Real zigzag scribbles routinely satisfy the loop gates too —
+     * they end near their start and their curled turnarounds accumulate winding
+     * (measured on the Supernote Nomad: scribbles were selecting instead of erasing) —
+     * while a genuine selection loop is a smooth single pass that never reads
+     * scribble-shaped. Everything not scribble-shaped may be a smart lasso.
+     */
+    private fun recognizeGesture(points: List<StrokePoint>): Boolean {
+        val density = resources.displayMetrics.density
+        val scribbleShaped = GestureRecognizer.isScribbleCandidate(
+            points, GestureRecognizer.SCRIBBLE_MIN_DIAGONAL_DP * density,
+        )
+        if (scribbleShaped) {
+            if (!scribbleEraseEnabled) return false
+            val hitIds = EraseHitTest.hitStrokeIds(
+                strokeList, points, GestureRecognizer.SCRIBBLE_STROKE_TOUCH_RADIUS_DP * density,
+            )
+            if (hitIds.isEmpty()) {
+                Log.i(TAG, "scribble candidate touched nothing — committed as ink")
+                return false
+            }
+            val idSet = hitIds.toHashSet()
+            // Parity with eraseAlong: a host-injected selection losing a stroke no
+            // longer describes reality.
+            if (selection?.strokeIds?.any { it in idSet } == true) clearSelection()
+            strokeList.removeAll { it.id in idSet }
+            modelChanged()
+            paperListener?.onStrokesErased(hitIds)
+            finalizeEraseRedraw()
+            onGestureStrokeConsumed()
+            Log.i(TAG, "scribble erase consumed ${hitIds.size} strokes")
+            return true
+        }
+        if (smartLassoEnabled &&
+            GestureRecognizer.isSmartLassoCandidate(
+                points, GestureRecognizer.SMART_LASSO_CLOSURE_DISTANCE_DP * density,
+            )
+        ) {
+            val sel = buildSelectionFromOutline(points)
+            if (sel == null) {
+                Log.i(TAG, "smart-lasso candidate enclosed nothing — committed as ink")
+                return false
+            }
+            // A live selection here can only be host-injected (setSelection while in
+            // PEN) — dismiss it first so the host's callbacks pair up.
+            if (selection != null) clearSelection()
+            // Switch tool BEFORE creating the selection so the device engines run
+            // their proven tool-boundary handoffs; the setter clears the session
+            // flag, so set it after, then announce the component-initiated change.
+            tool = Tool.LASSO
+            smartLassoSession = true
+            paperListener?.onToolChanged(Tool.LASSO)
+            selection = sel
+            invalidate()
+            paperListener?.onSelectionCreated(sel)
+            onGestureStrokeConsumed()
+            Log.i(
+                TAG,
+                "smart lasso consumed: ${sel.strokeIds.size} strokes, " +
+                    "${sel.contentIds.size} content objects",
+            )
+            return true
+        }
+        return false
+    }
+
+    /**
+     * A recognizer consumed the just-captured stroke: its live ink must leave the
+     * screen even though nothing committed. The base repaints (its live layer is
+     * already empty); EPD engines override to retract their hardware overlay ink —
+     * Onyx render-off + `handwritingRepaint` at contact end (withheld-frame rules),
+     * Ratta the gesture-trace clear ladder.
+     */
+    protected open fun onGestureStrokeConsumed() {
+        invalidate()
+    }
+
+    /**
+     * Close out a smart-lasso session whose selection lifecycle has fully ended — no
+     * active selection and no successor outline in flight — by restoring [Tool.PEN].
+     * Wired into every dismissal/cancel exit in the base; device engines whose
+     * pipelines cancel lasso gestures on their own (the Onyx raw path) call it from
+     * those exits too. No-op outside a session.
+     */
+    protected fun maybeEndSmartLassoSession() {
+        if (!smartLassoSession || suppressSmartLassoRestore) return
+        if (selection != null) return
+        smartLassoSession = false
+        if (tool == Tool.LASSO) {
+            tool = Tool.PEN
+            // The restore is component-initiated and can land AFTER the dismissal
+            // callback (a pen tap-away dismisses at pen-down, restores at pen-up) —
+            // onToolChanged is the host's reliable signal, not re-reading [tool].
+            paperListener?.onToolChanged(Tool.PEN)
+        }
     }
 
     /**
@@ -779,7 +952,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         }
         for (p in points) {
             if (exclusionRects.any { it.contains(p.x.toInt(), p.y.toInt()) }) {
-                if (activePoints.size >= 2) commitCapturedStroke(activePoints.toList())
+                // Mid-contact fragment — never a completed gesture (allowGestures off).
+                if (activePoints.size >= 2) {
+                    commitCapturedStroke(activePoints.toList(), allowGestures = false)
+                }
                 activePoints.clear()
             } else {
                 activePoints.add(p)
@@ -971,42 +1147,60 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      *  user sees the box drop the moment they start lassoing elsewhere (and a tap-sized
      *  gesture outside the box needs nothing more — tap-to-dismiss falls out). */
     protected fun lassoOutlineStart() {
-        clearSelection()
+        // The dismissal belongs to a NEW outline — a smart-lasso session continues
+        // into it; the outline's own exits decide whether to restore PEN.
+        suppressSmartLassoRestore = true
+        try {
+            clearSelection()
+        } finally {
+            suppressSmartLassoRestore = false
+        }
     }
 
     /**
      * A completed lasso outline (from either the base MotionEvent path or a device
      * pipeline's own capture): classify tap vs outline by gesture extent, hit-test the
      * strokes ([LassoHitTest]) and host content ([ContentRenderer.hitTargets]), and
-     * create + report the selection. An empty catch leaves nothing selected.
+     * create + report the selection. An empty catch leaves nothing selected (and ends
+     * a smart-lasso session — the pen restores).
      */
     protected fun completeLassoOutline(outline: List<StrokePoint>) {
         // Repaint regardless of outcome — the base-drawn trail must leave the screen.
         invalidate()
         val threshold = dragThresholdPx()
         val extent = Bounds.of(outline)
-        if (outline.size < 3 || (extent.width < threshold && extent.height < threshold)) {
-            // Tap: the previous selection was already dismissed at outline start.
-            return
+        // Below the extent threshold it was a tap: the previous selection was already
+        // dismissed at outline start.
+        if (outline.size >= 3 && (extent.width >= threshold || extent.height >= threshold)) {
+            val sel = buildSelectionFromOutline(outline)
+            if (sel != null) {
+                selection = sel
+                invalidate()
+                paperListener?.onSelectionCreated(sel)
+            }
         }
+        maybeEndSmartLassoSession()
+    }
+
+    /** Hit-test a closed outline against the strokes and the host-content hit targets
+     *  and build the [Selection] — shared by [completeLassoOutline] and the smart-lasso
+     *  recognizer. Null when the outline encloses nothing. */
+    private fun buildSelectionFromOutline(outline: List<StrokePoint>): Selection? {
         val strokeIds = LassoHitTest.hitStrokeIds(strokeList, outline)
         val contentTargets = contentRenderers.flatMap { it.hitTargets() }
             .filter { LassoHitTest.polygonIntersectsBounds(outline, it.bounds) }
-        if (strokeIds.isEmpty() && contentTargets.isEmpty()) return
+        if (strokeIds.isEmpty() && contentTargets.isEmpty()) return null
         val idSet = strokeIds.toHashSet()
         var bounds: Bounds? = null
         for (s in strokeList) {
             if (s.id in idSet) bounds = bounds?.union(s.bounds) ?: s.bounds
         }
         for (t in contentTargets) bounds = bounds?.union(t.bounds) ?: t.bounds
-        val sel = Selection(
+        return Selection(
             strokeIds = idSet,
             contentIds = contentTargets.mapTo(HashSet()) { it.contentId },
-            bounds = bounds ?: return,
+            bounds = bounds ?: return null,
         )
-        selection = sel
-        invalidate()
-        paperListener?.onSelectionCreated(sel)
     }
 
     /**
@@ -1147,6 +1341,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             activePoints.clear()
             invalidate()
         }
+        maybeEndSmartLassoSession()
     }
 
     private fun modelChanged() {

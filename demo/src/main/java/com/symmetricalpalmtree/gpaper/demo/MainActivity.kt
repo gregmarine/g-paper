@@ -166,11 +166,28 @@ class MainActivity : Activity() {
                 lastEvent = "selection dismissed"
                 refreshStatus()
             }
+
+            /** The component changed the tool itself (smart-lasso switch to LASSO /
+             *  PEN restore when the session ends) — the documented host pattern is to
+             *  sync toolbar UI here, not by re-reading paper.tool in the selection
+             *  callbacks (the PEN restore can land after onSelectionDismissed). */
+            override fun onToolChanged(tool: Tool) {
+                applyToolSelection()
+                lastEvent = "component set tool: $tool"
+                refreshStatus()
+            }
         })
         paper.setRawInputListener { event ->
             rawEvents++
-            // Refresh only at gesture edges — the MOVE stream arrives at input rate.
-            if (event.action != RawAction.MOVE) refreshStatus()
+            // Refresh only at contact edges (DOWN/UP/CANCEL). MOVE **and HOVER** both
+            // arrive at input rate — on EMR panels the pen hovers between every
+            // stroke, and refreshing this TextView per hover sample presents app
+            // frames at ~100 Hz, which drowns an e-ink display pipeline (measured on
+            // the Supernote Manta: 1182 frames / 65% janky in one short writing
+            // session, felt as progressive ink lag).
+            if (event.action != RawAction.MOVE && event.action != RawAction.HOVER) {
+                refreshStatus()
+            }
         }
 
         // Finger tap repositions the host object (render-in proof). Stylus events fall
@@ -425,6 +442,9 @@ class MainActivity : Activity() {
             |  isPenActive palm gate: writing or hovering + 350 ms tail;
             |  tap actions must re-check at finger-up and escrow the commit.
             |  Selection active: single finger drags it, finger tap dismisses.
+            |  Pen gestures (opt-in, pen tool only): smart lasso = quick closed
+            |  loop selects (tool auto-switches to LASSO, PEN restored on
+            |  dismissal); scribble erase = dense zigzag erases touched strokes.
             |  clear() fires no erase callbacks; page turns are
             |  clearForContentSwap() + loadStrokes().
             |
@@ -470,6 +490,25 @@ class MainActivity : Activity() {
             colorButton.text = "Color: ${colorNames[colorIndex]}"
         }
 
+        // Pen-gesture recognizers (Phase 9) — opt-in flags, selected-state = enabled.
+        val smartLassoButton = toolbarButton("SmartL") { }
+        smartLassoButton.setOnClickListener {
+            paper.smartLassoEnabled = !paper.smartLassoEnabled
+            styleButton(smartLassoButton, selected = paper.smartLassoEnabled)
+            lastEvent = "smart lasso ${if (paper.smartLassoEnabled) "ON" else "OFF"}" +
+                " (pen tool: quick closed loop around content selects)"
+            refreshStatus()
+        }
+
+        val scribbleButton = toolbarButton("Scrib") { }
+        scribbleButton.setOnClickListener {
+            paper.scribbleEraseEnabled = !paper.scribbleEraseEnabled
+            styleButton(scribbleButton, selected = paper.scribbleEraseEnabled)
+            lastEvent = "scribble erase ${if (paper.scribbleEraseEnabled) "ON" else "OFF"}" +
+                " (pen tool: dense zigzag over content erases)"
+            refreshStatus()
+        }
+
         val clearButton = toolbarButton("Clear") {
             paper.clear()
             lastEvent = "cleared (no erase callbacks — by contract)"
@@ -478,7 +517,7 @@ class MainActivity : Activity() {
 
         val notesButton = toolbarButton("Notes") { toggleNotes() }
 
-        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, clearButton, notesButton)) {
+        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, smartLassoButton, scribbleButton, clearButton, notesButton)) {
             bar.addView(b, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginEnd = dp(6) })
@@ -535,7 +574,42 @@ class MainActivity : Activity() {
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
     }
 
+    /** True while a status update is parked waiting for the pen gate to open. */
+    private var statusDeferred = false
+
+    private val statusFlush = object : Runnable {
+        override fun run() {
+            if (paper.isPenActive) {
+                // Still writing/hovering — check again shortly; stay frame-silent.
+                status.postDelayed(this, 250L)
+            } else {
+                statusDeferred = false
+                applyStatusText()
+            }
+        }
+    }
+
+    /**
+     * Present NO app frames while the pen is active. On Supernote, pixels under
+     * firmware overlay ink are frozen against app updates — every frame presented
+     * mid-writing pays a masking cost that grows with the accumulated unbaked ink
+     * (the bake is deferred to natural boundaries by design), felt as progressively
+     * lagging ink on the Nomad. The reference app never hit it because its hosts
+     * present no frames mid-writing; this defer restores that discipline — the
+     * status catches up ~350 ms after the pen leaves.
+     */
     private fun refreshStatus() {
+        if (paper.isPenActive) {
+            if (!statusDeferred) {
+                statusDeferred = true
+                status.postDelayed(statusFlush, PaperView.PEN_ACTIVE_TAIL_MS)
+            }
+            return
+        }
+        applyStatusText()
+    }
+
+    private fun applyStatusText() {
         status.text =
             "engine:${paper.engineId} · strokes:${paper.getStrokes().size} · " +
                 "penLifts:$penLifts · raw:$rawEvents\n$lastEvent"
