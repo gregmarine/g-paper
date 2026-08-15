@@ -176,11 +176,17 @@ interface PaperView {
     fun releaseRender()
 
     /**
-     * True while the stylus is writing and for a short tail (~[PEN_ACTIVE_TAIL_MS])
-     * after it lifts. The host's palm-rejection gate: check this at the top of every
-     * finger-gesture handler and suppress the gesture when true — on EPD engines a
-     * writing stylus produces no MotionEvents but the resting palm does, and an
-     * ungated handler that touches the view mid-stroke drops ink.
+     * True while the stylus is writing **or hovering near the surface**, and for a short
+     * tail (~[PEN_ACTIVE_TAIL_MS]) after either ends. Hover counts because the palm
+     * lands a beat before the pen tip touches — on pen hardware that reports proximity
+     * (EMR panels), the gate closes as the pen approaches, before any contact.
+     *
+     * The host's palm-rejection gate: check this at the top of every finger-gesture
+     * handler and suppress the gesture when true — on EPD engines a writing stylus
+     * produces no MotionEvents but the resting palm does, and an ungated handler that
+     * touches the view mid-stroke drops ink. For tap-like gestures, check the gate at
+     * finger-**up** (not just down), so a palm that lands before the pen enters hover
+     * range is still caught.
      */
     val isPenActive: Boolean
 

@@ -1,24 +1,297 @@
 package com.symmetricalpalmtree.gpaper.demo
 
+import android.annotation.SuppressLint
 import android.app.Activity
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.widget.HorizontalScrollView
+import android.widget.LinearLayout
 import android.widget.TextView
+import com.symmetricalpalmtree.gpaper.core.PaperListener
+import com.symmetricalpalmtree.gpaper.core.PaperView
+import com.symmetricalpalmtree.gpaper.core.RawAction
+import com.symmetricalpalmtree.gpaper.core.Tool
+import com.symmetricalpalmtree.gpaper.core.engine.GPaper
+import com.symmetricalpalmtree.gpaper.core.model.Bounds
+import com.symmetricalpalmtree.gpaper.core.model.Stroke
+import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
+import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
+import com.symmetricalpalmtree.gpaper.core.render.HitTarget
 
 /**
- * Phase 0 shell. Replaced with a real paper surface + controls in Phase 2.
+ * Demo v1 (Phase 2): full-screen paper + e-ink-first minimal controls.
+ *
+ * Deliberately Material-free — black-on-white, flat bordered buttons — so the same demo
+ * reads correctly on BOOX/Supernote panels in Phases 3/4 and on LCD alike. Proves both
+ * API directions: the stroke feed readout (data out) and a host-rendered sample object
+ * that a finger tap repositions via notifyContentChanged (render in), gated by
+ * [PaperView.isPenActive] exactly as the palm-rejection contract prescribes.
  */
 class MainActivity : Activity() {
 
+    private lateinit var paper: PaperView
+    private lateinit var status: TextView
+
+    private val styles = StrokeStyle.entries
+    private var styleIndex = 0
+
+    private val widths = floatArrayOf(2f, 3f, 6f, 10f, 16f)
+    private var widthIndex = 1
+
+    private val colorNames = arrayOf("Black", "DkGrey", "Grey", "Red", "Blue")
+    private val colorValues = intArrayOf(
+        Color.BLACK, 0xFF444444.toInt(), 0xFF888888.toInt(), Color.RED, Color.BLUE
+    )
+    private var colorIndex = 0
+
+    private var penLifts = 0
+    private var rawEvents = 0
+    private var lastEvent = "—"
+
+    /** The host-rendered sample object: a rounded box the host owns and draws. */
+    private val sampleObject = object : ContentRenderer {
+        var centerX = 260f
+        var centerY = 200f
+        private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = Color.BLACK
+            strokeWidth = 3f
+        }
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = 28f
+            textAlign = Paint.Align.CENTER
+        }
+
+        private fun bounds() = Bounds(centerX - 240f, centerY - 60f, centerX + 240f, centerY + 60f)
+
+        override fun draw(canvas: Canvas) {
+            val b = bounds()
+            boxPaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 8f), 0f)
+            canvas.drawRoundRect(b.left, b.top, b.right, b.bottom, 16f, 16f, boxPaint)
+            canvas.drawText("host object — finger-tap to move", centerX, centerY - 6f, textPaint)
+            canvas.drawText("(ContentRenderer, below strokes)", centerX, centerY + 30f, textPaint)
+        }
+
+        override fun hitTargets(): List<HitTarget> =
+            listOf(HitTarget("sample-object", bounds()))
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(TextView(this).apply {
-            text = "g-paper demo shell"
-            textSize = 24f
-            gravity = Gravity.CENTER
+
+        paper = GPaper.create(this)
+        paper.addContentRenderer(sampleObject)
+        paper.setPaperListener(object : PaperListener {
+            override fun onStrokeCommitted(stroke: Stroke) {
+                lastEvent = "committed ${stroke.id.take(8)} · ${stroke.points.size} pts · ${stroke.style}"
+                refreshStatus()
+            }
+
+            override fun onStrokesErased(strokeIds: List<String>) {
+                lastEvent = "erased ${strokeIds.size}: ${strokeIds.joinToString { it.take(8) }}"
+                refreshStatus()
+            }
+
+            override fun onPenLifted() {
+                penLifts++
+                refreshStatus()
+            }
+        })
+        paper.setRawInputListener { event ->
+            rawEvents++
+            // Refresh only at gesture edges — the MOVE stream arrives at input rate.
+            if (event.action != RawAction.MOVE) refreshStatus()
+        }
+
+        // Finger tap repositions the host object (render-in proof). Stylus events fall
+        // through to the engine. Palm rejection per the isPenActive contract: gate at
+        // finger-DOWN *and* at finger-UP (a palm can land before the pen enters hover
+        // range — by release time the pen is hovering/writing and the gate is closed),
+        // and only a short, small-movement gesture counts as a tap at all.
+        var tapDownX = 0f
+        var tapDownY = 0f
+        var tapDownMs = 0L
+        var tapCandidate = false
+        val tapSlopPx = dp(16).toFloat()
+        paper.asView().setOnTouchListener { _, event ->
+            // "Finger" = anything that isn't the stylus (some touch paths report UNKNOWN).
+            val toolType = event.getToolType(0)
+            val isFinger = toolType != MotionEvent.TOOL_TYPE_STYLUS &&
+                toolType != MotionEvent.TOOL_TYPE_ERASER
+            if (!isFinger) return@setOnTouchListener false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    tapCandidate = !paper.isPenActive && event.pointerCount == 1
+                    tapDownX = event.x
+                    tapDownY = event.y
+                    tapDownMs = event.eventTime
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> tapCandidate = false // multi-touch = palm
+                MotionEvent.ACTION_MOVE -> {
+                    if (Math.abs(event.x - tapDownX) > tapSlopPx ||
+                        Math.abs(event.y - tapDownY) > tapSlopPx
+                    ) {
+                        tapCandidate = false
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (tapCandidate &&
+                        !paper.isPenActive &&
+                        event.eventTime - tapDownMs < 300L
+                    ) {
+                        sampleObject.centerX = event.x
+                        sampleObject.centerY = event.y
+                        paper.notifyContentChanged()
+                        lastEvent = "host object moved to ${event.x.toInt()},${event.y.toInt()}"
+                        refreshStatus()
+                    }
+                    tapCandidate = false
+                }
+                MotionEvent.ACTION_CANCEL -> tapCandidate = false
+            }
+            true
+        }
+
+        status = TextView(this).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = 12f
             setTextColor(Color.BLACK)
             setBackgroundColor(Color.WHITE)
-        })
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            maxLines = 2
+        }
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.WHITE)
+            addView(buildToolbar())
+            addView(divider())
+            addView(status)
+            addView(divider())
+            addView(paper.asView(), LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+            ))
+        }
+        setContentView(root)
+        refreshStatus()
     }
+
+    override fun onResume() {
+        super.onResume()
+        paper.resumeDrawing()
+    }
+
+    override fun onDestroy() {
+        paper.release()
+        super.onDestroy()
+    }
+
+    // ── Toolbar ──────────────────────────────────────────────────────────────
+
+    private lateinit var penButton: TextView
+    private lateinit var eraserButton: TextView
+
+    private fun buildToolbar(): View {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }
+
+        penButton = toolbarButton("Pen") { selectTool(Tool.PEN) }
+        eraserButton = toolbarButton("Eraser") { selectTool(Tool.ERASER) }
+
+        val styleButton = toolbarButton("Style: PEN") { }
+        styleButton.setOnClickListener {
+            styleIndex = (styleIndex + 1) % styles.size
+            paper.penStyle = styles[styleIndex]
+            styleButton.text = "Style: ${styles[styleIndex]}"
+        }
+
+        val widthButton = toolbarButton("W: ${widths[widthIndex].toInt()}") { }
+        widthButton.setOnClickListener {
+            widthIndex = (widthIndex + 1) % widths.size
+            paper.penWidth = widths[widthIndex]
+            widthButton.text = "W: ${widths[widthIndex].toInt()}"
+        }
+
+        val colorButton = toolbarButton("Color: Black") { }
+        colorButton.setOnClickListener {
+            colorIndex = (colorIndex + 1) % colorValues.size
+            paper.penColor = colorValues[colorIndex]
+            colorButton.text = "Color: ${colorNames[colorIndex]}"
+        }
+
+        val clearButton = toolbarButton("Clear") {
+            paper.clear()
+            lastEvent = "cleared (no erase callbacks — by contract)"
+            refreshStatus()
+        }
+
+        for (b in listOf(penButton, eraserButton, styleButton, widthButton, colorButton, clearButton)) {
+            bar.addView(b, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(6) })
+        }
+
+        applyToolSelection()
+        return HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(bar)
+        }
+    }
+
+    private fun selectTool(tool: Tool) {
+        paper.tool = tool
+        applyToolSelection()
+    }
+
+    private fun applyToolSelection() {
+        styleButton(penButton, selected = paper.tool == Tool.PEN)
+        styleButton(eraserButton, selected = paper.tool == Tool.ERASER)
+    }
+
+    private fun toolbarButton(label: String, onClick: () -> Unit): TextView =
+        TextView(this).apply {
+            text = label
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+            styleButton(this, selected = false)
+        }
+
+    /** E-ink-first button chrome: flat 2px black border; selected = solid black, white text. */
+    private fun styleButton(button: TextView, selected: Boolean) {
+        button.background = GradientDrawable().apply {
+            cornerRadius = dp(6).toFloat()
+            setStroke(dp(2), Color.BLACK)
+            setColor(if (selected) Color.BLACK else Color.WHITE)
+        }
+        button.setTextColor(if (selected) Color.WHITE else Color.BLACK)
+    }
+
+    private fun divider(): View = View(this).apply {
+        setBackgroundColor(Color.BLACK)
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+    }
+
+    private fun refreshStatus() {
+        status.text =
+            "engine:${paper.engineId} · strokes:${paper.getStrokes().size} · " +
+                "penLifts:$penLifts · raw:$rawEvents\n$lastEvent"
+    }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 }

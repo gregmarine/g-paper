@@ -3,6 +3,13 @@
 > Phase 1 contract. The authoritative surface is the code in
 > `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` — this document is the
 > guided tour. Everything here compiles today; the engines behind it arrive in Phases 2–5.
+>
+> **Implementation status (Phase 2):** the generic Canvas engine is live —
+> `CanvasPaperView` in `core/canvas/` implements everything except selection/lasso
+> (`Tool.LASSO` observes without inking, `setSelection` warns and is ignored; both land in
+> Phase 5). Hosts still never touch `canvas/` directly: it exists so device engines can
+> subclass the shared canvas logic. `GPaper.create(context)` works today with zero
+> registration calls.
 
 ## Philosophy
 
@@ -149,6 +156,11 @@ Rendering lands incrementally: the model carries `style` from day one (no breaki
 migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. Live mappings are confirmed on-device in the engine
 phases (3 = Onyx, 4 = Ratta; committed renderers per style are scheduled there too).
+
+Committed-renderer status (Phase 2 first slice, `core/canvas/StrokeRenderer.kt`):
+`PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path), and
+`FOUNTAIN` (pressure-modulated width) render for real; the textured `PENCIL` / `BRUSH` /
+`CALLIGRAPHY` currently render as `PEN`.
 The enum may grow; hosts should treat unknown persisted values as `PEN`.
 
 Selection (mechanics in the component, data in the host — Phase 5 implements):
@@ -176,10 +188,13 @@ entirely, so a common shape is synthesized. Observational only; cannot consume.
   the hardware pen layer **and** filtered model-side so data matches pixels.
 - `releaseRender()` — call on finger interaction with chrome overlaying the paper so an
   EPD panel shows the UI change; re-arms on next pen-down; no-op off-EPD.
-- `isPenActive` — true while writing + 350 ms tail (`PaperView.PEN_ACTIVE_TAIL_MS`).
+- `isPenActive` — true while writing **or hovering near the surface**, + 350 ms tail
+  after either (`PaperView.PEN_ACTIVE_TAIL_MS`). Hover counts because the palm lands a
+  beat before the pen tip touches; on EMR panels the gate closes as the pen approaches.
   **The host must gate its finger-gesture handlers on this** — on EPD engines a writing
   stylus produces no MotionEvents but a resting palm does, and an ungated handler that
-  pokes the view mid-stroke drops ink.
+  pokes the view mid-stroke drops ink. For tap-like gestures, re-check the gate at
+  finger-**up**, so a palm that lands before the pen enters hover range is still caught.
 
 ## Lifecycle contract
 

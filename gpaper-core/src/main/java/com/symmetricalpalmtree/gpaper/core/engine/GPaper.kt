@@ -39,10 +39,11 @@ object GPaper {
     private val providers = LinkedHashMap<String, PaperEngineProvider>()
 
     /**
-     * Internal hook: core's generic engine installs its provider factory here (Phase 2).
-     * Kept as a lambda so this registry stays free of view/engine imports.
+     * Internal hook the generic engine's provider is created through, resolved lazily on
+     * first use so the registry itself stays view-free. Tests may swap or null it.
      */
-    internal var genericProviderFactory: (() -> PaperEngineProvider)? = null
+    internal var genericProviderFactory: (() -> PaperEngineProvider)? =
+        { com.symmetricalpalmtree.gpaper.core.canvas.GenericPaperEngineProvider() }
 
     /**
      * Register (or replace, keyed by [PaperEngineProvider.id]) an engine. Safe to call
