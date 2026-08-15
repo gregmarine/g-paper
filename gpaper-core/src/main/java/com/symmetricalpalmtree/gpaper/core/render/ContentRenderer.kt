@@ -44,11 +44,43 @@ data class HitTarget(
  * [hitTargets] lets host objects participate in lasso selection: return current bounds
  * for each selectable object (empty list = content is not selectable). Called on the
  * main thread when a lasso gesture completes.
+ *
+ * ### Live drag of selected host content (optional)
+ *
+ * The component cannot repaint host objects itself, so by default a selected object
+ * stays put during a selection drag-move (a dashed ghost of its bounds rides the drag)
+ * and jumps once the host repositions it on
+ * [com.symmetricalpalmtree.gpaper.core.PaperListener.onSelectionMoved]. A renderer opts
+ * into **true live drag** by implementing both hooks:
+ * - the exclusion-aware [draw] overload, so the original disappears from the committed
+ *   layer while its live copy is dragged, and
+ * - [drawObject], which paints just one object; the component translates the canvas by
+ *   the drag delta before calling it.
+ * Implement both or neither — exclusion without [drawObject] makes the object vanish
+ * during the drag; [drawObject] without exclusion draws it twice.
  */
 interface ContentRenderer {
     val layer: ContentLayer get() = ContentLayer.BELOW_STROKES
 
     fun draw(canvas: Canvas)
 
+    /**
+     * Draw all content EXCEPT the objects in [excludedContentIds]. Used while a
+     * selection drag-move re-records the committed layer, so an object being dragged
+     * is not also painted at its original spot. The default ignores the exclusion
+     * (delegates to [draw]) — safe, but the dragged object then appears frozen at its
+     * origin until the drop. See the class KDoc for the live-drag contract.
+     */
+    fun draw(canvas: Canvas, excludedContentIds: Set<String>) = draw(canvas)
+
     fun hitTargets(): List<HitTarget> = emptyList()
+
+    /**
+     * Draw ONLY the object [contentId], at its current (pre-drag) position — the
+     * component has already translated the canvas by the drag delta. Return true if
+     * drawn; the default false makes the component fall back to a dashed ghost of the
+     * object's [HitTarget] bounds. Same canvas contract as [draw]; called at drag
+     * refresh rate, so keep it cheap.
+     */
+    fun drawObject(canvas: Canvas, contentId: String): Boolean = false
 }

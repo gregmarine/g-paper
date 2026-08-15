@@ -31,6 +31,7 @@ import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 import com.symmetricalpalmtree.gpaper.core.render.ContentLayer
 import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
+import com.symmetricalpalmtree.gpaper.core.render.HitTarget
 import java.util.UUID
 
 /**
@@ -150,14 +151,19 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     /** Immutable snapshots of the selected strokes, drawn translated during the drag. */
     private var dragStrokes: List<Stroke> = emptyList()
 
-    /** Selected host-content bounds, drawn as translated ghost outlines during the drag
-     *  (the component cannot redraw host content itself — the host repositions its
+    /** Selected host-content hit targets paired with their renderers. During the drag
+     *  each is drawn translated via [ContentRenderer.drawObject] when the renderer
+     *  implements it, else as a dashed ghost of its bounds (the host repositions its
      *  objects on [PaperListener.onSelectionMoved] and calls [notifyContentChanged]). */
-    private var dragContentBounds: List<Bounds> = emptyList()
+    private var dragContentTargets: List<Pair<ContentRenderer, HitTarget>> = emptyList()
 
     /** Stroke ids omitted from the committed record while their translated ghosts are
      *  drawn by the drag layer; empty outside a threshold-crossed drag. */
     private var dragHiddenIds: Set<String> = emptySet()
+
+    /** Content ids passed to the renderers' exclusion-aware draw during the drag
+     *  re-record, so opted-in hosts hide the originals; empty outside a drag. */
+    private var dragHiddenContentIds: Set<String> = emptySet()
 
     /** Dashed chrome for the lasso trail, the selection box, and drag ghosts. */
     private val selectionPaint = Paint().apply {
@@ -315,9 +321,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         dragActive = false
         dragThresholdMet = false
         dragStrokes = emptyList()
-        dragContentBounds = emptyList()
-        val hadHidden = dragHiddenIds.isNotEmpty()
+        dragContentTargets = emptyList()
+        val hadHidden = dragHiddenIds.isNotEmpty() || dragHiddenContentIds.isNotEmpty()
         dragHiddenIds = emptySet()
+        dragHiddenContentIds = emptySet()
         if (hadDragVisual) onSelectionDragVisual(false)
         val had = selection != null
         selection = null
@@ -349,8 +356,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         dragActive = false
         dragThresholdMet = false
         dragStrokes = emptyList()
-        dragContentBounds = emptyList()
+        dragContentTargets = emptyList()
         dragHiddenIds = emptySet()
+        dragHiddenContentIds = emptySet()
         lassoCapturing = false
         lassoPoints.clear()
         activePoints.clear()
@@ -383,11 +391,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     // ── Input capture ────────────────────────────────────────────────────────
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (released) return false
         val toolType = event.getToolType(0)
         val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS ||
             toolType == MotionEvent.TOOL_TYPE_ERASER
-        // Stylus-only: finger (and mouse) events pass through to the host untouched.
-        if (!isStylus || released) return false
+        // Stylus-only, with one narrow exception: while a selection is active in lasso
+        // mode, a single finger may drag it or dismiss it (see handleFingerSelection).
+        // Every other finger (and mouse) event passes through to the host untouched.
+        if (!isStylus) return handleFingerSelection(event)
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -563,15 +574,19 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             canvas.drawPath(trail, selectionPaint)
         }
         // Drag layer: the committed record omits the selected strokes; their snapshots
-        // (and ghost outlines for selected host content) draw translated on top.
+        // draw translated on top. Selected host content draws live through the
+        // renderer's drawObject when implemented, else as a dashed ghost of its bounds.
         if (dragActive && dragThresholdMet) {
             val save = canvas.save()
             canvas.translate(dragDx, dragDy)
             for (s in dragStrokes) {
                 StrokeRenderer.draw(canvas, s.points, s.color, s.width, s.style, scratchPaint)
             }
-            for (b in dragContentBounds) {
-                canvas.drawRect(b.left, b.top, b.right, b.bottom, selectionPaint)
+            for ((renderer, target) in dragContentTargets) {
+                if (!renderer.drawObject(canvas, target.contentId)) {
+                    val b = target.bounds
+                    canvas.drawRect(b.left, b.top, b.right, b.bottom, selectionPaint)
+                }
             }
             canvas.restoreToCount(save)
         }
@@ -622,8 +637,13 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected open fun drawCommittedContent(canvas: Canvas) {
         canvas.drawColor(Color.WHITE)
         templateBitmap?.let { canvas.drawBitmap(it, null, templateDestRect(), null) }
+        // Renderers get the drag exclusion set (empty outside a drag) so opted-in hosts
+        // hide originals whose live copies ride the drag layer; the default overload
+        // ignores it.
         for (renderer in contentRenderers) {
-            if (renderer.layer == ContentLayer.BELOW_STROKES) renderer.draw(canvas)
+            if (renderer.layer == ContentLayer.BELOW_STROKES) {
+                renderer.draw(canvas, dragHiddenContentIds)
+            }
         }
         for (stroke in strokeList) {
             // Mid-drag, the selected strokes live in the translated drag layer instead.
@@ -633,7 +653,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             )
         }
         for (renderer in contentRenderers) {
-            if (renderer.layer == ContentLayer.ABOVE_STROKES) renderer.draw(canvas)
+            if (renderer.layer == ContentLayer.ABOVE_STROKES) {
+                renderer.draw(canvas, dragHiddenContentIds)
+            }
         }
     }
 
@@ -825,6 +847,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * selected host-content bounds for the translated drag layer.
      */
     protected fun lassoTryBeginDrag(x: Float, y: Float): Boolean {
+        // A second contact (pen landing during a finger drag) must not re-enter: it
+        // falls through to the outline path, whose selection-dismiss cancels the drag.
+        if (dragActive) return false
         if (!selectionBoxContains(x, y)) return false
         val sel = selection ?: return false
         dragActive = true
@@ -834,9 +859,11 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         dragDx = 0f
         dragDy = 0f
         dragStrokes = strokeList.filter { it.id in sel.strokeIds }
-        dragContentBounds = contentRenderers.flatMap { it.hitTargets() }
-            .filter { it.contentId in sel.contentIds }
-            .map { it.bounds }
+        dragContentTargets = contentRenderers.flatMap { renderer ->
+            renderer.hitTargets()
+                .filter { it.contentId in sel.contentIds }
+                .map { renderer to it }
+        }
         return true
     }
 
@@ -855,6 +882,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             if (dx * dx + dy * dy < threshold * threshold) return
             dragThresholdMet = true
             dragHiddenIds = selection?.strokeIds ?: emptySet()
+            dragHiddenContentIds = selection?.contentIds ?: emptySet()
             onSelectionDragVisual(true)
             paperListener?.onSelectionDragStarted()
             redrawCommitted()
@@ -875,7 +903,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         dragActive = false
         if (!dragThresholdMet) {
             dragStrokes = emptyList()
-            dragContentBounds = emptyList()
+            dragContentTargets = emptyList()
             return
         }
         dragThresholdMet = false
@@ -884,8 +912,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         dragDx = 0f
         dragDy = 0f
         dragStrokes = emptyList()
-        dragContentBounds = emptyList()
+        dragContentTargets = emptyList()
         dragHiddenIds = emptySet()
+        dragHiddenContentIds = emptySet()
         onSelectionDragVisual(false)
         val sel = selection
         if (sel == null) {
@@ -961,6 +990,112 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * end-of-drag repaint so the restored mode covers the final quality frame.
      */
     protected open fun onSelectionDragVisual(active: Boolean) {}
+
+    // ── Finger interaction with the active selection ─────────────────────────
+
+    /** What the current finger contact is doing (latched at ACTION_DOWN). DEAD = a
+     *  consumed contact that stopped qualifying (palm, wander) and is ignored to UP. */
+    private enum class FingerMode { NONE, DRAG, TAP, DEAD }
+
+    private var fingerMode = FingerMode.NONE
+    private var fingerDownX = 0f
+    private var fingerDownY = 0f
+
+    /**
+     * The stylus-only exception: while a selection is active in lasso mode, a single
+     * finger inside the box drags it (same machinery as the pen drag) and a finger tap
+     * outside dismisses it. Palm-safe per the standing contract:
+     * - Finger-down is refused while [isPenActive] (writing/hovering pen ⇒ that finger
+     *   is a resting palm), and a pen turning active mid-drag cancels the drag.
+     * - A second pointer (palm) kills the gesture; a wandering "tap" is abandoned.
+     * - The dismissal commits after a [PaperView.PEN_ACTIVE_TAIL_MS] escrow and is
+     *   dropped if the gate closes meanwhile — a palm micro-tap can beat the pen into
+     *   hover range and must not silently throw the selection away.
+     * Everything outside these cases returns false, leaving finger input to the host.
+     */
+    private fun handleFingerSelection(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                fingerMode = FingerMode.NONE
+                if (tool != Tool.LASSO || selection == null || isPenActive) return false
+                fingerDownX = event.x
+                fingerDownY = event.y
+                fingerMode = if (lassoTryBeginDrag(event.x, event.y)) {
+                    FingerMode.DRAG
+                } else {
+                    FingerMode.TAP
+                }
+                return true
+            }
+
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (fingerMode == FingerMode.NONE) return false
+                // Multi-touch = palm: kill the gesture (a cancelled drag dismisses).
+                if (fingerMode == FingerMode.DRAG) lassoDragCancel()
+                fingerMode = FingerMode.DEAD
+                return true
+            }
+
+            MotionEvent.ACTION_MOVE -> when (fingerMode) {
+                FingerMode.DRAG -> {
+                    if (isPenActive) {
+                        // The pen came near mid-drag: this "finger" is a palm after all.
+                        lassoDragCancel()
+                        fingerMode = FingerMode.DEAD
+                    } else {
+                        lassoDragMove(event.x, event.y)
+                    }
+                    return true
+                }
+                FingerMode.TAP -> {
+                    val t = dragThresholdPx()
+                    if (kotlin.math.abs(event.x - fingerDownX) > t ||
+                        kotlin.math.abs(event.y - fingerDownY) > t
+                    ) {
+                        fingerMode = FingerMode.DEAD
+                    }
+                    return true
+                }
+                FingerMode.DEAD -> return true
+                FingerMode.NONE -> return false
+            }
+
+            MotionEvent.ACTION_UP -> when (fingerMode) {
+                FingerMode.DRAG -> {
+                    fingerMode = FingerMode.NONE
+                    if (isPenActive) lassoDragCancel() else lassoDragFinish(event.x, event.y)
+                    return true
+                }
+                FingerMode.TAP -> {
+                    fingerMode = FingerMode.NONE
+                    if (!isPenActive) scheduleEscrowedDismiss()
+                    return true
+                }
+                FingerMode.DEAD -> {
+                    fingerMode = FingerMode.NONE
+                    return true
+                }
+                FingerMode.NONE -> return false
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                if (fingerMode == FingerMode.NONE) return false
+                if (fingerMode == FingerMode.DRAG) lassoDragCancel()
+                fingerMode = FingerMode.NONE
+                return true
+            }
+        }
+        return false
+    }
+
+    /** Commit a finger tap-to-dismiss after the pen-gate escrow; drop it if the pen
+     *  became active meanwhile or the selection already changed. */
+    private fun scheduleEscrowedDismiss() {
+        val sel = selection ?: return
+        postDelayed({
+            if (!released && !isPenActive && selection === sel) clearSelection()
+        }, PaperView.PEN_ACTIVE_TAIL_MS)
+    }
 
     private fun dragThresholdPx(): Float = DRAG_THRESHOLD_DP * resources.displayMetrics.density
 

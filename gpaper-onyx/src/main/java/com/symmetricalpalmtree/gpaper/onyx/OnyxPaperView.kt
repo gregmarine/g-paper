@@ -296,12 +296,20 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
      *  callback) is authoritative when present — mirroring the stroke path. */
     private var rawLassoCapture = false
     private var rawDragActive = false
+    private var rawLassoRenderOn = false
     private val rawLassoMovePoints = ArrayList<StrokePoint>()
     private val rawLassoListPoints = ArrayList<StrokePoint>()
 
-    /** Pen-down in lasso mode on the raw path: start a drag (inside the selection box —
-     *  the overlay render is already off, so no trail can blip) or a new outline
-     *  (render on — the firmware paints the DASH trail from here until pen-up). */
+    /**
+     * Pen-down in lasso mode on the raw path: start a drag (inside the selection box) or
+     * a new outline. The overlay render stays OFF here either way — for an outline it is
+     * enabled at the **first move sample** ([enableRawLassoRenderOnFirstMove]), not at
+     * pen-down: a tap then never turns the overlay on, so the dismissal frame from
+     * [lassoOutlineStart] reaches the panel immediately (with the overlay enabled at
+     * down, the box visibly lingered seconds on a tap-away — the micro-contact's wipe
+     * repaint raced the SDK's end-of-contact handling and was eaten; measured NA5C).
+     * A real outline just loses its first millimeter of trail, which is chrome anyway.
+     */
     private fun beginRawLasso(touchPoint: TouchPoint) {
         rawLassoMovePoints.clear()
         rawLassoListPoints.clear()
@@ -310,9 +318,17 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
             return
         }
         rawLassoCapture = true
-        if (isSetup) touchHelper.setRawDrawingRenderEnabled(true)
+        rawLassoRenderOn = false
         lassoOutlineStart()
         rawLassoMovePoints.add(touchPoint.toStrokePoint())
+    }
+
+    /** First outline move: turn the overlay render on — the firmware paints the DASH
+     *  trail from here until pen-up. */
+    private fun enableRawLassoRenderOnFirstMove() {
+        if (rawLassoRenderOn || !isSetup) return
+        rawLassoRenderOn = true
+        touchHelper.setRawDrawingRenderEnabled(true)
     }
 
     /** Pen-up on a raw lasso contact: finish the drag, or wipe the trail and hand the
@@ -333,8 +349,13 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         rawLassoListPoints.clear()
         // Wipe BEFORE the selection box appears (the proven smart-lasso wipe): render
         // off + an app frame, then a handwriting repaint so the trail pixels actually
-        // leave the e-ink. Render stays off until the next outline begin.
-        wipeRawLassoTrail()
+        // leave the e-ink. Render stays off until the next outline's first move. A
+        // gesture that never enabled the render painted nothing — skip the full-panel
+        // refresh entirely (taps stay flash-free).
+        if (rawLassoRenderOn) {
+            rawLassoRenderOn = false
+            wipeRawLassoTrail()
+        }
         completeLassoOutline(outline)
     }
 
@@ -359,7 +380,10 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         }
         if (rawLassoCapture) {
             rawLassoCapture = false
-            wipeRawLassoTrail()
+            if (rawLassoRenderOn) {
+                rawLassoRenderOn = false
+                wipeRawLassoTrail()
+            }
         }
     }
 
@@ -418,6 +442,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 if (rawDragActive) {
                     lassoDragMove(touchPoint.x, touchPoint.y)
                 } else if (rawLassoCapture) {
+                    enableRawLassoRenderOnFirstMove()
                     rawLassoMovePoints.add(touchPoint.toStrokePoint())
                 }
                 return
@@ -522,6 +547,13 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     // ── MotionEvents ─────────────────────────────────────────────────────────
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // Finger input never feeds the SDK pen pipeline — the base decides (selection
+        // drag / dismiss-tap while a selection is active) or passes it to the host.
+        val toolType = event.getToolType(0)
+        val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS ||
+            toolType == MotionEvent.TOOL_TYPE_ERASER
+        if (!isStylus) return super.onTouchEvent(event)
+
         // NONE runs with the raw path off: the stylus arrives here as ordinary events
         // and the base class observes it (gate tracking + raw passthrough). LASSO takes
         // the same route only as the no-pipeline fallback (raw dead → software trail);
@@ -533,12 +565,9 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         // stylus event slips through (e.g. raw drawing momentarily disabled on focus
         // loss), then feed the SDK. Never fall back to the base class's software ink —
         // a dead pipeline must fail loudly, not silently become the generic engine.
-        val toolType = event.getToolType(0)
-        if (toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER) {
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> markPenDown()
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> markPenUp()
-            }
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> markPenDown()
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> markPenUp()
         }
         return if (isSetup) touchHelper.onTouchEvent(event) else false
     }

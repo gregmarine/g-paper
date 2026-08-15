@@ -127,7 +127,12 @@ on a software canvas (EPD repaint paths), and is z-ordered relative to the ink.
 
 `paper.tool` ∈ `NONE | PEN | ERASER | LASSO`; pen via `penColor` / `penWidth` /
 `penStyle`, eraser via `eraserRadius`. Finger input is never a tool — it passes through
-to the host.
+to the host — with one narrow exception: while a lasso selection is active, a single
+finger inside the box drags the selection and a finger tap outside dismisses it, both
+palm-gated (`isPenActive` refuses the contact, a pen turning active mid-drag cancels
+it, a second pointer kills it, and the dismissal commits after the
+`PEN_ACTIVE_TAIL_MS` escrow). Hosts with their own touch listeners on the paper view
+must yield finger events while a selection is active or the component never sees them.
 
 ### Pen types (`StrokeStyle`)
 
@@ -183,10 +188,13 @@ Selection (mechanics in the component, data in the host):
    `onSelectionMoved(SelectionMove(strokeIds, contentIds, dx, dy))`. The component has
    already translated its in-memory strokes and re-rendered; the host applies the same
    delta to its persisted data (`Stroke.translated`) and its own content objects
-   (reposition + `notifyContentChanged()` — during the drag the component ghosts
-   selected content as translated dashed outlines; only the host can truly redraw it).
-   The selection stays active at its new position. A sub-threshold tap inside the box
-   keeps the selection; a cancelled drag dismisses it (`onSelectionDismissed`).
+   (reposition + `notifyContentChanged()`). During the drag, selected host content
+   ghosts as a translated dashed outline by default; a renderer that implements the
+   optional live-drag pair — the exclusion-aware `draw(canvas, excludedContentIds)`
+   plus `drawObject(canvas, contentId)` — has its real object drawn under the pen
+   (see `ContentRenderer`). The selection stays active at its new position. A
+   sub-threshold tap inside the box keeps the selection; a cancelled drag dismisses
+   it (`onSelectionDismissed`).
 3. Tap outside / a new outline / tool change / `clearSelection()` →
    `onSelectionDismissed()`. Any data-in call (`loadStrokes`, `addStrokes`,
    `removeStrokes`, `clear`, `clearForContentSwap`) also dismisses first — the

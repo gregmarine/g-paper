@@ -57,7 +57,15 @@ class MainActivity : Activity() {
     private var rawEvents = 0
     private var lastEvent = "—"
 
-    /** The host-rendered sample object: a rounded box the host owns and draws. */
+    /** Tracked from the selection callbacks: while true, the host must yield finger
+     *  events to the paper view (the component owns finger drag / tap-to-dismiss). */
+    private var selectionActive = false
+
+    /**
+     * The host-rendered sample object: a rounded box the host owns and draws. Implements
+     * the optional live-drag pair — the exclusion-aware [ContentRenderer.draw] plus
+     * [ContentRenderer.drawObject] — so a lasso drag moves the real box, not a ghost.
+     */
     private val sampleObject = object : ContentRenderer {
         var centerX = 260f
         var centerY = 200f
@@ -74,12 +82,24 @@ class MainActivity : Activity() {
 
         private fun bounds() = Bounds(centerX - 240f, centerY - 60f, centerX + 240f, centerY + 60f)
 
-        override fun draw(canvas: Canvas) {
+        private fun drawBox(canvas: Canvas) {
             val b = bounds()
             boxPaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 8f), 0f)
             canvas.drawRoundRect(b.left, b.top, b.right, b.bottom, 16f, 16f, boxPaint)
             canvas.drawText("host object — finger-tap to move", centerX, centerY - 6f, textPaint)
             canvas.drawText("(ContentRenderer, below strokes)", centerX, centerY + 30f, textPaint)
+        }
+
+        override fun draw(canvas: Canvas) = drawBox(canvas)
+
+        override fun draw(canvas: Canvas, excludedContentIds: Set<String>) {
+            if ("sample-object" !in excludedContentIds) drawBox(canvas)
+        }
+
+        override fun drawObject(canvas: Canvas, contentId: String): Boolean {
+            if (contentId != "sample-object") return false
+            drawBox(canvas)
+            return true
         }
 
         override fun hitTargets(): List<HitTarget> =
@@ -111,6 +131,7 @@ class MainActivity : Activity() {
             // ── Selection callbacks (Phase 5): the payloads ARE the demo ─────
 
             override fun onSelectionCreated(selection: Selection) {
+                selectionActive = true
                 lastEvent = "selected ${selection.strokeIds.size} strokes" +
                     (if (selection.contentIds.isNotEmpty()) " + ${selection.contentIds}" else "") +
                     " · bounds ${selection.bounds.left.toInt()},${selection.bounds.top.toInt()}" +
@@ -139,6 +160,7 @@ class MainActivity : Activity() {
             }
 
             override fun onSelectionDismissed() {
+                selectionActive = false
                 lastEvent = "selection dismissed"
                 refreshStatus()
             }
@@ -165,6 +187,9 @@ class MainActivity : Activity() {
             val isFinger = toolType != MotionEvent.TOOL_TYPE_STYLUS &&
                 toolType != MotionEvent.TOOL_TYPE_ERASER
             if (!isFinger) return@setOnTouchListener false
+            // While a selection is active the COMPONENT owns finger input (drag the
+            // selection, tap to dismiss) — yield, or the engine never sees the events.
+            if (selectionActive) return@setOnTouchListener false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     tapCandidate = !paper.isPenActive && event.pointerCount == 1

@@ -2,7 +2,12 @@ package com.symmetricalpalmtree.gpaper.core
 
 /**
  * The active stylus tool. Set via [PaperView.tool]; finger input is never a tool
- * (g-paper is stylus-only — finger events pass through to the host untouched).
+ * (g-paper is stylus-only — finger events pass through to the host untouched), with
+ * one narrow exception: while a [LASSO] selection is active, a single finger inside
+ * the selection box drags it and a finger tap outside dismisses it (palm-gated via
+ * [PaperView.isPenActive]; the dismissal commits after a
+ * [PaperView.PEN_ACTIVE_TAIL_MS] escrow). Hosts with their own touch listeners on the
+ * paper view must yield finger events while a selection is active.
  */
 enum class Tool {
     /**
