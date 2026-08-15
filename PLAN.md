@@ -195,8 +195,9 @@ pair with a stale in-flight frame and the just-written ink vanishes until a late
 with the demo's input-rate status updates; the reference never hit it); the clear ladder now also
 arms after every bake handoff as a ≤450 ms self-heal. Verified eyes-on on the **Nomad**: live
 ink, all 8 styles, bake at tool/toolbar boundaries, erase + ladder, barrel erase, palm gate,
-clear, app-switch. **Manta pass pending** (device not connected) — before/alongside Phase 5,
-verify on the Manta: the +3 px registration branch (min-dim ≥ 1600 split), bake handoff, ladder.
+clear, app-switch. **Manta verified eyes-on too** (same session, once connected): engine selected
+via the min-dim ≥ 1600 split (+3 px registration branch active, session claimed 1920×2399),
+registration/bake/erase/styles all pass — both Ratta Tier-1 devices are green.
 **For Phase 5:** trail codes are already in `SupernoteInk.Pen` (`DASH` 4 at EMR 300, `CROSS` 3);
 drag-move must suppress from the hover stream (law 3); `armOverlayClearLadder()` is the lift-wipe.
 **Status:** ⬜ Not started
