@@ -169,7 +169,7 @@ reference). Tilt deliberately captured as 0 on Onyx (per-device scales, no SDK n
 `onPenUpRefresh`/`setPostInputEvent` analogues don't apply (Ratta hover arrives as MotionEvents).
 
 ### Phase 4 — Ratta (Supernote) Engine
-**Status:** ⬜ Not started
+**Status:** 🧪 Awaiting device verification
 - `gpaper-ratta`: `SupernoteInk` binder client + ink map, engine as a subclass of core's canvas view
   (firmware live ink + deferred bake handoff), the three overlay laws, clear-retry ladder,
   hover-based suppressors (barrel/eraser-end/drag), disable-area complement bands + chrome exclusion,

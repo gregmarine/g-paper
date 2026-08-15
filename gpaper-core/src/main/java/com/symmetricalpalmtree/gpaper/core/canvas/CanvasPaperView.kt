@@ -95,9 +95,21 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected var exclusionRects: List<Rect> = emptyList()
         private set
 
+    /**
+     * Whether this engine draws the in-progress stroke itself (live layer in [onDraw],
+     * invalidated at input rate). Engines whose live ink is painted by firmware
+     * (the Ratta EPDC overlay) override to false: the per-move invalidate → full-view
+     * redraw → panel update would fight the hardware for no visual gain.
+     */
+    protected open val rendersLiveStrokes: Boolean get() = true
+
     // Pen-gate state. Volatile: device pipelines may report proximity from their raw
     // input thread (the Onyx SDK event bus), while hosts read [isPenActive] on main.
     @Volatile private var penDown = false
+
+    /** Whether the stylus is currently on the glass — for device subclasses whose
+     *  deferred hardware handoffs must never fire mid-stroke (the Ratta clear ladder). */
+    protected val isPenDown: Boolean get() = penDown
     @Volatile private var penLastLiftMs = 0L
     @Volatile private var penHovering = false
     @Volatile private var penLastHoverMs = 0L
@@ -297,8 +309,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 when (gestureMode) {
                     GestureMode.DRAW -> {
                         activePoints.clear()
-                        activePoints.add(event.strokePointAt(-1))
-                        invalidate()
+                        appendDrawPoints(listOf(event.strokePointAt(-1)))
+                        if (rendersLiveStrokes) invalidate()
                     }
                     GestureMode.ERASE -> {
                         lastEraserPoint = null
@@ -313,8 +325,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 val newPoints = event.batchStrokePoints()
                 when (gestureMode) {
                     GestureMode.DRAW -> {
-                        activePoints.addAll(newPoints)
-                        invalidate()
+                        appendDrawPoints(newPoints)
+                        if (rendersLiveStrokes) invalidate()
                     }
                     GestureMode.ERASE -> eraseAlong(newPoints)
                     else -> Unit
@@ -329,9 +341,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                     GestureMode.DRAW -> {
                         if (cancelled) {
                             activePoints.clear()
-                            invalidate()
+                            if (rendersLiveStrokes) invalidate()
                         } else {
-                            activePoints.add(event.strokePointAt(-1))
+                            appendDrawPoints(listOf(event.strokePointAt(-1)))
                             commitActiveStroke()
                             paperListener?.onPenLifted()
                         }
@@ -407,19 +419,31 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             drawCommittedContent(canvas)
         }
         // Live layer: the in-progress stroke through the same renderer as the bake.
-        if (gestureMode == GestureMode.DRAW && activePoints.isNotEmpty()) {
+        if (rendersLiveStrokes && gestureMode == GestureMode.DRAW && activePoints.isNotEmpty()) {
             StrokeRenderer.draw(canvas, activePoints, penColor, penWidth, penStyle, scratchPaint)
         }
     }
 
     /**
-     * Re-record the committed [RenderNode] (a display list only — cheap) and repaint.
-     * Every content mutation funnels through here; nothing re-tessellates per frame.
+     * Re-record the committed [RenderNode] and repaint. Every content mutation funnels
+     * through here; nothing re-tessellates per frame. Open so deferred-bake engines can
+     * interleave their overlay handoff between the record and the repaint (every
+     * re-record bakes the whole model, so the hardware overlay must drop its copy of
+     * the ink *before* the fresh frame presents — ordering the hardware is sensitive to).
      */
-    protected fun redrawCommitted() {
+    protected open fun redrawCommitted() {
+        if (recordCommitted()) invalidate()
+    }
+
+    /**
+     * Record the committed content into the [RenderNode] (a display list only — cheap)
+     * WITHOUT presenting a frame. Returns false before layout. Subclasses composing
+     * their own [redrawCommitted] use this as the record half.
+     */
+    protected fun recordCommitted(): Boolean {
         val w = width
         val h = height
-        if (w == 0 || h == 0) return
+        if (w == 0 || h == 0) return false
         committedNode.setPosition(0, 0, w, h)
         val recordingCanvas = committedNode.beginRecording(w, h)
         try {
@@ -427,7 +451,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         } finally {
             committedNode.endRecording()
         }
-        invalidate()
+        return true
     }
 
     /**
@@ -520,8 +544,41 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         )
         strokeList.add(stroke)
         modelChanged()
-        redrawCommitted()
+        bakeAfterCommit()
         paperListener?.onStrokeCommitted(stroke)
+    }
+
+    /**
+     * Paint a just-committed stroke into the committed layer. Default: re-record now.
+     * Deferred-bake engines (Ratta — the firmware overlay keeps showing the ink until a
+     * natural boundary) override to mark the bake pending instead; the model is already
+     * current either way, so saves, hit-tests and [getStrokes] never wait for the bake.
+     */
+    protected open fun bakeAfterCommit() {
+        redrawCommitted()
+    }
+
+    /**
+     * Append captured pen points, splitting the stroke around the host's exclusion
+     * zones so the model never holds ink that was not painted (the [setExclusionRects]
+     * contract): chrome gaps leak MotionEvents, and on hardware-ink engines the
+     * firmware refuses to paint inside its disable areas. Segments outside the zones
+     * commit as separate strokes; sub-2-point remnants are dropped, matching what was
+     * actually painted.
+     */
+    private fun appendDrawPoints(points: List<StrokePoint>) {
+        if (exclusionRects.isEmpty()) {
+            activePoints.addAll(points)
+            return
+        }
+        for (p in points) {
+            if (exclusionRects.any { it.contains(p.x.toInt(), p.y.toInt()) }) {
+                if (activePoints.size >= 2) commitCapturedStroke(activePoints.toList())
+                activePoints.clear()
+            } else {
+                activePoints.add(p)
+            }
+        }
     }
 
     /** Start a fresh eraser sweep: the next [eraseAlong] batch won't chain to the last. */

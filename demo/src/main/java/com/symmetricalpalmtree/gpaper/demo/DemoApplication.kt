@@ -2,6 +2,7 @@ package com.symmetricalpalmtree.gpaper.demo
 
 import android.app.Application
 import com.symmetricalpalmtree.gpaper.onyx.OnyxEngine
+import com.symmetricalpalmtree.gpaper.ratta.RattaEngine
 
 /**
  * Registers the device engine modules this demo ships. Per the g-paper contract this
@@ -12,6 +13,6 @@ class DemoApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         OnyxEngine.register(this)
-        // RattaEngine.register() lands in Phase 4.
+        RattaEngine.register()
     }
 }

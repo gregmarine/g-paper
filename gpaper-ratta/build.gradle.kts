@@ -23,4 +23,6 @@ android {
 
 dependencies {
     api(project(":gpaper-core"))
+
+    testImplementation("junit:junit:4.13.2")
 }

@@ -41,7 +41,7 @@ changes into its own storage, keyed by stroke id.
 OnyxEngine.register(this)  // gpaper-onyx — also installs the BOOX SDK's hidden-API
                            // bypass and heals EPD state leaked by a killed pen session,
                            // which is why it takes the Application and must run here
-RattaEngine.register()     // gpaper-ratta, Phase 4
+RattaEngine.register()     // gpaper-ratta — zero dependencies (direct firmware binder)
 
 // In the hosting screen
 val paper: PaperView = GPaper.create(context)          // best available engine
@@ -233,7 +233,10 @@ Explicit registration — no ServiceLoader, no reflection, R8-safe (decided Phas
   and clears any EPD fast-mode pin leaked by a killed pen session (see `OnyxEngine`
   KDoc). Build-side, `gpaper-onyx` consumers add the BOOX maven repo
   (`http://repo.boox.com/repository/maven-public/`, insecure protocol allowed) and
-  `android.enableJetifier=true`; generic-only consumers need neither.
+  `android.enableJetifier=true`; generic-only consumers need neither. `gpaper-ratta`
+  adds **no** dependencies at all — it drives the Supernote firmware's ink daemon
+  directly over Binder; its availability probe requires Supernote hardware *and* a
+  reachable ink service (absent either, selection falls through to the next engine).
 - `GPaper.create(context)` picks the highest-priority available engine and logs the
   choice at `Log.i`; `GPaper.create(context, "onyx")` is an explicit override that
   **bypasses** the availability probe. No engine → `IllegalStateException`. **No runtime
