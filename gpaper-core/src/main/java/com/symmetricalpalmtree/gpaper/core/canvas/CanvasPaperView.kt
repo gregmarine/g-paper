@@ -831,6 +831,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      *  contact (the Ratta full-screen disable). */
     protected val isSelectionDragActive: Boolean get() = dragActive
 
+    /** Whether a selection is currently active — for device subclasses deciding whether
+     *  a gesture's outcome changed the overlay chrome (e.g. a tap that dismissed). */
+    protected val hasActiveSelection: Boolean get() = selection != null
+
     /** Whether ([x], [y]) falls inside the active selection's drawn box (the inflated
      *  [Selection.bounds]) — the pre-contact test device subclasses run from their hover
      *  stream (Ratta's law-3 drag suppress). False when nothing is selected. */

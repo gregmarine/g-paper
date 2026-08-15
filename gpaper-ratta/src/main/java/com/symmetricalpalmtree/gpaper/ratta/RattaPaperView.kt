@@ -382,6 +382,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private fun armOverlayClearLadder() {
         overlayClearArmed = true
         overlayClearAttempt = 0
+        overlayClearFlushedOnApproach = false
         removeCallbacks(overlayClearRunnable)
         postDelayed(overlayClearRunnable, GESTURE_TRACE_CLEAR_DELAYS_MS[0])
     }
@@ -421,15 +422,41 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     /**
-     * Extra armed-clear attempt at fresh pen contact — the one moment measured working
-     * in every round. Does NOT disarm the ladder: if this attempt is eaten too, the
-     * timed retries still run (they self-disarm via [pendingBake] once new ink commits).
+     * Extra armed-clear attempt outside the timed ladder. Does NOT disarm the ladder:
+     * if this attempt is eaten too, the timed retries still run (they self-disarm via
+     * [pendingBake] once new ink commits).
+     *
+     * Primary site: the **hover approach** ([flushArmedOverlayClearOnApproach]) — the
+     * clear + frame reconcile while the pen is still in the air, so the wipe can never
+     * pair with a frame presented after new contact ink starts. Issuing it at
+     * ACTION_DOWN instead (the reference's site) visibly ate the first dashes of the
+     * next lasso outline on the Nomad: the daemon paired the down-time clear with a
+     * frame presented a beat into the trail. The down-time flush is kept only for
+     * erase contacts, whose overlay ink is unwanted anyway.
      */
     private fun flushArmedOverlayClear() {
         if (!pendingBake) {
             SupernoteInk.clearAll()
             invalidate()
         }
+    }
+
+    /** One hover-stream flush per ladder arming (hover moves arrive at input rate;
+     *  re-clearing on each would spam the binder for nothing). */
+    private var overlayClearFlushedOnApproach = false
+
+    private fun flushArmedOverlayClearOnApproach(event: MotionEvent) {
+        if (!firmware || !overlayClearArmed || overlayClearFlushedOnApproach) return
+        if (event.actionMasked != MotionEvent.ACTION_HOVER_ENTER &&
+            event.actionMasked != MotionEvent.ACTION_HOVER_MOVE
+        ) {
+            return
+        }
+        val t = event.getToolType(0)
+        if (t != MotionEvent.TOOL_TYPE_STYLUS && t != MotionEvent.TOOL_TYPE_ERASER) return
+        if (isPenDown) return
+        overlayClearFlushedOnApproach = true
+        flushArmedOverlayClear()
     }
 
     // ── Barrel button / eraser end (hover suppress — overlay law 3) ──────────
@@ -558,9 +585,6 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     // No-hover backstop for the pen-approach re-arm (too late for this
                     // stroke's paint, but heals the session for the rest).
                     rearmOnPenApproach()
-                    // Fresh EMR contact: fire any armed gesture-trace clear before this
-                    // contact produces new overlay ink.
-                    if (overlayClearArmed) flushArmedOverlayClear()
                     // Mirror of the base's gesture classification. An erase contact is
                     // a handoff boundary: bake pending overlay ink FIRST so the
                     // software erase + redraw operates on a fully-baked page (the
@@ -570,7 +594,16 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                             tool == Tool.ERASER ||
                             (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
                         )
-                    if (contactErasing) releaseFirmwareOverlay()
+                    // Armed gesture-trace clear: normally already flushed from the
+                    // hover approach (flushArmedOverlayClearOnApproach — a down-time
+                    // clear pairs with a frame presented into THIS contact's ink and
+                    // eats it; seen wiping lasso-trail starts on the Nomad). Keep the
+                    // down flush only for erase contacts, whose overlay ink is
+                    // unwanted anyway.
+                    if (contactErasing) {
+                        if (overlayClearArmed) flushArmedOverlayClear()
+                        releaseFirmwareOverlay()
+                    }
                     contactLassoOutline = false
                     contactLassoDrag = false
                     if (!contactErasing && tool == Tool.LASSO) {
@@ -624,6 +657,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun onHoverEvent(event: MotionEvent): Boolean {
         compensateRegistration(event)
         rearmOnPenApproach()
+        flushArmedOverlayClearOnApproach(event)
         updateBarrelSuppress(event)
         updateLassoDragHoverSuppress(event)
         return super.onHoverEvent(event)
@@ -634,6 +668,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
         compensateRegistration(event)
         rearmOnPenApproach()
+        flushArmedOverlayClearOnApproach(event)
         updateBarrelSuppress(event)
         updateLassoDragHoverSuppress(event)
         return super.onGenericMotionEvent(event)

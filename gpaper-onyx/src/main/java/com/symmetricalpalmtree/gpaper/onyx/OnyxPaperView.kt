@@ -69,6 +69,10 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
          *  of the armed pen width. */
         const val LASSO_TRAIL_WIDTH = 3f
 
+        /** Retry delay for the tap-away dismissal repaint — the immediate repaint can
+         *  race the SDK's end-of-contact processing and be eaten. */
+        const val DISMISS_REPAINT_RETRY_MS = 250L
+
         /**
          * Process-global owner of the single Onyx raw-drawing pipeline. Every successful
          * [openRawDrawing] claims it; every close routes through [closeRawDrawingIfOwner],
@@ -300,6 +304,13 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     private val rawLassoMovePoints = ArrayList<StrokePoint>()
     private val rawLassoListPoints = ArrayList<StrokePoint>()
 
+    /** Whether this outline contact dismissed a selection at pen-down. The dismissal
+     *  frame is generated DURING the raw contact, whose session withholds the panel
+     *  update — and the pen-up invalidate produces an identical, damage-free frame the
+     *  panel ignores. A tap-away therefore needs an explicit repaint at contact end
+     *  (measured NA5C: without it the box lingered until an eventual refresh). */
+    private var rawLassoDismissedAtDown = false
+
     /**
      * Pen-down in lasso mode on the raw path: start a drag (inside the selection box) or
      * a new outline. The overlay render stays OFF here either way — for an outline it is
@@ -319,6 +330,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         }
         rawLassoCapture = true
         rawLassoRenderOn = false
+        rawLassoDismissedAtDown = hasActiveSelection
         lassoOutlineStart()
         rawLassoMovePoints.add(touchPoint.toStrokePoint())
     }
@@ -350,13 +362,31 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         // Wipe BEFORE the selection box appears (the proven smart-lasso wipe): render
         // off + an app frame, then a handwriting repaint so the trail pixels actually
         // leave the e-ink. Render stays off until the next outline's first move. A
-        // gesture that never enabled the render painted nothing — skip the full-panel
-        // refresh entirely (taps stay flash-free).
+        // gesture that never enabled the render painted nothing — no wipe; but if its
+        // pen-down dismissed a selection (tap-away), the panel still needs an explicit
+        // repaint now that the contact is over (see rawLassoDismissedAtDown).
+        val dismissedAtDown = rawLassoDismissedAtDown
+        rawLassoDismissedAtDown = false
         if (rawLassoRenderOn) {
             rawLassoRenderOn = false
             wipeRawLassoTrail()
+        } else if (dismissedAtDown) {
+            presentDismissalRepaint()
         }
         completeLassoOutline(outline)
+    }
+
+    /** Push the box-dismissal pixels to the panel after a tap-away contact: one repaint
+     *  now plus one delayed retry — the immediate one can race the SDK's end-of-contact
+     *  processing and be eaten (idempotent; unchanged pixels repaint invisibly). */
+    private fun presentDismissalRepaint() {
+        invalidate()
+        post {
+            EpdController.handwritingRepaint(this, Rect(0, 0, width, height))
+        }
+        postDelayed({
+            EpdController.handwritingRepaint(this, Rect(0, 0, width, height))
+        }, DISMISS_REPAINT_RETRY_MS)
     }
 
     private fun wipeRawLassoTrail() {
@@ -374,6 +404,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         Log.i(TAG, "raw lasso cancelled ($caller)")
         rawLassoMovePoints.clear()
         rawLassoListPoints.clear()
+        rawLassoDismissedAtDown = false
         if (rawDragActive) {
             rawDragActive = false
             lassoDragCancel()
