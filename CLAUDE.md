@@ -56,6 +56,27 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   counter does), so the clear ladder also arms after **every** bake handoff — post-bake, every
   possible frame contains the strokes, making retry pairs harmless when the handoff landed and a
   ≤450 ms self-heal when it didn't.
+- **Selection/lasso is shared-base machinery** (`CanvasPaperView`): device engines add only trail
+  chrome + EPD drag handling, driving the base's protected seams from their pipelines. Trails are
+  engine chrome, never model data. The stylus-only contract has ONE exception: while a selection is
+  active, a single finger drags it / a finger tap dismisses it (palm-gated: `isPenActive` refusal,
+  mid-drag pen cancel, multi-touch kill, `PEN_ACTIVE_TAIL_MS` escrowed dismissal) — hosts with touch
+  listeners on the paper view must yield finger events while a selection is active. Host content
+  joins drags via the optional `ContentRenderer` pair (exclusion-aware `draw` + `drawObject`);
+  implement both or neither.
+- **Onyx: frames presented during a live raw contact are withheld from the panel**, and a pen-up
+  `invalidate()` of identical content is damage-free — the panel never repaints. Any overlay-chrome
+  change made at pen-down (e.g. tap-away selection dismissal) needs an explicit
+  `handwritingRepaint` at contact end **plus a ~250 ms retry** (the immediate one races the SDK's
+  end-of-contact processing and can be eaten). Related: the lasso trail render must arm at the
+  first *move* sample, never at pen-down — a tap that arms the overlay freezes its own dismissal
+  frame and its wipe loses that race.
+- **Ratta: never issue an armed gesture-trace clear at ACTION_DOWN of an inking contact** — the
+  daemon pairs the clearAll with a frame presented a beat *into* the new contact and eats its first
+  ink (lasso-trail starts visibly wiped on the Nomad; the Manta's faster daemon hides it; latent in
+  the reference, which flushed at down in all modes). Flush from the **hover stream** instead (once
+  per ladder arming, `flushArmedOverlayClearOnApproach`) — law 3's pre-contact channel; the
+  down-time flush is kept only for erase contacts, whose overlay ink is unwanted anyway.
 - The Ratta engine is selected only when Supernote hardware **and** the firmware ink binder are
   both present (`isRattaDevice() && SupernoteInk.isAvailable()`); absent either, selection falls
   through (that probe fall-through is engine *selection*, not a runtime fallback). With the binder

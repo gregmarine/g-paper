@@ -202,13 +202,36 @@ registration/bake/erase/styles all pass — both Ratta Tier-1 devices are green.
 drag-move must suppress from the hover stream (law 3); `armOverlayClearLadder()` is the lift-wipe.
 
 ### Phase 5 — Selection & Drag Helpers
-**Status:** 🧪 Awaiting device verification
+**Status:** ✅ Complete (commit a32c3ce)
 - Lasso capture in all three engines: canvas trail (generic), hardware trails (BOOX `DASH`, Ratta
   `LASSO_DASH`), selection box overlay, tap-to-dismiss, drag-move mechanics (A2 mode on BOOX,
   hover suppress on Ratta) — all firing callbacks with stroke ids + translated geometry; host
   applies the move to its data and confirms. Host content participates via renderer hit bounds.
 - Demo: lasso select strokes + the sample host object, drag them, show the callback payloads.
 - **Test:** JVM hit-test tests; on-device passes on all three engine types.
+
+**Outcome (2026-08-15):** Built as planned, plus two user-approved scope additions. The whole
+selection/drag state machine lives once in `CanvasPaperView` (outline capture, 8 dp tap-vs-outline
+extent classifier, box overlay on inflated bounds, drag with hidden-strokes re-record + translated
+drag layer), driven through protected seams (`lassoTryBeginDrag`/`lassoOutlineStart`/
+`completeLassoOutline`/`lassoDrag*`/`selectionBoxContains`/`onSelectionDragVisual`); pure-JVM
+`LassoHitTest` (strokes any-point-in-polygon, host `HitTarget`s polygon-rect) — 72 JVM tests green.
+Onyx drives the gesture from the raw callbacks with the firmware DASH trail (A2 fast mode during
+drag); Ratta arms the firmware dash pen (code 4, EMR 300) with the law-3 hover drag-suppress and
+ladder trail wipes. **Additions:** (1) `ContentRenderer` live-drag pair — exclusion-aware
+`draw(canvas, excludedContentIds)` + `drawObject(canvas, contentId)` — so opted-in host objects
+truly drag (demo implements it); (2) finger interaction with the active selection (single-finger
+drag inside the box, finger tap outside dismisses; palm-gated: `isPenActive` refusal, mid-drag pen
+cancel, multi-touch kill, escrowed dismissal). **Three device-found discoveries** (in CLAUDE.md):
+Onyx trail render must arm at first *move*, never pen-down; Onyx frames generated during a live raw
+contact are withheld and a damage-free pen-up invalidate never repaints (tap-dismiss needs explicit
+`handwritingRepaint` + 250 ms retry); Ratta armed-clear flush must move from ACTION_DOWN to the
+hover stream (a down-time clear pairs with a frame into the new trail and eats its first dashes —
+Nomad-visible, Manta-invisible; latent in the reference). Verified eyes-on on NA5C + Nomad + Manta:
+outline/select, drag (pen + finger), host-object live drag, tap-to-dismiss (pen + finger), barrel
+erase in lasso, tool-switch dismissal — all pass. **For Phase 6:** the generic engine's software
+dashed trail (`rendersLiveTrail` base path) is the one Phase-5 surface not yet eyes-on-verified —
+cover it in the parity audit on a generic device (MIP11).
 
 ### Phase 6 — Hardening & Publishing
 **Status:** ⬜ Not started
