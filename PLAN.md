@@ -105,7 +105,7 @@ the `GPaper.genericProviderFactory` internal hook (registry is ready and waiting
 renderers first slice per the Phase 2 bullets (richer styles render as `PEN` until implemented).
 
 ### Phase 2 — Generic Engine + Demo v1
-**Status:** ⬜ Not started
+**Status:** ✅ Complete (commit 90ceadd)
 - Port/redesign `GenericNotebookView` into core's `CanvasPaperView`: stylus-only input capture,
   RenderNode committed-content model, live-stroke drawing, eraser hit-testing (AABB pre-filter,
   throttled redraw), template rendering into page rect, pen-activity gate, host-renderer layer.
@@ -118,6 +118,23 @@ renderers first slice per the Phase 2 bullets (richer styles render as `PEN` unt
   (proves the data-out API), one host-rendered sample object (proves the render-in API).
 - **Test:** JVM tests (erase geometry, stroke model, bounds); on-device on generic Android
   (tablet/emulator) via adb.
+
+**Outcome (2026-08-14):** Built as planned. `CanvasPaperView` + `StrokeRenderer` +
+`GenericPaperEngineProvider` live in `gpaper-core`'s `core/canvas/` (public-but-not-host-API;
+Ratta subclasses it in Phase 4 — `drawCommittedContent` is `protected open`, `redrawCommitted`
+`protected`). Committed styles first slice as planned: PEN/MARKER/DASH/CROSS/FOUNTAIN real,
+PENCIL/BRUSH/CALLIGRAPHY render as PEN. Eraser narrow phase upgraded over Notesprout to
+segment-to-segment distance (fast sweeps can't jump strokes between samples; pure-JVM in
+`geometry/EraseHitTest`). 51 JVM tests green. Demo v1 in e-ink-first minimal style (decided
+this phase), zero non-core dependencies. Verified on the Supernote Nomad (generic engine —
+its ink runs the normal View pipeline, so screencap sees it): draw/styles/erase/clear/feed +
+host-object move all pass; user eyes-on. **One device-found fix:** palm rejection initially
+failed because the palm lands before the pen tip; the gate now counts stylus *hover*
+(and the fix uncovered that hover arrives via `onHoverEvent`, not `onGenericMotionEvent`).
+`isPenActive` contract updated: writing ∨ hovering + 350 ms tail; tap-like host gestures must
+re-check the gate at finger-up. **For Phase 3:** demo already shows `engineId` in its status
+line; adb `input` injection can't synthesize stylus toolTypes (UNKNOWN on Supernote) — pen
+paths need real hands.
 
 ### Phase 3 — Onyx (BOOX) Engine
 **Status:** ⬜ Not started
@@ -197,4 +214,6 @@ renderers first slice per the Phase 2 bullets (richer styles render as `PEN` unt
   arm during lasso gestures stays internal. Rendering lands incrementally: engines may render richer
   styles as `PEN` until their committed renderer exists.
 - Publishing target (JitPack vs GitHub Packages vs mavenLocal-only) — decide in Phase 6.
-- Demo app visual language: e-ink-first like Notesprout's design system, or plain Material-free minimal — decide in Phase 2.
+- ~~Demo app visual language~~ **Decided (Phase 2):** e-ink-first minimal — black-on-white,
+  flat 2px-bordered buttons (selected = solid black), no Material theming/deps; reads
+  correctly on EPD panels in Phases 3/4 and on LCD alike.

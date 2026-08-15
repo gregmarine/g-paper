@@ -28,6 +28,13 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
 - Native device style/pen codes never surface in the public API. `StrokeStyle` is abstract; the
   committed (baked) appearance is core-rendered and portable across engines, live ink is a
   best-effort per-engine mapping (tables in `StrokeStyle` KDoc + `docs/api.md`).
+- `core/canvas/` is the generic engine + shared canvas base (`CanvasPaperView`, `StrokeRenderer`).
+  Public **only** so device modules can subclass — never present it as host API; hosts go through
+  `GPaper.create`. `StrokeRenderer` is the single source of truth for committed stroke appearance.
+- **Pen-activity gate includes hover.** `isPenActive` = writing ∨ hovering + 350 ms tail — the palm
+  lands before the pen tip, so proximity must close the gate. Two traps: stylus hover is delivered
+  to `onHoverEvent` (pointer-source), NOT `onGenericMotionEvent` — handle both; and tap-like host
+  gestures must re-check the gate at finger-**up** (palm can land before the pen enters hover range).
 - Engine selection: explicit registration via `GPaper` (no ServiceLoader, no reflection). Engine
   choice happens once at creation, logged at `Log.i`; **never add a silent runtime fallback** —
   post-construction engine failures must be loud.
@@ -48,7 +55,12 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
 - Install to devices with the `device-build-install` skill (`.claude/skills/device-build-install/`),
   which holds the ADB serial + tier table. Users refer to devices by nickname (G10, MAX, SNN…).
 - EPD pen overlays are **invisible to screencap** — ink behavior is verified by the user's eyes on
-  real BOOX/Supernote hardware. App UI (non-ink) does show up in screencap.
+  real BOOX/Supernote hardware. App UI (non-ink) does show up in screencap. The **generic engine's
+  ink is ordinary View rendering and IS visible to screencap** (useful even on EPD devices while no
+  device adapter is registered).
+- adb `input` injection cannot exercise stylus paths: injected events carry toolType UNKNOWN on
+  Supernote (both `input tap` and `input stylus swipe`), so the engine ignores them. Injected taps
+  do drive click listeners — fine for toolbar/UI checks; pen behavior needs real hands.
 - The Supernote Manta reports itself as a Nomad in every `ro.product.*` property; the ADB serial is
   the only reliable way to tell them apart. `Build.MANUFACTURER` is `"Supernote"`, not `"ratta"`.
 
