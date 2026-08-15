@@ -266,10 +266,28 @@ now known beyond NA5C. **For Phase 7:** the Onyx resize fix is the only Phase-6 
 review the whole library per the phase plan.
 
 ### Phase 7 — Code Review
-**Status:** 🔄 In progress
+**Status:** ✅ Complete (commit 95fb86c)
 - `/code-review` over the whole library (frugal on agents), fix findings, re-run tests on-device
   where the finding warrants.
 - **Test:** everything green after fixes; commit & push.
+
+**Outcome (2026-08-15):** `/code-review high` over the three library modules produced 9 verified
+findings; all fixed. Core: pointer-source hover was processed twice (the platform delivers the same
+MotionEvent to `onHoverEvent` then, unconsumed, to `onGenericMotionEvent` — hosts saw every HOVER
+duplicated; now deduped via the shared `isPointerSourceHover` predicate), and a stylus DOWN inside
+an exclusion rect now pulses the gate tail. Onyx: EventBus keep rules now ship via
+`consumer-rules.pro`; the async limit-rect restore compensation moved inside `openRawDrawing` (all
+reopen paths covered); focus-gain routes through `resumeDrawing` (light re-arm after dialogs);
+dismissal-repaint retry guarded; `emitRaw` dedup. Ratta: registration compensation/suppressors no
+longer run twice per hover sample (offset was doubling to +4/+6 px); cancelled draw contacts wipe
+their phantom firmware ink via the gesture-trace ladder (`contactInking` latch);
+`flushArmedOverlayClear` enforces the `inkOwner` guard. **One device-found discovery during
+verification** (NA5C, now in CLAUDE.md): the SDK's `onPenActive` callback is Handler-marshalled, so
+a backlog of stale reports can flush after the raw-thread `PenDeactivateEvent` and permanently
+re-latch the palm gate (finger selection drag/dismiss refused) — the callback now contributes
+nothing while the bus is subscribed, pulse-tail fallback otherwise. Verified eyes-on: Nomad + MIP11
+full pass first round; NA5C full pass after the gate fix. 72 JVM tests green. **For Phase 8:** no
+open engine work; documentation only.
 
 ### Phase 8 — Documentation & Release
 **Status:** ⬜ Not started

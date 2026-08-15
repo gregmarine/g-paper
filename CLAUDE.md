@@ -33,7 +33,11 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   `GPaper.create`. `StrokeRenderer` is the single source of truth for committed stroke appearance.
 - **Pen-activity gate includes hover.** `isPenActive` = writing ∨ hovering + 350 ms tail — the palm
   lands before the pen tip, so proximity must close the gate. Traps: stylus hover is delivered
-  to `onHoverEvent` (pointer-source), NOT `onGenericMotionEvent` — handle both; tap-like host
+  to `onHoverEvent` first (pointer-source) — and since the paper view is not hoverable it returns
+  false, so the platform then delivers the SAME MotionEvent to `onGenericMotionEvent` too. Handle
+  both entries, but process pointer-source hover only on the hover leg (core's
+  `isPointerSourceHover` predicate), or every sample is handled twice — and any per-event mutation
+  (Ratta's `offsetLocation` registration shift) is applied twice; tap-like host
   gestures must re-check the gate at finger-**up**; and tap-*actions* must commit after a
   `PEN_ACTIVE_TAIL_MS` **escrow** (drop if the gate closes meanwhile) — a palm micro-tap can
   complete ~190 ms before the pen enters hover range (measured NA5C), invisible to any proximity
@@ -45,7 +49,14 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   `openRawDrawing`). With it on, subscribe `TouchHelper.register(...)` to the SDK event bus for
   `PenActiveEvent`/`PenDeactivateEvent` (greenrobot; enter/leave EMR range, 100 ms-timeout exit) —
   these feed `markPenInRange`/`markPenOutOfRange` on the shared gate. Events arrive on the raw
-  input thread; the gate fields are volatile.
+  input thread; the gate fields are volatile. **The bus is the ONLY safe level feed:** the SDK
+  marshals the host-facing `onPenActive` callback through the view's Handler, so a backlog of
+  posted reports can flush AFTER the raw-thread `PenDeactivateEvent` and re-latch the gate closed
+  forever (measured NA5C — ~50 stale reports after the deactivate while main was busy completing a
+  lasso; finger selection drag/dismiss stayed refused). While the bus is subscribed the callback
+  must contribute nothing; it degrades to pulse-tail semantics only when the subscribe failed.
+  `gpaper-onyx` ships `consumer-rules.pro` (EventBus `@Subscribe` keep rules) so minifying
+  consumers can't strip the subscriber and lose the exit signal.
 - **Ratta bake-handoff ordering (fourth overlay law, found here — not in the reference).** The
   deferred bake must issue `clearAll` **between** the node record and the `invalidate`
   (`RattaPaperView.redrawCommitted`): the daemon pairs a clear with the next app frame it sees, and
