@@ -137,7 +137,7 @@ line; adb `input` injection can't synthesize stylus toolTypes (UNKNOWN on Supern
 paths need real hands.
 
 ### Phase 3 — Onyx (BOOX) Engine
-**Status:** 🧪 Awaiting device verification
+**Status:** ✅ Complete (commit e9551e7)
 - `gpaper-onyx`: TouchHelper raw-drawing pipeline, EPD rules (fast-mode app-scope pin +
   clear-on-close, handwritingRepaint handoffs, updList sizing), process-global `penOwner` guard,
   `resumeDrawing`/`releaseForHandoff` semantics, toolbar/chrome exclusion rects, barrel-button erase,
@@ -150,6 +150,23 @@ paths need real hands.
 - Demo: engine indicator, same feature set running on the Onyx overlay.
 - **Test:** on-device BOOX checklist (first-stroke latency, erase handoff, no ghosting, exclusion
   zones, app-switch release). User eyes-on since screencap can't see the overlay.
+
+**Outcome (2026-08-15):** Built as planned; full checklist verified eyes-on on the NA5C (first-stroke
+latency, all 8 styles live+baked, width/color, eraser, barrel erase, palm rejection, chrome release,
+clear, app-switch — all pass). `OnyxPaperView` **subclasses `CanvasPaperView`** (no sibling copy);
+core gained protected hooks (`commitCapturedStroke`, `eraseAlong`/`beginEraseSweep`/
+`finalizeEraseRedraw`, `markPenDown/Up/InRange/OutOfRange`, `emitRawInput`, `firePenLifted`,
+`exclusionRects`). One improvement over the reference: same-frame content swaps coalesce into a
+single `handwritingRepaint`. Host entry is `OnyxEngine.register(application)` (bypass + leaked-pin
+heal + registration in one). **Three device-found discoveries** (details in CLAUDE.md): (1) BOOX
+emits NO pen-approach signal until `TouchHelper.setPostInputEvent(true)` — then the SDK bus posts
+`PenActiveEvent`/`PenDeactivateEvent`, now feeding the shared gate; (2) tap-*actions* need a
+`PEN_ACTIVE_TAIL_MS` escrow (palm micro-taps beat hover range by ~190 ms; contract in
+`PaperView`/api.md, reference impl in the demo — contact size is no discriminator, NA5C reports
+none); (3) BOOX hosts need system-bar insets + chrome `releaseRender()` wiring (demo is the
+reference). Tilt deliberately captured as 0 on Onyx (per-device scales, no SDK normalizer).
+**For Phase 4:** Ratta subclasses the same base; the gate hooks and escrow pattern are ready;
+`onPenUpRefresh`/`setPostInputEvent` analogues don't apply (Ratta hover arrives as MotionEvents).
 
 ### Phase 4 — Ratta (Supernote) Engine
 **Status:** ⬜ Not started
