@@ -279,6 +279,34 @@ review the whole library per the phase plan.
   persistence), finalize `CLAUDE.md`.
 - Tag `v0.1.0`. Commit & push.
 
+### Phase 9 — Gesture Recognizers: Smart Lasso & Scribble Erase (post-v0.1.0)
+**Status:** ⬜ Not started
+- Two pen-gesture recognizers, ported from Notesprout and improved: **smart lasso** (a quick
+  closed pen stroke — non-lasso tool — detected as a lasso attempt) and **scribble erase**
+  (a dense zigzag over content erases it). Both are opt-in, default **off**
+  (`smartLassoEnabled` / `scribbleEraseEnabled`), active only in `Tool.PEN`.
+- Reference: Notesprout `docs/lasso-and-gestures.md` (full spec + thresholds) and
+  `apps/notesprout_android/.../notebook/NotebookConstants.kt`. **The reference triplicates the
+  recognizer logic across its three sibling NotebookViews — do not copy that.** In g-paper the
+  recognizers are pure-JVM `geometry/` code (JVM-testable) and the wiring lives once in
+  `CanvasPaperView`'s commit path; device engines contribute only their ink-retraction chrome.
+- Recognizer gates (from the reference, re-verify while porting): smart-lasso = velocity
+  ≥ 0.5 px/ms + first-to-last closure ≤ 50 dp + winding ≥ 270° around centroid; scribble =
+  bbox diagonal ≥ 40 dp + pathLength/diagonal ≥ 3.0 + ≥ 2 direction reversals (noise-filtered).
+  Precedence: smart-lasso → scribble → normal stroke; an empty hit test falls through to a
+  normal committed stroke (writing "o" over blank paper stays ink).
+- Hit tests reuse existing machinery: smart-lasso feeds `LassoHitTest` + the Phase-5 selection
+  state machine (fires `onSelectionCreated`); scribble reuses the erase hit-test path
+  (whole-stroke, host content via existing hit targets) and fires erase callbacks. Hosts own
+  undo, so decide at phase start how the gesture stroke itself is reported (Notesprout
+  saves-then-deletes it for undo; g-paper likely never commits it but may need a callback
+  carrying its geometry so hosts can offer restore).
+- **The hard part is EPD ink retraction:** the recognized gesture stroke's live ink is already
+  on-panel and must be wiped — Onyx `handwritingRepaint` + retry (withheld-frame rules), Ratta
+  clear-ladder/bake machinery. New territory for the ladder; needs eyes-on on Nomad **and** Manta.
+- **Test:** JVM recognizer + hit-test tests; on-device across all three engine types
+  (false-positive checks while writing normally are part of the checklist).
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
