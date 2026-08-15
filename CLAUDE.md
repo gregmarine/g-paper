@@ -64,6 +64,9 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   listeners on the paper view must yield finger events while a selection is active. Host content
   joins drags via the optional `ContentRenderer` pair (exclusion-aware `draw` + `drawObject`);
   implement both or neither.
+- **Firmware geometry is captured, not tracked** — a resize (rotation, insets change) must
+  re-push it: Onyx `setLimitRect` re-applies in `OnyxPaperView.onSizeChanged` (posted — mid-layout
+  `getLocationOnScreen` lies), Ratta re-runs `setupFirmwareInk` for its screen-space disable areas.
 - **Onyx: frames presented during a live raw contact are withheld from the panel**, and a pen-up
   `invalidate()` of identical content is damage-free — the panel never repaints. Any overlay-chrome
   change made at pen-down (e.g. tap-away selection dismissal) needs an explicit
@@ -104,6 +107,11 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
 ## Build & device testing
 
 - `./gradlew build` — full build. `./gradlew :demo:assembleDebug` → `demo/build/outputs/apk/debug/demo-debug.apk`.
+- **Publishing is mavenLocal-only** (Phase 6 decision): `./gradlew publishToMavenLocal` publishes
+  `com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.0` + sources (coordinates in
+  `gradle.properties`). `consumer-smoke/` is a standalone consumer project (NOT in the root build)
+  proving a host app builds against the published artifacts:
+  `./gradlew -p consumer-smoke assembleDebug` after copying `local.properties` in (see its README).
 - Install to devices with the `device-build-install` skill (`.claude/skills/device-build-install/`),
   which holds the ADB serial + tier table. Users refer to devices by nickname (G10, MAX, SNN…).
 - EPD pen overlays are **invisible to screencap** — ink behavior is verified by the user's eyes on
@@ -117,9 +125,9 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   the only reliable way to tell them apart. `Build.MANUFACTURER` is `"Supernote"`, not `"ratta"`.
 - BOOX devices spam logcat (`test_keymap` etc.) hard enough to wrap the buffer in seconds — debug
   with `adb logcat -G 16M` plus a **streaming** filtered capture (`logcat -s TAG`), never `-d` after
-  the fact. Also seen on NA5C: `install -r` + immediate `am start` can race package finalization,
-  leaving the package installed but **disabled** (`enabled=3`, "Activity class does not exist") —
-  heal with `pm enable <pkg>`.
+  the fact. Also a general BOOX trap (reproduced on NA5C and G102): `install -r` + immediate
+  `am start` can race package finalization, leaving the package installed but **disabled**
+  (`enabled=3`, "Activity class does not exist") — heal with `pm enable <pkg>`.
 - BOOX has a real status bar overlaying the window top (Supernote has none) — host layouts must
   apply system-bar insets; the demo pads its root via `setOnApplyWindowInsetsListener`.
 

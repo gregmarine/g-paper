@@ -234,13 +234,36 @@ dashed trail (`rendersLiveTrail` base path) is the one Phase-5 surface not yet e
 cover it in the parity audit on a generic device (MIP11).
 
 ### Phase 6 — Hardening & Publishing
-**Status:** 🔄 In progress
+**Status:** ✅ Complete (commit 0f23f5c)
 - Parity audit: shared logic truly shared (no sibling drift), lifecycle/rotation/multi-view checks,
   perf rules verified (no per-stroke re-tessellation, erase throttling).
 - `maven-publish` setup so apps can consume via JitPack (or mavenLocal for development).
 - Demo polish: per-device capability notes screen.
 - **Test:** full build + all tests + a consuming-app smoke test (demo consumes published artifacts
   path, or a scratch consumer project).
+
+**Outcome (2026-08-15):** Built as planned. **Parity audit:** the shared-base design is holding —
+the whole selection/drag/erase/commit state machine lives once in `CanvasPaperView`, both device
+engines drive only the protected seams, and the perf rules verified (committed layer re-records only
+on content mutation, 60 ms erase/lasso throttles, `onDraw` blits the RenderNode). One gap found and
+fixed: `OnyxPaperView` never re-applied `setLimitRect` after the pipeline opened, so a resize
+(rotation, insets change) would clip raw input to stale bounds — now re-applied in `onSizeChanged`
+(Ratta already re-ran its whole setup there). **Publishing:** mavenLocal-only (decided this phase);
+`maven-publish` on the three library modules, coordinates
+`com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.0` centralized in `gradle.properties`,
+sources jars included; POMs verified correct (core at compile scope, Onyx SDK deps at runtime
+scope). **Smoke test:** `consumer-smoke/` is a committed standalone consumer project (own
+settings/properties, not part of the root build — see its README) that builds a real host app
+against the published artifacts, including the full BOOX consumer story (boox repo, jetifier, label
+override, pickFirsts). **Demo:** capability-notes screen (Notes button → per-device sheet: panel
+info, registered engines with availability, engine-specific notes, common contracts); while open the
+engine parks in `Tool.NONE` so firmware ink can't paint under the overlay, previous tool restored on
+close. **Verified eyes-on:** MIP11 (generic engine — the software lasso trail, the last unverified
+Phase-5 surface: outline trail, box, drag pen+finger, dismiss — all pass), G102 (Onyx regression +
+notes screen + pen-does-not-ink-while-notes-open), plus NA5C/Nomad/Manta installs and notes screen.
+G102 reproduced the BOOX install-race disabled-package trap (`enabled=3`, healed with `pm enable`) —
+now known beyond NA5C. **For Phase 7:** the Onyx resize fix is the only Phase-6 engine-code change;
+review the whole library per the phase plan.
 
 ### Phase 7 — Code Review
 **Status:** ⬜ Not started
