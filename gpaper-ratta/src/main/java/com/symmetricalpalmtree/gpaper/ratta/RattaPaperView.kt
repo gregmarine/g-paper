@@ -435,6 +435,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * erase contacts, whose overlay ink is unwanted anyway.
      */
     private fun flushArmedOverlayClear() {
+        // Ownership moved to another paper view mid-ladder: a clearAll now would wipe
+        // THEIR live overlay ink (same stand-down the timed ladder runnable enforces).
+        if (inkOwner !== this) return
         if (!pendingBake) {
             SupernoteInk.clearAll()
             invalidate()
@@ -572,6 +575,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private var contactLassoOutline = false
     private var contactLassoDrag = false
 
+    /** Whether the current contact has the firmware painting live INK (pen tool, not
+     *  suppressed) — so a cancelled contact, which commits nothing, can still wipe the
+     *  partial stroke the firmware already painted. */
+    private var contactInking = false
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         // Correct the digitizer offset before ANY consumer — writing, erasing and
         // hit-tests must all agree on where the pen physically is.
@@ -606,6 +614,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     }
                     contactLassoOutline = false
                     contactLassoDrag = false
+                    contactInking = !contactErasing && tool == Tool.PEN && !firmwareInkSuppressed
                     if (!contactErasing && tool == Tool.LASSO) {
                         if (selectionBoxContains(event.x, event.y)) {
                             contactLassoDrag = true
@@ -646,10 +655,17 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 // (isSelectionDragActive is false again), so this push restores the
                 // disable areas + the armed lasso trail pen after the drag suppress.
                 applyToolToFirmware()
+            } else if (contactInking && event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                // A cancelled draw contact commits nothing (the base dropped its
+                // points), but the firmware already painted the partial stroke —
+                // overlay ink corresponding to nothing in the model. Wipe it with the
+                // proven gesture-trace ladder.
+                releaseGestureTrace()
             }
             contactErasing = false
             contactLassoOutline = false
             contactLassoDrag = false
+            contactInking = false
         }
         return handled
     }
@@ -664,13 +680,19 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     // Some stacks report button changes as ACTION_BUTTON_PRESS/RELEASE generic events
-    // rather than a buttonState change on the hover stream — catch those too.
+    // rather than a buttonState change on the hover stream — catch those too. A
+    // pointer-source hover already ran the block above in onHoverEvent and reaches
+    // here as the SAME MotionEvent (this view is not hoverable, so dispatch falls
+    // through) — skip it, or compensateRegistration's in-place offsetLocation doubles
+    // the registration shift and every suppressor runs twice per sample.
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        compensateRegistration(event)
-        rearmOnPenApproach()
-        flushArmedOverlayClearOnApproach(event)
-        updateBarrelSuppress(event)
-        updateLassoDragHoverSuppress(event)
+        if (!isPointerSourceHover(event)) {
+            compensateRegistration(event)
+            rearmOnPenApproach()
+            flushArmedOverlayClearOnApproach(event)
+            updateBarrelSuppress(event)
+            updateLassoDragHoverSuppress(event)
+        }
         return super.onGenericMotionEvent(event)
     }
 

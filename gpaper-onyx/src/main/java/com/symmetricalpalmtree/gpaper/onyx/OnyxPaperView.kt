@@ -110,6 +110,9 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         }
     }
 
+    /** Volatile: written on main at subscribe time, read on the raw input thread by
+     *  [rawInputCallback]'s onPenActive to pick the gate semantics. */
+    @Volatile
     private var busSubscribed = false
 
     private fun subscribePenProximity() {
@@ -385,7 +388,12 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
             EpdController.handwritingRepaint(this, Rect(0, 0, width, height))
         }
         postDelayed({
-            EpdController.handwritingRepaint(this, Rect(0, 0, width, height))
+            // The retry can outlive the session (Home within 250 ms): with the
+            // pipeline closed or the view off-window a full-panel handwriting repaint
+            // would flash whatever is on screen now — skip it.
+            if (isSetup && isAttachedToWindow) {
+                EpdController.handwritingRepaint(this, Rect(0, 0, width, height))
+            }
         }, DISMISS_REPAINT_RETRY_MS)
     }
 
@@ -541,11 +549,20 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         /**
          * The SDK's host-facing proximity callback — also enabled by
          * `setPostInputEvent(true)`, repeating at input rate while the pen hovers.
-         * Redundant with [penProximitySubscriber] (which carries the exit event too);
-         * kept as belt-and-suspenders.
+         * The SDK marshals it through the view's Handler, so a backlog of posted
+         * reports can flush AFTER the bus's raw-thread `PenDeactivateEvent` and
+         * re-latch the gate closed forever (measured NA5C: ~50 stale reports landed
+         * after the deactivate while the main thread was busy completing a lasso —
+         * finger selection drag/dismiss then stayed refused). With the bus
+         * subscription live — it carries both edges, promptly — this callback must
+         * therefore contribute NOTHING. It is the gate's only feed when the subscribe
+         * failed (e.g. a minifying consumer stripped the subscriber): degrade to pulse
+         * semantics — each report refreshes the [PaperView.PEN_ACTIVE_TAIL_MS] tail
+         * and the gate self-opens once the reports stop, which stale posts only ever
+         * delay by their queue age, never latch.
          */
         override fun onPenActive(touchPoint: TouchPoint) {
-            markPenInRange()
+            if (!busSubscribed) markPenOutOfRange()
         }
     }
 
@@ -560,17 +577,16 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     )
 
     private fun emitRaw(action: RawAction, rawTool: RawTool, tp: TouchPoint) {
+        val p = tp.toStrokePoint()
         emitRawInput(
             RawInputEvent(
                 action = action,
                 tool = rawTool,
-                x = tp.x,
-                y = tp.y,
-                pressure = if (maxTouchPressure > 0f) {
-                    (tp.pressure / maxTouchPressure).coerceIn(0f, 1f)
-                } else 1f,
-                tilt = 0f,
-                timeMillis = tp.timestamp,
+                x = p.x,
+                y = p.y,
+                pressure = p.pressure,
+                tilt = p.tilt,
+                timeMillis = p.timeMillis,
             )
         )
     }
@@ -708,6 +724,11 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         touchHelper.setPostInputEvent(true)
         applyToolState()
         EpdController.setUpdListSize(EPD_UPDATE_LIST_SIZE)
+        // The SDK restores its persisted exclusion zone asynchronously during the
+        // open/restart above, overwriting the setLimitRect just issued. Re-apply next
+        // looper turn, after the restore has settled — here, not at the call sites, so
+        // every (re)open path (attach, focus-gain, resumeDrawing reclaim) is covered.
+        post { if (isSetup && penOwner === this) applyLimitRect() }
     }
 
     /**
@@ -742,10 +763,6 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 if (width > 0 && height > 0) {
                     viewTreeObserver.removeOnGlobalLayoutListener(this)
                     openRawDrawing()
-                    // The SDK restores its persisted exclusion zone asynchronously during
-                    // openRawDrawing, overwriting the setLimitRect issued inside it.
-                    // Re-apply next looper turn, after the restore has settled.
-                    post { if (isSetup) applyLimitRect() }
                 }
             }
         })
@@ -765,8 +782,12 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
         if (hasWindowFocus) {
+            // Focus regain covers two very different situations: after a dialog the
+            // pipeline is still ours and set up — just re-enable input, no EPD churn —
+            // while after a visibility close (Home round-trip) or a takeover by another
+            // view a full (re)open is needed. resumeDrawing makes exactly that split.
             if (width > 0 && height > 0) {
-                openRawDrawing()
+                resumeDrawing()
                 invalidate()
             }
         } else if (isSetup) {

@@ -11,6 +11,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.RenderNode
 import android.os.SystemClock
+import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import com.symmetricalpalmtree.gpaper.core.PaperListener
@@ -403,7 +404,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 // Host chrome zones never start ink; let the platform route the event.
+                // The stylus is still physically on the glass, though — pulse the gate
+                // tail so a resting palm can't pass host palm-gates during the press.
+                // (Returning false means no further events for this contact arrive
+                // here, so a full markPenDown would never see its markPenUp; on
+                // hardware with hover reporting the hover stream keeps the gate closed
+                // for the rest of the press.)
                 if (exclusionRects.any { it.contains(event.x.toInt(), event.y.toInt()) }) {
+                    markPenUp()
                     return false
                 }
                 markPenDown()
@@ -506,8 +514,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         return true
     }
 
-    // Pointer-source hover is routed to onHoverEvent, everything else generic lands in
-    // onGenericMotionEvent — handle both so no hardware path can hide the pen approach.
+    // Pointer-source hover is routed to onHoverEvent FIRST — and because this view is
+    // not hoverable, onHoverEvent returns false and the platform then delivers the SAME
+    // MotionEvent to onGenericMotionEvent. Handle both entries so no hardware path can
+    // hide the pen approach, but process a pointer-source hover only on the
+    // onHoverEvent leg — otherwise every hover sample is handled (and dispatched to the
+    // host's raw listener) twice.
 
     override fun onHoverEvent(event: MotionEvent): Boolean {
         handleStylusHover(event)
@@ -515,9 +527,19 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        handleStylusHover(event)
+        if (!isPointerSourceHover(event)) handleStylusHover(event)
         return super.onGenericMotionEvent(event)
     }
+
+    /** True for hover actions from a pointer-source device — events [onHoverEvent] has
+     *  already seen when they reach [onGenericMotionEvent]. Device subclasses adding
+     *  their own per-event work to both entries use the same predicate to run it
+     *  exactly once per sample. */
+    protected fun isPointerSourceHover(event: MotionEvent): Boolean =
+        event.isFromSource(InputDevice.SOURCE_CLASS_POINTER) &&
+            (event.actionMasked == MotionEvent.ACTION_HOVER_ENTER ||
+                event.actionMasked == MotionEvent.ACTION_HOVER_MOVE ||
+                event.actionMasked == MotionEvent.ACTION_HOVER_EXIT)
 
     /**
      * Track pen proximity for the [isPenActive] gate — on EMR panels the palm lands a

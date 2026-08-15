@@ -13,6 +13,10 @@ android {
 
     defaultConfig {
         minSdk = 29
+        // Shipped to consumers: EventBus @Subscribe methods are found reflectively, so
+        // a minifying host would otherwise strip the pen-proximity subscriber and
+        // TouchHelper.register would throw (the palm gate then loses its exit signal).
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     publishing {

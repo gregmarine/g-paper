@@ -266,7 +266,7 @@ now known beyond NA5C. **For Phase 7:** the Onyx resize fix is the only Phase-6 
 review the whole library per the phase plan.
 
 ### Phase 7 — Code Review
-**Status:** ⬜ Not started
+**Status:** 🔄 In progress
 - `/code-review` over the whole library (frugal on agents), fix findings, re-run tests on-device
   where the finding warrants.
 - **Test:** everything green after fixes; commit & push.
