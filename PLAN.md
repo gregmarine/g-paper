@@ -313,7 +313,7 @@ Tagged `v0.1.0` at the close-out commit. **For Phase 9:** library is released at
 recognizers land as a post-release feature per the phase plan.
 
 ### Phase 9 — Gesture Recognizers: Smart Lasso & Scribble Erase (post-v0.1.0)
-**Status:** ⬜ Not started
+**Status:** ✅ Complete (commit d7ddd0a)
 - Two pen-gesture recognizers, ported from Notesprout and improved: **smart lasso** (a quick
   closed pen stroke — non-lasso tool — detected as a lasso attempt) and **scribble erase**
   (a dense zigzag over content erases it). Both are opt-in, default **off**
@@ -339,6 +339,31 @@ recognizers land as a post-release feature per the phase plan.
   clear-ladder/bake machinery. New territory for the ladder; needs eyes-on on Nomad **and** Manta.
 - **Test:** JVM recognizer + hit-test tests; on-device across all three engine types
   (false-positive checks while writing normally are part of the checklist).
+
+**Outcome (2026-08-15):** Built as planned with three phase-start decisions (user-approved:
+smart lasso auto-switches tool→LASSO and restores PEN when the session's selection lifecycle
+ends; scribble reports through the existing `onStrokesErased`, strokes only, one batch; the
+gesture stroke is never committed or reported) and **one deviation from the planned
+precedence** (device-found on the Nomad): scribble-shape is classified FIRST and is exclusive —
+real zigzag scribbles routinely satisfy the loop gates too (a spiky coil passing BOTH gate sets
+is pinned in a JVM test), so a scribble-shaped stroke is never a smart lasso and an empty-hit
+scribble falls to ink, never to lasso. Related recognizer fact: the winding gate cannot reject
+closed retraces (nearly any closed path winds ≥360° around its own centroid) — the
+empty-hit-test fallthrough is the real guard. Architecture as planned: pure-JVM
+`geometry/GestureRecognizer` + one detection point in `commitCapturedStroke`; engines contribute
+only ink retraction via the new `onGestureStrokeConsumed` seam (Onyx render-off + dismissal
+repaint + retry at contact end; Ratta `releaseGestureTrace` ladder — verified on Nomad AND
+Manta). **API addition beyond plan:** `PaperListener.onToolChanged` — a pen tap-away dismisses
+at pen-down but restores PEN at pen-up, so reading `tool` inside selection callbacks is unsound;
+component-initiated tool changes are now announced (demo toolbar sync is the pattern).
+**Biggest device-found discovery (Nomad, via a Notesprout control test):** progressive ink lag
+while writing, unrelated to the recognizers — the demo presented app frames mid-writing, and on
+Supernote every such frame pays a masking cost against the frozen overlay pixels that grows with
+the accumulated unbaked ink; the input-rate raw HOVER stream (which slipped the demo's `!= MOVE`
+filter) made it ~100 Hz (Manta measured 1182 frames / 65% janky in one short session). Fix +
+new standing rule: hosts present NO frames while `isPenActive` (demo defers status via the gate;
+~30–50 frames/session after). 86 JVM tests green (14 new). Verified eyes-on: MIP11, NA5C,
+Nomad, Manta — full gesture checklist incl. false-positive writing on all four.
 
 ## Standing Open Questions (ask as they become relevant)
 

@@ -68,10 +68,37 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   a clear issued after the invalidate can pair with a stale in-flight frame recorded *before* the
   bake — the overlay drop then reconciles against stroke-less pixels and the just-written ink
   visibly vanishes until a later repaint damages the region. The reference never hit this because
-  its hosts present no frames mid-writing; g-paper hosts may render at input rate (the demo's raw
-  counter does), so the clear ladder also arms after **every** bake handoff — post-bake, every
+  its hosts present no frames mid-writing; g-paper hosts MAY present frames at any moment (the
+  demo's raw counter did at input rate until the Phase-9 frame-silence rule below deferred it),
+  so the clear ladder also arms after **every** bake handoff — post-bake, every
   possible frame contains the strokes, making retry pairs harmless when the handoff landed and a
   ≤450 ms self-heal when it didn't.
+- **Pen-gesture recognizers are shared-base machinery too** (Phase 9): the geometry gates live
+  once in pure-JVM `geometry/GestureRecognizer`, detection sits at the single commit point in
+  `CanvasPaperView.commitCapturedStroke` (mid-contact exclusion fragments pass
+  `allowGestures = false`), and engines contribute ONLY ink retraction via the
+  `onGestureStrokeConsumed` seam (Onyx: render-off + dismissal repaint + retry at contact end —
+  withheld-frame rules; Ratta: the gesture-trace clear ladder). Two hard-won classification facts:
+  **scribble-shape screens the smart lasso and is exclusive** — real zigzag scribbles routinely
+  satisfy the loop gates too (closure + winding; a spiky coil passing BOTH gate sets is pinned in
+  a JVM test), so a dense oscillating stroke is never a lasso and an empty-hit scribble falls to
+  ink, never to lasso; and **the winding gate cannot reject closed retraces** — nearly any closed
+  path winds ≥360° around its own centroid (a flat hairpin is topologically a thin loop), so the
+  empty-hit-test fallthrough is the real guard against loop-shaped false positives. Component-
+  initiated tool changes (smart-lasso LASSO switch, PEN restore at session end) fire
+  `PaperListener.onToolChanged`; the restore can land AFTER `onSelectionDismissed` (tap-away
+  dismisses at pen-down, restores at pen-up) — never advise hosts to read `tool` in selection
+  callbacks.
+- **EPD frame-silence rule (Ratta-critical):** pixels under Supernote overlay ink are frozen
+  against app updates, so every app frame presented mid-writing pays a masking cost that GROWS
+  with the accumulated unbaked overlay ink — felt as progressively lagging ink (measured Nomad;
+  Manta merely later). The reference never hit it (its hosts present no frames mid-writing).
+  Hosts must present NO frames while `isPenActive` — and note the raw `HOVER` stream arrives at
+  input rate on Ratta/generic (EMR pens hover between every stroke; on Onyx hover never reaches
+  the view as MotionEvents), so chrome must never repaint from `MOVE` OR `HOVER` raw events. The
+  demo's gate-deferred status line is the reference implementation; `dumpsys gfxinfo` is the
+  measuring stick (1182 frames/65% janky in one short writing session before the fix, ~30–50
+  per session after).
 - **Selection/lasso is shared-base machinery** (`CanvasPaperView`): device engines add only trail
   chrome + EPD drag handling, driving the base's protected seams from their pipelines. Trails are
   engine chrome, never model data. The stylus-only contract has ONE exception: while a selection is
