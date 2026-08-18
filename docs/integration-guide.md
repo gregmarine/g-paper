@@ -7,7 +7,7 @@ everything on this page is the `consumer-smoke/` project at the repo root.
 
 ## Getting the artifacts
 
-Publishing is **mavenLocal-only** for 0.1.0. From a g-paper checkout:
+Publishing is **mavenLocal-only** for 0.1.1. From a g-paper checkout:
 
 ```sh
 ./gradlew publishToMavenLocal
@@ -17,9 +17,9 @@ This publishes three artifacts (plus sources jars), coordinates centralized in t
 `gradle.properties`:
 
 ```
-com.symmetricalpalmtree.gpaper:gpaper-core:0.1.0
-com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.0
-com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.0
+com.symmetricalpalmtree.gpaper:gpaper-core:0.1.1
+com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.1
+com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.1
 ```
 
 In the consuming app's `settings.gradle.kts`, add `mavenLocal()` to the dependency
@@ -41,7 +41,7 @@ registering an adapter on foreign hardware is harmless.
 
 ```kotlin
 dependencies {
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-core:0.1.0")
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-core:0.1.1")
 }
 ```
 
@@ -51,7 +51,7 @@ That's everything. No registration call needed — the generic engine is built i
 
 ```kotlin
 dependencies {
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.0")
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.1")
 }
 ```
 
@@ -128,7 +128,7 @@ Then the dependency and the registration call:
 
 ```kotlin
 dependencies {
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.0")
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.1")
 }
 ```
 

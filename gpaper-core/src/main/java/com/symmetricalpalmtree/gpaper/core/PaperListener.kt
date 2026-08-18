@@ -67,6 +67,19 @@ interface PaperListener {
     fun onSelectionMoved(move: SelectionMove) {}
 
     /**
+     * A sub-threshold tap landed **inside** the active selection box — a stylus tap, or a
+     * single-finger tap — and the selection stays put (0.1.1). ([x], [y]) are paper
+     * coordinates. Fires for any selection contents (strokes-only included); the host
+     * decides what a tap means (typically: open the tapped content object for editing,
+     * ignore otherwise). Drags are unaffected: this fires only when the drag threshold
+     * was never crossed. The finger variant is palm-gated and commits after the
+     * [PaperView.PEN_ACTIVE_TAIL_MS] escrow, exactly like the component's own finger
+     * tap-to-dismiss; a stylus tap fires at pen-up. A tap **outside** the box still
+     * dismisses ([onSelectionDismissed]) and never reaches this.
+     */
+    fun onSelectionTapped(x: Float, y: Float) {}
+
+    /**
      * The component changed [PaperView.tool] **itself** — sync toolbar/tool UI here.
      * Fired only for component-initiated changes; host assignments to
      * [PaperView.tool] are never echoed. Today the only source is the smart-lasso

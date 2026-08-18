@@ -1096,16 +1096,21 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     /**
      * Pen-up on a drag contact. Below the threshold it was a tap inside the box: the
-     * selection stays put. Past it: translate the selected strokes in the model, restore
-     * the committed record, move the box, and report [PaperListener.onSelectionMoved] —
-     * the selection remains active at its new position.
+     * selection stays put and [PaperListener.onSelectionTapped] fires — at once for the
+     * stylus, after the pen-gate escrow for a finger ([fromFinger]; see
+     * [scheduleEscrowedTap]). Past it: translate the selected strokes in the model,
+     * restore the committed record, move the box, and report
+     * [PaperListener.onSelectionMoved] — the selection remains active at its new position.
      */
-    protected fun lassoDragFinish(x: Float, y: Float) {
+    protected fun lassoDragFinish(x: Float, y: Float, fromFinger: Boolean = false) {
         if (!dragActive) return
         dragActive = false
         if (!dragThresholdMet) {
             dragStrokes = emptyList()
             dragContentTargets = emptyList()
+            if (selection != null) {
+                if (fromFinger) scheduleEscrowedTap(x, y) else paperListener?.onSelectionTapped(x, y)
+            }
             return
         }
         dragThresholdMet = false
@@ -1283,7 +1288,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             MotionEvent.ACTION_UP -> when (fingerMode) {
                 FingerMode.DRAG -> {
                     fingerMode = FingerMode.NONE
-                    if (isPenActive) lassoDragCancel() else lassoDragFinish(event.x, event.y)
+                    if (isPenActive) lassoDragCancel() else lassoDragFinish(event.x, event.y, fromFinger = true)
                     return true
                 }
                 FingerMode.TAP -> {
@@ -1314,6 +1319,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         val sel = selection ?: return
         postDelayed({
             if (!released && !isPenActive && selection === sel) clearSelection()
+        }, PaperView.PEN_ACTIVE_TAIL_MS)
+    }
+
+    /** Commit a finger tap-inside-the-box after the same pen-gate escrow as the dismissal
+     *  (0.1.1): dropped if the pen became active meanwhile (it was a palm) or the selection
+     *  already changed. */
+    private fun scheduleEscrowedTap(x: Float, y: Float) {
+        val sel = selection ?: return
+        postDelayed({
+            if (!released && !isPenActive && selection === sel) paperListener?.onSelectionTapped(x, y)
         }, PaperView.PEN_ACTIVE_TAIL_MS)
     }
 

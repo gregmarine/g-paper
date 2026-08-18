@@ -121,6 +121,12 @@ Without it, dragged objects ghost as a translated dashed outline until you apply
 When `onSelectionMoved` arrives, reposition your objects and call `notifyContentChanged()`.
 The component never erases host content; the eraser reports stroke ids only.
 
+**Tap-to-edit** (0.1.1): a sub-threshold stylus or single-finger tap *inside* the active
+selection box reports `onSelectionTapped(x, y)` (paper coordinates) and leaves the selection in
+place; the finger variant is escrowed and palm-gated exactly like tap-to-dismiss. It fires for
+every selection (strokes-only included) — hit-test `(x, y)` against your own object bounds and
+open the object that contains it; ignore the rest. Drags are unchanged.
+
 ## Chrome cooperation
 
 The paper view sits in a `FrameLayout` with your chrome on top. Three obligations:

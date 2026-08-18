@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.0**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.1**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -190,8 +190,13 @@ Selection (mechanics in the component, data in the host):
    optional live-drag pair — the exclusion-aware `draw(canvas, excludedContentIds)`
    plus `drawObject(canvas, contentId)` — has its real object drawn under the pen
    (see `ContentRenderer`). The selection stays active at its new position. A
-   sub-threshold tap inside the box keeps the selection; a cancelled drag dismisses
-   it (`onSelectionDismissed`).
+   sub-threshold tap inside the box keeps the selection **and reports
+   `onSelectionTapped(x, y)`** (0.1.1; paper coordinates) — for a stylus tap at pen-up,
+   for a single-finger tap after the same `PEN_ACTIVE_TAIL_MS` escrow as tap-to-dismiss
+   (palm-gated, dropped if the pen turns active or the selection changes meanwhile). It
+   fires for any selection contents; the host decides what a tap means (typically: open
+   the tapped content object for editing). A cancelled drag dismisses the selection
+   (`onSelectionDismissed`).
 3. Tap outside / a new outline / tool change / `clearSelection()` →
    `onSelectionDismissed()`. Any data-in call (`loadStrokes`, `addStrokes`,
    `removeStrokes`, `clear`, `clearForContentSwap`) also dismisses first — the

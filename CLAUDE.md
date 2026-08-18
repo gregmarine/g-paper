@@ -151,7 +151,7 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
 
 - `./gradlew build` — full build. `./gradlew :demo:assembleDebug` → `demo/build/outputs/apk/debug/demo-debug.apk`.
 - **Publishing is mavenLocal-only** (Phase 6 decision): `./gradlew publishToMavenLocal` publishes
-  `com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.0` + sources (coordinates in
+  `com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.1` + sources (coordinates in
   `gradle.properties`). `consumer-smoke/` is a standalone consumer project (NOT in the root build)
   proving a host app builds against the published artifacts:
   `./gradlew -p consumer-smoke assembleDebug` after copying `local.properties` in (see its README).

@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -164,6 +165,14 @@ class MainActivity : Activity() {
             override fun onSelectionDismissed() {
                 selectionActive = false
                 lastEvent = "selection dismissed"
+                refreshStatus()
+            }
+
+            /** 0.1.1: a sub-threshold stylus/finger tap inside the box. A real host would
+             *  open the tapped content object here; the demo only reports it. */
+            override fun onSelectionTapped(x: Float, y: Float) {
+                Log.d("gpaper-demo", "selection tapped ${x.toInt()},${y.toInt()}")
+                lastEvent = "selection tapped ${x.toInt()},${y.toInt()}"
                 refreshStatus()
             }
 

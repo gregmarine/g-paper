@@ -47,7 +47,7 @@ android {
 }
 
 dependencies {
-    val gpaperVersion = "0.1.0"
+    val gpaperVersion = "0.1.1"
     implementation("com.symmetricalpalmtree.gpaper:gpaper-core:$gpaperVersion")
     implementation("com.symmetricalpalmtree.gpaper:gpaper-onyx:$gpaperVersion")
     implementation("com.symmetricalpalmtree.gpaper:gpaper-ratta:$gpaperVersion")
