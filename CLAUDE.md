@@ -73,6 +73,16 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   so the clear ladder also arms after **every** bake handoff — post-bake, every
   possible frame contains the strokes, making retry pairs harmless when the handoff landed and a
   ≤450 ms self-heal when it didn't.
+- **Ownership guards are process-local; a cross-process handoff must DROP the token (0.1.2).**
+  `penOwner` (Onyx) / `inkOwner` (Ratta) are statics — a successor paper screen in another
+  process (Notesprout Paper's scratch-pad extension) can never overwrite them, so every
+  later teardown of the departing view (focus loss, detach, `release()`) would still fire
+  against the device-global pipeline, *after* the successor's claim. Onyx's
+  `closeRawDrawingIfOwner` already nulls the owner + `isSetup` on `releaseForHandoff()`;
+  Ratta's `releaseForHandoff()` now does the full teardown (overlay release, full-screen
+  disable, `enableFullUiAuto(false)`) and nulls `inkOwner`. Symptom before the fix: the
+  caller's session stayed live but the panel left full-UI-auto ≈ 200 ms after the reclaim
+  → every drag frame on the slow waveform until a later re-arm ("sluggish drag", Nomad).
 - **Pen-gesture recognizers are shared-base machinery too** (Phase 9): the geometry gates live
   once in pure-JVM `geometry/GestureRecognizer`, detection sits at the single commit point in
   `CanvasPaperView.commitCapturedStroke` (mid-contact exclusion fragments pass
@@ -151,7 +161,7 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
 
 - `./gradlew build` — full build. `./gradlew :demo:assembleDebug` → `demo/build/outputs/apk/debug/demo-debug.apk`.
 - **Publishing is mavenLocal-only** (Phase 6 decision): `./gradlew publishToMavenLocal` publishes
-  `com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.1` + sources (coordinates in
+  `com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.2` + sources (coordinates in
   `gradle.properties`). `consumer-smoke/` is a standalone consumer project (NOT in the root build)
   proving a host app builds against the published artifacts:
   `./gradlew -p consumer-smoke assembleDebug` after copying `local.properties` in (see its README).

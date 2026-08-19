@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.1**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.2**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -278,7 +278,7 @@ guard, visibility handling, leaked-pin healing), but three hooks need the host:
 |---|---|
 | `onResume` | `resumeDrawing()` — reclaim without relying on flaky focus events |
 | Immediately before launching **another** paper-hosting screen | `releaseForHandoff()` |
-| Immediately before `finish()`-ing **back to** a paper-hosting caller (same call, other direction) | `releaseForHandoff()` — the caller reclaims in its `onResume`, which runs *before* this window's visibility change would close the pipeline; a close landing after the caller's reclaim tears the caller's live session down (BOOX: ink / lasso trails invisible until a tool flip; seen cross-process, Notesprout Paper arc 6) |
+| Immediately before `finish()`-ing **back to** a paper-hosting caller (same call, other direction) | `releaseForHandoff()` — the caller reclaims in its `onResume`, which runs *before* this window's visibility change would close the pipeline; a close landing after the caller's reclaim tears the caller's live session down (BOOX: ink / lasso trails invisible until a tool flip; seen cross-process, Notesprout Paper arc 6). **0.1.2:** on Ratta the handoff also *drops* the ownership token — the engines' ownership guards are process-local statics, so a successor in another process cannot overwrite them; before 0.1.2 the departing screen's focus-loss and `release()` teardowns re-sent `enableFullUiAuto(false)` after the caller's reclaim (the caller's session stayed live, but every frame repainted with the slow waveform until a later re-arm — a "sluggish drag" on a Nomad). After a handoff, `resumeDrawing()` (or a focus gain) re-claims for the same view if the launch falls through. |
 | `onDestroy` | `release()` — final teardown, idempotent |
 
 `renderToBitmap()` renders template + committed content to a fresh bitmap (thumbnails/

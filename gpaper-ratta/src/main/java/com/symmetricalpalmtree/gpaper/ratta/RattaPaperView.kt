@@ -834,9 +834,20 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun releaseForHandoff() {
         if (!firmware || inkOwner !== this) return
         releaseFirmwareOverlay()
+        fullScreenDisable()
         SupernoteInk.enableFullUiAuto(context, false)
-        // inkOwner stays ours: if the successor never claims (edge), our detach cleans
-        // up; when it claims, setupFirmwareInk overwrites the token and our teardowns skip.
+        // The handoff IS this view's teardown (0.1.2). Until 0.1.1 the token stayed ours so a
+        // successor's claim would overwrite it and our later teardowns would skip — but the
+        // successor may live in ANOTHER PROCESS (Notesprout Paper's scratch pad), where this
+        // static is invisible: our focus-loss and `release()` teardowns then re-sent
+        // `enableFullUiAuto(false)` + the full-screen disable AFTER the caller had reclaimed
+        // (≈ 200 ms later, measured on a Nomad) — its session stayed live but the panel
+        // dropped out of full-UI-auto, so every drag / app frame repainted with the slow
+        // waveform until a later re-arm. Dropping the token here makes those teardowns no-ops
+        // (ownership re-asserts on our own `resumeDrawing()` / focus gain if the launch falls
+        // through); the full-screen disable above is what detach would have done for the
+        // "successor never claims" edge.
+        inkOwner = null
         Log.i(TAG, "firmware ink released for handoff")
     }
 
