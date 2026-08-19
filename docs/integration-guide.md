@@ -172,6 +172,7 @@ Lifecycle hooks the host must call:
 |---|---|
 | `onResume` | `paper.resumeDrawing()` |
 | Immediately before launching **another** paper-hosting screen | `paper.releaseForHandoff()` |
+| Immediately before `finish()`-ing **back to** a paper-hosting caller (same call, other direction) | `paper.releaseForHandoff()` — the caller reclaims in its `onResume`, which runs *before* this window's visibility change would close the pipeline; a close landing after the caller's reclaim tears the caller's live session down (BOOX: ink / lasso trails invisible until a tool flip; seen cross-process, Notesprout Paper arc 6) |
 | `onDestroy` | `paper.release()` |
 
 Chrome cooperation (all no-ops where they don't apply, so call unconditionally):

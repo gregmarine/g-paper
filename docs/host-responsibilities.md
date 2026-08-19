@@ -145,6 +145,7 @@ The paper view sits in a `FrameLayout` with your chrome on top. Three obligation
 |---|---|
 | `onResume` | `resumeDrawing()` — reclaims the pen pipeline without relying on focus events |
 | Immediately before launching another paper-hosting screen | `releaseForHandoff()` |
+| Immediately before `finish()`-ing **back to** a paper-hosting caller (same call, other direction) | `releaseForHandoff()` — the caller reclaims in its `onResume`, which runs *before* this window's visibility change would close the pipeline; a close landing after the caller's reclaim tears the caller's live session down (BOOX: ink / lasso trails invisible until a tool flip; seen cross-process, Notesprout Paper arc 6) |
 | `onDestroy` | `release()` — final teardown, idempotent |
 
 The e-paper pen pipelines are process-global. The engines guard ownership internally; these
