@@ -83,6 +83,11 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   disable, `enableFullUiAuto(false)`) and nulls `inkOwner`. Symptom before the fix: the
   caller's session stayed live but the panel left full-UI-auto ≈ 200 ms after the reclaim
   → every drag frame on the slow waveform until a later re-arm ("sluggish drag", Nomad).
+- **The Onyx fast-mode pin is per-session, not per-PEN (0.1.3).** `applyToolState` pins the
+  app-scope handwriting waveform for every drawing tool, not only when PEN arms: a pipeline
+  (re)opened on the LASSO (a host resuming after a cross-process handoff while a selection flow
+  left it on the lasso) otherwise ran every drag frame unpinned — the "sluggish drag after a
+  transfer" on a NoteAir5C, cured by any later PEN arming (dismiss → pen → reselect).
 - **Pen-gesture recognizers are shared-base machinery too** (Phase 9): the geometry gates live
   once in pure-JVM `geometry/GestureRecognizer`, detection sits at the single commit point in
   `CanvasPaperView.commitCapturedStroke` (mid-contact exclusion fragments pass
@@ -161,7 +166,7 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
 
 - `./gradlew build` — full build. `./gradlew :demo:assembleDebug` → `demo/build/outputs/apk/debug/demo-debug.apk`.
 - **Publishing is mavenLocal-only** (Phase 6 decision): `./gradlew publishToMavenLocal` publishes
-  `com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.2` + sources (coordinates in
+  `com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.3` + sources (coordinates in
   `gradle.properties`). `consumer-smoke/` is a standalone consumer project (NOT in the root build)
   proving a host app builds against the published artifacts:
   `./gradlew -p consumer-smoke assembleDebug` after copying `local.properties` in (see its README).

@@ -277,18 +277,23 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     /** Tool-change boundary: drop any in-flight raw lasso gesture, re-arm the pipeline,
-     *  and (re)apply the fast-mode pin when the pen tool arms. */
+     *  and (re)apply the fast-mode pin for any drawing tool (0.1.3 — was PEN only: a
+     *  pipeline (re)opened on the LASSO — a paper-hosting screen resuming after a handoff
+     *  while a selection flow left it on the lasso — ran every drag frame unpinned, i.e. the
+     *  panel negotiated its waveform per frame: a visibly sluggish drag until the next PEN
+     *  arming re-pinned it; a session that armed the pen once never showed it). */
     private fun applyToolState() {
         cancelRawLasso("applyToolState")
         armRawForCurrentTool()
-        if (isSetup && penOwner === this && tool == Tool.PEN) applyHandwritingFastMode()
+        if (isSetup && penOwner === this && tool != Tool.NONE) applyHandwritingFastMode()
     }
 
     /**
      * First-stroke fix: pin the app into the fast handwriting waveform so the first
      * stroke after an open / content swap pays no GC→handwriting mode switch (1–2 s on
      * BOOX; app-scope proven the sole fix by the reference device sweep). Stays active
-     * across content swaps; cleared when the pipeline is released.
+     * across content swaps and tool changes; cleared when the pipeline is released. The
+     * same pin is what keeps a selection drag's frames fast (0.1.3).
      */
     private fun applyHandwritingFastMode() {
         EpdController.applyAppScopeUpdate(

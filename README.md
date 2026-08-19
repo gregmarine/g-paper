@@ -8,7 +8,7 @@ First-class support for e-paper writing devices — **BOOX (Onyx)** and **Supern
 firmware-accelerated live ink at sub-frame latency — alongside any generic Android device, all
 behind one API. Extracted and redesigned from the Notesprout drawing engines.
 
-**Version 0.1.2.**
+**Version 0.1.3.**
 
 ## What you get
 
@@ -48,13 +48,13 @@ Android. `gpaper-onyx` brings the BOOX SDK's build baggage (see the
 
 ## Quickstart
 
-Publish to mavenLocal (0.1.2 is mavenLocal-only), add `mavenLocal()` to your repositories, then:
+Publish to mavenLocal (0.1.3 is mavenLocal-only), add `mavenLocal()` to your repositories, then:
 
 ```kotlin
 dependencies {
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-core:0.1.2")
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.2")  // only if you target BOOX
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.2") // only if you target Supernote
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-core:0.1.3")
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.3")  // only if you target BOOX
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.3") // only if you target Supernote
 }
 ```
 
