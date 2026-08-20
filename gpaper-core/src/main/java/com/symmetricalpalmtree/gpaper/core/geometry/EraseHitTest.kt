@@ -39,4 +39,31 @@ object EraseHitTest {
         }
         return hits
     }
+
+    /**
+     * Ids of the host content targets (id → hit rectangle, in target order) hit by an
+     * eraser of [radius] px swept along [eraserPoints], each id at most once — the
+     * whole-object twin of [hitStrokeIds] (0.1.4): touching any part of a target's
+     * rectangle hits the whole object. Broad phase mirrors the stroke test; the narrow
+     * phase is the sweep polyline against the rectangle inflated by [radius]
+     * ([Geometry.polylineIntersectsRect] — square-corner tolerance, like the lasso's
+     * content overlap test). Empty inputs hit nothing.
+     */
+    fun hitContentIds(
+        targets: List<Pair<String, Bounds>>,
+        eraserPoints: List<StrokePoint>,
+        radius: Float,
+    ): List<String> {
+        if (targets.isEmpty() || eraserPoints.isEmpty()) return emptyList()
+        val sweepBounds = Bounds.of(eraserPoints).inflated(radius)
+        val hits = ArrayList<String>()
+        for ((id, bounds) in targets) {
+            if (id in hits) continue
+            if (!sweepBounds.intersects(bounds)) continue
+            if (Geometry.polylineIntersectsRect(eraserPoints, bounds.inflated(radius))) {
+                hits.add(id)
+            }
+        }
+        return hits
+    }
 }

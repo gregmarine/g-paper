@@ -147,6 +147,13 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   post-construction engine failures must be loud.
 - Hosts own all data; ids are the join key. `clear()` fires no erase callbacks; page turns are
   `clearForContentSwap()` + `loadStrokes()`; `onPenLifted` is a save trigger only.
+- **Host content and the eraser (0.1.4):** the eraser tool *reports* swept content whole
+  (`onContentErased`, per-gesture dedup in `CanvasPaperView.reportedContentErases`) — the component
+  never removes host content itself; the host deletes + `notifyContentChanged()`. Scribble erase
+  stays stroke-only by design. `StrokeRasterizer` (public, `core/render/`) is the offline door to
+  the internal `StrokeRenderer` — hosts compositing their own content (Notesprout Paper link
+  composites) draw through it so baked appearance stays pixel-identical; never suggest a host
+  reimplement stroke drawing.
 
 ## Toolchain (mirrors Notesprout)
 
@@ -166,7 +173,7 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
 
 - `./gradlew build` — full build. `./gradlew :demo:assembleDebug` → `demo/build/outputs/apk/debug/demo-debug.apk`.
 - **Publishing is mavenLocal-only** (Phase 6 decision): `./gradlew publishToMavenLocal` publishes
-  `com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.3` + sources (coordinates in
+  `com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.4` + sources (coordinates in
   `gradle.properties`). `consumer-smoke/` is a standalone consumer project (NOT in the root build)
   proving a host app builds against the published artifacts:
   `./gradlew -p consumer-smoke assembleDebug` after copying `local.properties` in (see its README).

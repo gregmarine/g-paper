@@ -86,6 +86,7 @@ override fun onDestroy() { paper.release(); super.onDestroy() }
 | In | `addStrokes(list)` / `removeStrokes(ids)` | Targeted undo/redo, paste |
 | Out | `getStrokes()` (any thread) | Save-all, export |
 | Out | `onStrokeCommitted` / `onStrokesErased` | Incremental persistence |
+| Out | `onContentErased` (0.1.4) | Eraser swept over host content: whole-object ids; the host deletes its rows + `notifyContentChanged()` (the component owns no content, so nothing disappears by itself). At most once per id per gesture; scribble erase never reports content |
 | — | `clear()` | User-facing "erase page" (host updates its own data; no erase callbacks fire) |
 | — | `clearForContentSwap()` | Page turn: pixels hold until the next `loadStrokes` — single EPD refresh, no blank flash |
 
@@ -118,7 +119,17 @@ paper.notifyContentChanged()   // batched: once per group of changes
 
 `draw` is called only while re-recording the committed layer (never per frame), may run
 on a software canvas (EPD repaint paths), and is z-ordered relative to the ink.
-`hitTargets()` opts host objects into lasso selection.
+`hitTargets()` opts host objects into lasso selection — and, since 0.1.4, into
+whole-object erase: the eraser tool sweeping a hit target reports its id through
+`PaperListener.onContentErased` (square-corner radius tolerance, like the lasso's
+overlap test) and the host deletes + `notifyContentChanged()`.
+
+**`StrokeRasterizer.draw(canvas, strokes)`** (0.1.4) is the offline twin of the
+committed layer: it draws host-owned strokes onto any canvas through the same internal
+renderer every engine bakes ink with — pixel-identical appearance without a live,
+laid-out view. Paper coordinates; the caller applies transforms and passes strokes in
+committed order. For hosts compositing content they own (a group/link object's wrapped
+ink, thumbnails of rows never loaded on a surface).
 
 ## Tools, selection, and events
 
@@ -239,8 +250,9 @@ and `onPenLifted` does not fire for it.
   filtered — erases every stroke it touches (8 dp radius, whole-stroke: eraser-tool
   semantics), reported through the normal `onStrokesErased` in one batched call, so
   host persistence/undo paths work unchanged. Undo of a scribble is simply restoring
-  the erased strokes. Host content objects are not scribble-erasable (consistent with
-  the eraser tool).
+  the erased strokes. Host content objects are **not** scribble-erasable — a scribble is
+  an ink-level correction; deliberate whole-object erase belongs to the eraser tool,
+  which since 0.1.4 does report content (`onContentErased`).
 
 **Raw input passthrough**: `setRawInputListener { event -> … }` observes the stylus
 stream (`RawInputEvent`: action, tool end, x/y/pressure/tilt/time) regardless of active
@@ -323,4 +335,6 @@ the main thread. `RawInputListener` runs at input rate — keep it allocation-fr
 - Explicit engine registration (not ServiceLoader); explicit override bypasses probes.
 - Stroke color as ARGB Int (not hex string); geometry in px, paper coordinates.
 - Listener interfaces with default no-ops (not nullable `var` lambdas à la Notesprout).
-- Eraser is whole-stroke with a radius; host content is never erased by the component.
+- Eraser is whole-stroke with a radius. Host content is never *removed* by the component;
+  since 0.1.4 the eraser tool *reports* swept content whole (`onContentErased`) and the
+  host removes it — before that, host content was entirely eraser-immune.

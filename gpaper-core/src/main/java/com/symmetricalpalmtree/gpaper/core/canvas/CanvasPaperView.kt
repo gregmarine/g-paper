@@ -118,6 +118,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var lastEraserPoint: StrokePoint? = null
     private var lastEraseRedrawMs = 0L
 
+    /** Content ids already reported to [PaperListener.onContentErased] this erase gesture —
+     *  the host removes content asynchronously, so its hit target can outlive the report by
+     *  several sweep batches. Cleared at each fresh sweep start ([eraseAlong] with no chained
+     *  previous sample). */
+    private val reportedContentErases = HashSet<String>()
+
     /** Host chrome zones where the stylus must not ink — subclasses read them to feed
      *  hardware exclusion (e.g. the Onyx `setLimitRect`). */
     protected var exclusionRects: List<Rect> = emptyList()
@@ -987,21 +993,42 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      */
     protected fun eraseAlong(points: List<StrokePoint>) {
         if (points.isEmpty()) return
-        val sweep = lastEraserPoint?.let { prev -> ArrayList<StrokePoint>(points.size + 1).apply {
-            add(prev)
+        val prev = lastEraserPoint
+        if (prev == null) reportedContentErases.clear() // fresh sweep = fresh gesture dedup
+        val sweep = prev?.let { ArrayList<StrokePoint>(points.size + 1).apply {
+            add(it)
             addAll(points)
         } } ?: points
         lastEraserPoint = points.last()
         val hitIds = EraseHitTest.hitStrokeIds(strokeList, sweep, eraserRadius)
-        if (hitIds.isEmpty()) return
-        val idSet = hitIds.toHashSet()
+        // Host content is erased whole (0.1.4): report ids, the host removes and repaints.
+        val contentHits = if (contentRenderers.isEmpty()) emptyList() else {
+            val targets = contentRenderers.flatMap { r ->
+                r.hitTargets().map { it.contentId to it.bounds }
+            }.filter { (id, _) -> id !in reportedContentErases }
+            EraseHitTest.hitContentIds(targets, sweep, eraserRadius)
+        }
+        if (hitIds.isEmpty() && contentHits.isEmpty()) return
         // A barrel-button erase can run while a selection is active (lasso mode): if it
-        // takes any selected stroke, the box no longer describes reality — dismiss.
-        if (selection?.strokeIds?.any { it in idSet } == true) clearSelection()
-        strokeList.removeAll { it.id in idSet }
-        modelChanged()
-        paperListener?.onStrokesErased(hitIds)
-        throttledEraseRedraw()
+        // takes any selected stroke or content object, the box no longer describes
+        // reality — dismiss.
+        val idSet = hitIds.toHashSet()
+        val sel = selection
+        if (sel != null &&
+            (sel.strokeIds.any { it in idSet } || sel.contentIds.any { it in contentHits })
+        ) {
+            clearSelection()
+        }
+        if (hitIds.isNotEmpty()) {
+            strokeList.removeAll { it.id in idSet }
+            modelChanged()
+            paperListener?.onStrokesErased(hitIds)
+            throttledEraseRedraw()
+        }
+        if (contentHits.isNotEmpty()) {
+            reportedContentErases.addAll(contentHits)
+            paperListener?.onContentErased(contentHits)
+        }
     }
 
     private fun throttledEraseRedraw() {

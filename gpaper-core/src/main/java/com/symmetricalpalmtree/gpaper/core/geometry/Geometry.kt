@@ -1,5 +1,6 @@
 package com.symmetricalpalmtree.gpaper.core.geometry
 
+import com.symmetricalpalmtree.gpaper.core.model.Bounds
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -160,6 +161,28 @@ object Geometry {
             traveled += segLen
         }
         return out
+    }
+
+    /**
+     * True when the polyline [points] touches the axis-aligned [rect] — any point inside
+     * (or on) the rect, or any segment crossing one of its edges. A single point acts as
+     * a containment test; an empty list never matches. The eraser's content narrow-phase
+     * test, run against the target's bounds pre-inflated by the eraser radius (square
+     * corners — the same box-tolerance the lasso's content overlap test accepts).
+     */
+    fun polylineIntersectsRect(points: List<StrokePoint>, rect: Bounds): Boolean {
+        if (points.isEmpty()) return false
+        for (p in points) if (rect.contains(p.x, p.y)) return true
+        if (points.size == 1) return false
+        for (i in 1 until points.size) {
+            val a = points[i - 1]
+            val b = points[i]
+            if (segmentsIntersect(a.x, a.y, b.x, b.y, rect.left, rect.top, rect.right, rect.top)) return true
+            if (segmentsIntersect(a.x, a.y, b.x, b.y, rect.right, rect.top, rect.right, rect.bottom)) return true
+            if (segmentsIntersect(a.x, a.y, b.x, b.y, rect.right, rect.bottom, rect.left, rect.bottom)) return true
+            if (segmentsIntersect(a.x, a.y, b.x, b.y, rect.left, rect.bottom, rect.left, rect.top)) return true
+        }
+        return false
     }
 
     /** Segment intersection (touching counts), with collinear-overlap handling. */

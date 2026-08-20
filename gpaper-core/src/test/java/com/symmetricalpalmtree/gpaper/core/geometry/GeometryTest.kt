@@ -1,5 +1,6 @@
 package com.symmetricalpalmtree.gpaper.core.geometry
 
+import com.symmetricalpalmtree.gpaper.core.model.Bounds
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -114,5 +115,41 @@ class GeometryTest {
     @Test
     fun `empty polyline never hits`() {
         assertFalse(Geometry.polylineIntersectsCircle(emptyList(), 0f, 0f, 100f))
+    }
+
+    // ── polylineIntersectsRect (0.1.4) ───────────────────────────────────────
+
+    @Test
+    fun `rect - point inside hits, point outside misses`() {
+        val rect = Bounds(10f, 10f, 20f, 20f)
+        assertTrue(Geometry.polylineIntersectsRect(listOf(StrokePoint(15f, 15f)), rect))
+        assertTrue(Geometry.polylineIntersectsRect(listOf(StrokePoint(10f, 10f)), rect)) // edge counts
+        assertFalse(Geometry.polylineIntersectsRect(listOf(StrokePoint(5f, 5f)), rect))
+    }
+
+    @Test
+    fun `rect - segment crossing straight through hits with no endpoint inside`() {
+        val rect = Bounds(10f, 10f, 20f, 20f)
+        val through = listOf(StrokePoint(0f, 15f), StrokePoint(30f, 15f))
+        assertTrue(Geometry.polylineIntersectsRect(through, rect))
+    }
+
+    @Test
+    fun `rect - segment passing beside the rect misses`() {
+        val rect = Bounds(10f, 10f, 20f, 20f)
+        val beside = listOf(StrokePoint(0f, 25f), StrokePoint(30f, 25f))
+        assertFalse(Geometry.polylineIntersectsRect(beside, rect))
+    }
+
+    @Test
+    fun `rect - polyline fully inside hits via containment`() {
+        val rect = Bounds(0f, 0f, 100f, 100f)
+        val inside = listOf(StrokePoint(40f, 40f), StrokePoint(60f, 60f))
+        assertTrue(Geometry.polylineIntersectsRect(inside, rect))
+    }
+
+    @Test
+    fun `rect - empty polyline never hits`() {
+        assertFalse(Geometry.polylineIntersectsRect(emptyList(), Bounds(0f, 0f, 10f, 10f)))
     }
 }

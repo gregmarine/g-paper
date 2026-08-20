@@ -31,6 +31,20 @@ interface PaperListener {
     fun onStrokesErased(strokeIds: List<String>) {}
 
     /**
+     * The eraser tool swept over host content objects (0.1.4) — whole-object semantics:
+     * touching any part of a [ContentRenderer hit target]
+     * [com.symmetricalpalmtree.gpaper.core.render.ContentRenderer.hitTargets] erases the
+     * whole object, exactly as whole-stroke erase treats ink. May fire multiple times
+     * during one erase gesture as the eraser sweeps; each id is reported at most once per
+     * gesture. The component owns no content, so nothing disappears by itself: the host
+     * deletes its rows, records undo, and calls [PaperView.notifyContentChanged] — until
+     * then the object stays on the committed layer (and its hit target keeps it findable,
+     * which is why the per-gesture dedup matters). Scribble erase never touches content;
+     * only the eraser tool (and the stylus barrel/eraser end) reports here.
+     */
+    fun onContentErased(contentIds: List<String>) {}
+
+    /**
      * The stylus lifted after writing. Fires after [onStrokeCommitted] for the same
      * contact. A save/checkpoint trigger only — it implies nothing about the EPD
      * overlay state, and hosts must not drive tool or lifecycle changes from it.
