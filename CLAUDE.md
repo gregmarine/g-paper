@@ -154,6 +154,14 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   the internal `StrokeRenderer` — hosts compositing their own content (Notesprout Paper link
   composites) draw through it so baked appearance stays pixel-identical; never suggest a host
   reimplement stroke drawing.
+- **The two tap signals are complements (0.1.5).** `onSelectionTapped` owns every sub-threshold tap
+  *inside* an active selection box; `onPaperTapped` owns the stylus tap in `Tool.LASSO` with
+  *nothing* selected (the host's paste-here hook). Neither ever fires for the other's case, and the
+  tap that **dismissed** a selection fires neither — `lassoOutlineStart` latches
+  `outlineDismissedSelection`, because a contact spent on a dismissal must not also be read as an
+  empty-handed tap. `onPaperTapped` needs no escrow: the finger path (`handleFingerSelection`) only
+  ever drags or dismisses an *active* selection, so a contact reaching `completeLassoOutline` is a
+  stylus by construction.
 
 ## Toolchain (mirrors Notesprout)
 
@@ -173,7 +181,7 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
 
 - `./gradlew build` — full build. `./gradlew :demo:assembleDebug` → `demo/build/outputs/apk/debug/demo-debug.apk`.
 - **Publishing is mavenLocal-only** (Phase 6 decision): `./gradlew publishToMavenLocal` publishes
-  `com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.4` + sources (coordinates in
+  `com.symmetricalpalmtree.gpaper:gpaper-{core,onyx,ratta}:0.1.5` + sources (coordinates in
   `gradle.properties`). `consumer-smoke/` is a standalone consumer project (NOT in the root build)
   proving a host app builds against the published artifacts:
   `./gradlew -p consumer-smoke assembleDebug` after copying `local.properties` in (see its README).

@@ -165,6 +165,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var lassoCapturing = false
     private var lastLassoInvalidateMs = 0L
 
+    /** Whether the outline now in flight dismissed a selection at pen-down (0.1.5). That
+     *  contact is spent on the dismissal, so a tap-sized one must not also report
+     *  [PaperListener.onPaperTapped]. Latched in [lassoOutlineStart], read and cleared in
+     *  [completeLassoOutline]. */
+    private var outlineDismissedSelection = false
+
     // Drag-move state — live from [lassoTryBeginDrag] until finish/cancel.
     private var dragActive = false
     private var dragThresholdMet = false
@@ -1179,6 +1185,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      *  user sees the box drop the moment they start lassoing elsewhere (and a tap-sized
      *  gesture outside the box needs nothing more — tap-to-dismiss falls out). */
     protected fun lassoOutlineStart() {
+        // A contact that dismisses is spent on the dismissal — completeLassoOutline must
+        // not also read it as an empty-handed tap (0.1.5).
+        outlineDismissedSelection = selection != null
         // The dismissal belongs to a NEW outline — a smart-lasso session continues
         // into it; the outline's own exits decide whether to restore PEN.
         suppressSmartLassoRestore = true
@@ -1199,17 +1208,27 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected fun completeLassoOutline(outline: List<StrokePoint>) {
         // Repaint regardless of outcome — the base-drawn trail must leave the screen.
         invalidate()
+        val dismissed = outlineDismissedSelection
+        outlineDismissedSelection = false
         val threshold = dragThresholdPx()
         val extent = Bounds.of(outline)
         // Below the extent threshold it was a tap: the previous selection was already
         // dismissed at outline start.
-        if (outline.size >= 3 && (extent.width >= threshold || extent.height >= threshold)) {
+        val isTap = extent.width < threshold && extent.height < threshold
+        if (!isTap && outline.size >= 3) {
             val sel = buildSelectionFromOutline(outline)
             if (sel != null) {
                 selection = sel
                 invalidate()
                 paperListener?.onSelectionCreated(sel)
             }
+        } else if (isTap && !dismissed && outline.isNotEmpty()) {
+            // An empty-handed tap on bare paper (0.1.5). Not the tap that dismissed a
+            // selection — that contact is spent. Reported at the pen-up point. A
+            // few-sample gesture with a real extent is neither an outline nor a tap and
+            // still reports nothing.
+            val last = outline.last()
+            paperListener?.onPaperTapped(last.x, last.y)
         }
         maybeEndSmartLassoSession()
     }

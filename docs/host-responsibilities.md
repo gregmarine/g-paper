@@ -127,6 +127,21 @@ place; the finger variant is escrowed and palm-gated exactly like tap-to-dismiss
 every selection (strokes-only included) — hit-test `(x, y)` against your own object bounds and
 open the object that contains it; ignore the rest. Drags are unchanged.
 
+**Tap-to-place** (0.1.5): the companion signal. A sub-threshold **stylus** tap in `Tool.LASSO`
+with **no selection active** reports `onPaperTapped(x, y)` (paper coordinates, the pen-up point)
+— the natural "paste my clipboard here" hook. Stylus only, so a palm or a stray finger can never
+fire it. The tap that *dismissed* a selection never reports: that contact is spent on the
+dismissal, and the user taps again to place. A tap over unselected ink still fires — "bare paper"
+means "no selection box", not "no content".
+
+Two host-side traps come with it:
+
+- **Arm the lasso yourself after a copy/cut.** If `smartLassoEnabled` is on, the dismissal that
+  ends a selection restores `Tool.PEN` (`onToolChanged`) — the placement tap would then *ink the
+  page*. A host-initiated `tool = Tool.LASSO` ends the session cleanly and re-arms.
+- **Show the user that a tap will place something.** Nothing about the surface changes when a
+  clipboard is loaded; the affordance is the host's to draw (an icon state, a chrome hint).
+
 ## Chrome cooperation
 
 The paper view sits in a `FrameLayout` with your chrome on top. Three obligations:

@@ -94,6 +94,26 @@ interface PaperListener {
     fun onSelectionTapped(x: Float, y: Float) {}
 
     /**
+     * A sub-threshold **stylus** tap landed on bare paper in [Tool.LASSO] with **no
+     * selection active** (0.1.5) — the companion to [onSelectionTapped], which owns every
+     * tap *inside* a selection box. ([x], [y]) are paper coordinates (the pen-up point).
+     * Fires at pen-up, once per contact; the host decides what an empty-handed lasso tap
+     * means (typically: paste the clipboard centred here).
+     *
+     * Never fires for a finger or a palm — the component's finger path only ever drags or
+     * dismisses an *active* selection, so a contact reaching here was a stylus by
+     * construction; there is nothing to escrow. Never fires for the tap that **dismissed**
+     * a selection: a selection was active at pen-down, so that contact is spent on the
+     * dismissal ([onSelectionDismissed]) and the user must tap again. Never fires for an
+     * outline that caught something (that is [onSelectionCreated]), for a cancelled
+     * contact, or in any other tool.
+     *
+     * A tap over existing *unselected* ink still fires — "bare paper" here means "no
+     * selection box", not "no content".
+     */
+    fun onPaperTapped(x: Float, y: Float) {}
+
+    /**
      * The component changed [PaperView.tool] **itself** — sync toolbar/tool UI here.
      * Fired only for component-initiated changes; host assignments to
      * [PaperView.tool] are never echoed. Today the only source is the smart-lasso

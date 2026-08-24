@@ -176,6 +176,14 @@ class MainActivity : Activity() {
                 refreshStatus()
             }
 
+            /** 0.1.5: a sub-threshold stylus tap on bare paper in LASSO with nothing
+             *  selected. A real host would paste its clipboard centred here. */
+            override fun onPaperTapped(x: Float, y: Float) {
+                Log.d("gpaper-demo", "paper tapped ${x.toInt()},${y.toInt()}")
+                lastEvent = "paper tapped ${x.toInt()},${y.toInt()}"
+                refreshStatus()
+            }
+
             /** The component changed the tool itself (smart-lasso switch to LASSO /
              *  PEN restore when the session ends) — the documented host pattern is to
              *  sync toolbar UI here, not by re-reading paper.tool in the selection

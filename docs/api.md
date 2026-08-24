@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.3**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.5**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -87,6 +87,7 @@ override fun onDestroy() { paper.release(); super.onDestroy() }
 | Out | `getStrokes()` (any thread) | Save-all, export |
 | Out | `onStrokeCommitted` / `onStrokesErased` | Incremental persistence |
 | Out | `onContentErased` (0.1.4) | Eraser swept over host content: whole-object ids; the host deletes its rows + `notifyContentChanged()` (the component owns no content, so nothing disappears by itself). At most once per id per gesture; scribble erase never reports content |
+| Out | `onPaperTapped` (0.1.5) | Stylus tap on bare paper in `Tool.LASSO` with nothing selected — the "paste here" hook. Stylus only; never the tap that dismissed a selection |
 | — | `clear()` | User-facing "erase page" (host updates its own data; no erase callbacks fire) |
 | — | `clearForContentSwap()` | Page turn: pixels hold until the next `loadStrokes` — single EPD refresh, no blank flash |
 
@@ -208,6 +209,13 @@ Selection (mechanics in the component, data in the host):
    fires for any selection contents; the host decides what a tap means (typically: open
    the tapped content object for editing). A cancelled drag dismisses the selection
    (`onSelectionDismissed`).
+   A sub-threshold stylus tap on bare paper **with nothing selected** is the companion
+   signal **`onPaperTapped(x, y)`** (0.1.5; paper coordinates, the pen-up point) — the
+   host's "paste here" hook. Stylus only (the finger path only ever drags or dismisses an
+   *active* selection, so nothing needs escrowing), never the tap that dismissed a
+   selection (that contact is spent — the user taps again), never a cancelled contact,
+   and only in `Tool.LASSO`. A tap over unselected ink still fires: "bare paper" means
+   "no selection box", not "no content".
 3. Tap outside / a new outline / tool change / `clearSelection()` →
    `onSelectionDismissed()`. Any data-in call (`loadStrokes`, `addStrokes`,
    `removeStrokes`, `clear`, `clearForContentSwap`) also dismisses first — the
