@@ -6,6 +6,7 @@ import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import com.symmetricalpalmtree.gpaper.core.geometry.Geometry
+import com.symmetricalpalmtree.gpaper.core.geometry.GraphiteGrain
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 
@@ -15,10 +16,11 @@ import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
  * once baked: every engine (generic, Onyx, Ratta) renders committed strokes through here,
  * which is what makes stroke data portable across devices (see [StrokeStyle]).
  *
- * Phase 2 first slice: [StrokeStyle.PEN], [StrokeStyle.MARKER], [StrokeStyle.DASH],
- * [StrokeStyle.CROSS], and [StrokeStyle.FOUNTAIN] have real renderers; the textured
- * [StrokeStyle.PENCIL], [StrokeStyle.BRUSH], and [StrokeStyle.CALLIGRAPHY] render as
- * [StrokeStyle.PEN] until their renderers land (documented incremental-rendering caveat).
+ * [StrokeStyle.PEN], [StrokeStyle.MARKER], [StrokeStyle.DASH], [StrokeStyle.CROSS] and
+ * [StrokeStyle.FOUNTAIN] landed in Phase 2; [StrokeStyle.PENCIL] in Phase 10, where the
+ * graphite it lays down is worked out by [GraphiteGrain] and drawn here.
+ * [StrokeStyle.BRUSH] and [StrokeStyle.CALLIGRAPHY] still render as [StrokeStyle.PEN]
+ * until their renderers land (documented incremental-rendering caveat).
  *
  * Not thread-confined by itself, but callers pass in their own scratch [Paint], which this
  * object fully re-configures on every call — never rely on paint state across calls.
@@ -45,6 +47,15 @@ internal object StrokeRenderer {
      * Draw one stroke's [points] onto [canvas] in [style], using the caller's scratch
      * [paint] (fully re-configured here). [points] may be a single sample — a tap renders
      * as a dot/mark. Coordinates are paper-space; the caller has applied any transform.
+     *
+     * [seed] identifies this stroke to the styles whose appearance is textured rather than
+     * geometric — today only [StrokeStyle.PENCIL]. It must be **stable for the life of the
+     * stroke**: the same value while it is being drawn, when it is baked, after the host
+     * reloads the page a week later, and through [
+     * com.symmetricalpalmtree.gpaper.core.render.StrokeRasterizer]. Callers holding a
+     * [com.symmetricalpalmtree.gpaper.core.model.Stroke] pass `id.hashCode()`; the live
+     * preview passes the id its stroke is going to be committed with. Styles that ignore
+     * it are free to be handed anything.
      */
     fun draw(
         canvas: Canvas,
@@ -53,20 +64,62 @@ internal object StrokeRenderer {
         width: Float,
         style: StrokeStyle,
         paint: Paint,
+        seed: Int = 0,
     ) {
         if (points.isEmpty()) return
         resetPaint(paint, color, width)
         when (style) {
             StrokeStyle.PEN,
-            StrokeStyle.PENCIL,
             StrokeStyle.BRUSH,
             StrokeStyle.CALLIGRAPHY,
             -> drawPen(canvas, points, paint)
 
+            StrokeStyle.PENCIL -> drawPencil(canvas, points, color, width, seed, paint)
             StrokeStyle.MARKER -> drawMarker(canvas, points, color, width, paint)
             StrokeStyle.DASH -> drawDash(canvas, points, width, paint)
             StrokeStyle.CROSS -> drawCross(canvas, points, width, paint)
             StrokeStyle.FOUNTAIN -> drawFountain(canvas, points, width, paint)
+        }
+    }
+
+    /**
+     * Graphite. [GraphiteGrain] decides which specks of the paper's tooth caught the lead
+     * and how dark each one is; all that is left here is to put them down.
+     *
+     * They go down as points rather than as circles: one `drawPoints` call carries every
+     * fleck of a given darkness, so a whole stroke costs [GraphiteGrain.LEVELS] draw calls
+     * however many thousand flecks it contains — which is the difference between a page of
+     * pencil that re-renders in a frame and one that does not. (The Wacom Paintsprout app
+     * learned the same lesson from the other side: its grain is meshes with per-vertex
+     * colour because a `BlurMaskFilter` on a software canvas measured twice its single
+     * largest per-frame cost.)
+     *
+     * Flecks composite normally, so a stroke crossing another darkens where they meet, the
+     * way layered graphite does — nothing here has to arrange that.
+     */
+    private fun drawPencil(
+        canvas: Canvas,
+        points: List<StrokePoint>,
+        color: Int,
+        width: Float,
+        seed: Int,
+        paint: Paint,
+    ) {
+        val grain = GraphiteGrain.of(points, width, seed)
+        if (grain.count == 0) return
+        paint.strokeWidth = GraphiteGrain.FLECK_PX
+        paint.strokeCap = Paint.Cap.ROUND
+        val packed = FloatArray(grain.count * 2)
+        for (level in 0 until GraphiteGrain.LEVELS) {
+            var n = 0
+            for (i in 0 until grain.count) {
+                if (grain.level[i] != level) continue
+                packed[n++] = grain.xy[i * 2]
+                packed[n++] = grain.xy[i * 2 + 1]
+            }
+            if (n == 0) continue
+            paint.color = withAlphaFactor(color, GraphiteGrain.levelAlpha(level))
+            canvas.drawPoints(packed, 0, n, paint)
         }
     }
 

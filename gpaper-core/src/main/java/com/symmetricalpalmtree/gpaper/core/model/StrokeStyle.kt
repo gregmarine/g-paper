@@ -20,7 +20,7 @@ package com.symmetricalpalmtree.gpaper.core.model
  * | [PEN] | uniform width | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
  * | [FOUNTAIN] | pressure/velocity-modulated width | `STROKE_STYLE_FOUNTAIN` (1) | `INK` (16) |
  * | [MARKER] | uniform, semi-transparent, flat caps | `STROKE_STYLE_MARKER` (2) | `NEEDLE` (10) |
- * | [PENCIL] | grain-textured | `STROKE_STYLE_CHARCOAL` (4) | `NEEDLE` (10) |
+ * | [PENCIL] | graphite grain on paper tooth; pressure → coverage + darkness | `STROKE_STYLE_CHARCOAL` (4) | `NEEDLE` (10) |
  * | [BRUSH] | broad, strongly pressure-modulated | `STROKE_STYLE_NEO_BRUSH` (3) | `INK` (16) |
  * | [CALLIGRAPHY] | chisel nib (direction-dependent width) | `STROKE_STYLE_SQUARE_PEN` (7) | code 15 (14 as fallback) |
  * | [DASH] | uniform width, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
@@ -47,7 +47,13 @@ enum class StrokeStyle {
     /** Highlighter-like: uniform width, semi-transparent, squared ends. */
     MARKER,
 
-    /** Graphite-like grain texture; pressure modulates darkness. */
+    /**
+     * Graphite. Flecks of mineral caught on the paper's tooth with bare paper between
+     * them — pressure fills in more of the tooth and darkens what lands, while the width
+     * stays exactly as set. The grain is seeded from the stroke's id, so a page re-renders
+     * fleck for fleck however many times it is reloaded. Tilt is not read: see
+     * `docs/api.md` for why the fleet cannot supply it.
+     */
     PENCIL,
 
     /** Broad brush: strongly pressure-modulated width, soft ends. */

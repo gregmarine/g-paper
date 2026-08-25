@@ -21,6 +21,9 @@ import com.symmetricalpalmtree.gpaper.core.model.Stroke
  * StrokeRasterizer.draw(canvas, strokes)
  * ```
  *
+ * Textured styles seed themselves off [Stroke.id], so a stroke baked here is fleck for
+ * fleck the stroke the artist drew — a pencil thumbnail is the page, not a likeness of it.
+ *
  * Coordinates are paper-space; the caller applies any transform (translate/scale)
  * before calling. Strokes are drawn in list order — pass them in committed ("order")
  * order to match the paper's own layering. Safe on a software canvas; main thread not
@@ -34,7 +37,9 @@ object StrokeRasterizer {
         if (strokes.isEmpty()) return
         val paint = Paint()
         for (s in strokes) {
-            StrokeRenderer.draw(canvas, s.points, s.color, s.width, s.style, paint)
+            StrokeRenderer.draw(
+                canvas, s.points, s.color, s.width, s.style, paint, s.id.hashCode()
+            )
         }
     }
 }

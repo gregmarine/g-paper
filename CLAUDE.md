@@ -36,6 +36,32 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
 - `core/canvas/` is the generic engine + shared canvas base (`CanvasPaperView`, `StrokeRenderer`).
   Public **only** so device modules can subclass — never present it as host API; hosts go through
   `GPaper.create`. `StrokeRenderer` is the single source of truth for committed stroke appearance.
+- **A textured style's texture must never reshuffle** (Phase 10, `PENCIL`). Two failures, not one:
+  a grain re-rolled on **reload** is a drawing that changes behind the artist's back, and a grain
+  re-rolled at **pen-up** makes every mark end in a flinch, because the live preview and the bake
+  run through the same renderer. So texture comes from a stateless integer hash seeded by
+  `StrokeRenderer.draw`'s `seed` — never a running RNG — and callers holding a `Stroke` pass
+  `id.hashCode()`. `CanvasPaperView` therefore mints the stroke id when the **contact starts**
+  (`pendingStrokeId`), not at commit, so the preview seeds off the id the stroke is about to get.
+  Anything that walks the path must index by **arc length from the first point**, never by input-
+  point index: a stroke still being drawn must agree with the same stroke committed, and pen
+  samples arrive at whatever rate the hand and the digitizer agree on.
+- **The pure half of a texture belongs in `geometry/`.** `GraphiteGrain` decides *where the
+  graphite lands*; `StrokeRenderer` only puts ink there. That split is what lets determinism be
+  proved by a JVM test instead of asserted, and it is the pattern any later textured style follows.
+- **Draw a texture as one call per darkness, never per speck.** `PENCIL` issues
+  `GraphiteGrain.LEVELS` (3) `drawPoints` calls however many thousand flecks a stroke holds —
+  a page of pencil re-records in a frame because of this. Few darknesses is also the *right*
+  answer on EPD: tone is meant to come from how many flecks land, and more levels quietly turns a
+  spatial texture back into a tonal one and hands the panel greys to dither. Paintsprout's Wacom
+  app reached the same rule from the other side (`BlurMaskFilter` on a software canvas measured
+  twice its single largest per-frame cost; its grain is meshes with per-vertex colour).
+- **Tilt is captured as 0 and that is a fleet decision, not a hardware limit.** BOOX delivers
+  `tiltX`/`tiltY` on every raw point and the NA5C's spans are sane (`-43..55` / `-13..38`), but one
+  surveyed model reports roughly 100× the others and there is no `getMaxTilt()` to normalize
+  against. Any tilt-driven feature therefore needs **per-model characterization** — its own phase,
+  with unknown models staying at zero — and until then a renderer must look right at `tilt = 0`,
+  because that is what every BOOX panel in the field will hand it.
 - **Pen-activity gate includes hover.** `isPenActive` = writing ∨ hovering + 350 ms tail — the palm
   lands before the pen tip, so proximity must close the gate. Traps: stylus hover is delivered
   to `onHoverEvent` first (pointer-source) — and since the paper view is not hoverable it returns

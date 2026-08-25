@@ -124,6 +124,23 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     // ── Input state ──────────────────────────────────────────────────────────
 
     private val activePoints = ArrayList<StrokePoint>()
+
+    /**
+     * The id the stroke now under the pen will be committed with, minted the first time
+     * anything needs it rather than at pen-down.
+     *
+     * A textured style seeds its texture off the stroke's id, and the live preview is drawn
+     * through the same renderer as the bake — so if the id were minted at commit time, a
+     * pencil stroke would visibly reshuffle its grain the instant the pen left the paper.
+     * Every mark would end with a flinch. Minting it here instead means the preview and the
+     * committed stroke are the same stroke all along.
+     *
+     * A contact that is cancelled or consumed as a gesture leaves its unused id behind for
+     * the next stroke to pick up, which costs nothing: no ink was ever laid down with it.
+     * Where one contact legally commits several strokes (the Onyx SDK can deliver more than
+     * one batch per contact), the first takes this id and the rest mint their own.
+     */
+    private var pendingStrokeId: String? = null
     private var gestureMode = GestureMode.NONE
     private var lastEraserPoint: StrokePoint? = null
     private var lastEraseRedrawMs = 0L
@@ -677,7 +694,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         }
         // Live layer: the in-progress stroke through the same renderer as the bake.
         if (rendersLiveStrokes && gestureMode == GestureMode.DRAW && activePoints.isNotEmpty()) {
-            StrokeRenderer.draw(canvas, activePoints, penColor, penWidth, penStyle, scratchPaint)
+            StrokeRenderer.draw(
+                canvas, activePoints, penColor, penWidth, penStyle, scratchPaint,
+                pendingStrokeId().hashCode(),
+            )
         }
         // Lasso trail (engines with hardware trails set rendersLiveTrail = false).
         if (rendersLiveTrail && lassoCapturing && lassoPoints.size >= 2) {
@@ -703,7 +723,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             val save = canvas.save()
             canvas.translate(dragDx, dragDy)
             for (s in dragStrokes) {
-                StrokeRenderer.draw(canvas, s.points, s.color, s.width, s.style, scratchPaint)
+                StrokeRenderer.draw(
+                    canvas, s.points, s.color, s.width, s.style, scratchPaint, s.id.hashCode()
+                )
             }
             for ((renderer, target) in dragContentTargets) {
                 if (!renderer.drawObject(canvas, target.contentId)) {
@@ -772,7 +794,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             // Mid-drag, the selected strokes live in the translated drag layer instead.
             if (stroke.id in dragHiddenIds) continue
             StrokeRenderer.draw(
-                canvas, stroke.points, stroke.color, stroke.width, stroke.style, scratchPaint
+                canvas, stroke.points, stroke.color, stroke.width, stroke.style, scratchPaint,
+                stroke.id.hashCode(),
             )
         }
         for (renderer in contentRenderers) {
@@ -861,7 +884,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             return false
         }
         val stroke = Stroke(
-            id = UUID.randomUUID().toString(),
+            id = takePendingStrokeId(),
             points = points,
             color = penColor,
             width = penWidth,
@@ -873,6 +896,13 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         paperListener?.onStrokeCommitted(stroke)
         return true
     }
+
+    /** The id the in-progress stroke will carry, minting one if nothing has asked yet. */
+    private fun pendingStrokeId(): String =
+        pendingStrokeId ?: UUID.randomUUID().toString().also { pendingStrokeId = it }
+
+    /** The pending id, consumed — the next stroke starts fresh. */
+    private fun takePendingStrokeId(): String = pendingStrokeId().also { pendingStrokeId = null }
 
     // ── Pen-gesture recognizers (smart lasso / scribble erase) ───────────────
 

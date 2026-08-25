@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.6**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.7**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -161,7 +161,7 @@ verified on five BOOX devices; the Ratta 0…31 pen-code sweep on Nomad + Manta)
 | `PEN` | uniform width | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
 | `FOUNTAIN` | pressure/velocity width | `STROKE_STYLE_FOUNTAIN` (1) | `INK` (16) |
 | `MARKER` | uniform, semi-transparent | `STROKE_STYLE_MARKER` (2) | `NEEDLE` (10) |
-| `PENCIL` | grain texture | `STROKE_STYLE_CHARCOAL` (4) | `NEEDLE` (10) |
+| `PENCIL` | graphite grain on tooth; pressure → coverage + darkness, width fixed | `STROKE_STYLE_CHARCOAL` (4) | `NEEDLE` (10) |
 | `BRUSH` | broad, pressure-modulated | `STROKE_STYLE_NEO_BRUSH` (3) | `INK` (16) |
 | `CALLIGRAPHY` | chisel nib, direction-dependent | `STROKE_STYLE_SQUARE_PEN` (7) | code 15 (14 fallback) |
 | `DASH` | uniform, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
@@ -179,11 +179,28 @@ migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. All live mappings above are confirmed on-device
 (BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status at v0.1.0 (`core/canvas/StrokeRenderer.kt`):
-`PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path), and
-`FOUNTAIN` (pressure-modulated width) render for real; the textured `PENCIL` / `BRUSH` /
-`CALLIGRAPHY` currently render as `PEN`.
+Committed-renderer status at v0.1.7 (`core/canvas/StrokeRenderer.kt`):
+`PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path),
+`FOUNTAIN` (pressure-modulated width) and `PENCIL` (graphite grain — 0.1.7) render for
+real; `BRUSH` and `CALLIGRAPHY` still render as `PEN`.
 The enum may grow; hosts should treat unknown persisted values as `PEN`.
+
+**`PENCIL` (0.1.7).** Graphite is laid down as a scatter of flecks on the paper's tooth
+with bare paper between them, not as a tinted line: pressure fills in more of the tooth
+(and darkens what lands) while the **width never moves**, so a lead draws the width it is
+set to at any pressure. Tilt is deliberately unread — BOOX reports it on a scale that
+differs per model with no `getMaxTilt()` to normalize against, so a tilt-driven pencil
+would look right on a bench and flat on the fleet. A mark's apparent width comes out
+roughly `width + 2 px`, the bleed of one fleck; below about 2 px a lead stops getting
+finer. Hosts choosing distinguishable pencil sizes should space them by more than that.
+
+The grain is **deterministic**: it is seeded from the stroke's `id`, so the same stroke
+re-renders fleck for fleck on every reload, in `StrokeRasterizer`, and on any device. The
+live preview is seeded with the id the stroke is about to be committed with, so a pencil
+mark does not reshuffle at pen-up on engines that preview through the core renderer.
+Where the *live* ink is firmware (Onyx maps `PENCIL` to `STROKE_STYLE_CHARCOAL`, Ratta to
+`NEEDLE`) the preview is the firmware's texture and the bake is ours — see the live-vs-
+baked caveat above; the pop at pen-up is expected there, not a bug.
 
 Selection (mechanics in the component, data in the host):
 

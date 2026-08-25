@@ -366,7 +366,7 @@ new standing rule: hosts present NO frames while `isPenActive` (demo defers stat
 Nomad, Manta — full gesture checklist incl. false-positive writing on all four.
 
 ### Phase 10 — Graphite: the textured PENCIL committed renderer (post-v0.1.0)
-**Status:** ⬜ Not started
+**Status:** 🧪 Awaiting device verification
 
 Requested by **Paintsprout Onyx** (`~/git/Paintsprout`, branch `onyx`, `apps/paintsprout_onyx/ONYX_PLAN.md`),
 whose entire arc 1 is a graphite pencil on white paper. Today `StrokeStyle.PENCIL` falls through to
@@ -404,7 +404,58 @@ in, same texture out; a re-render must be byte-identical). On-device: **NA5C** (
 Onyx target) and one mono BOOX panel for contrast, plus a Supernote for the `NEEDLE` mismatch, plus
 MIP11 for the generic engine on LCD. Live ink is the user's eye; committed grain screenshot-verifies.
 
-**Publishes:** 0.1.7 (`GPAPER_VERSION` bump + `publishToMavenLocal`).
+**Publishes:** 0.1.7 (`GPAPER_VERSION` bump + `publishToMavenLocal`). **Published.**
+
+**Outcome (code complete; the panel has not seen it yet).** `PENCIL` renders as graphite:
+`geometry/GraphiteGrain.kt` works out which specks of the paper's tooth caught the lead,
+`StrokeRenderer.drawPencil` puts them down. 15 new JVM tests, whole suite green,
+`build` green, 0.1.7 in mavenLocal.
+
+- **Graphite is spatial, not tonal, and that is the decision the phase turns on.** The mark
+  is flecks with bare paper between them; pressure fills in more of the tooth rather than
+  tinting a solid line more deeply. Chosen over carrying the Wacom app's tonal five-lane
+  mesh across because (a) an e-ink panel with a handful of grey levels dithers any
+  continuous grey it is handed, inventing a texture on top of ours, while a mark already
+  made of black flecks and white paper needs no dithering at all, and (b) the Wacom mesh was
+  judged right *beside a surface model supplying the gaps*, and the host that asked for this
+  draws on plain white paper with no surface behind it. One system has to carry the tooth,
+  so the pencil carries it.
+- **Pressure moves coverage and darkness; width never moves.** Requested that way by the
+  host, and it keeps one variable in play on a panel that cannot show two.
+- **Tilt stays unread**, as planned. Not because the pen is deaf — BOOX delivers `tiltX`/
+  `tiltY` on every raw point, and the NA5C's spans are sane (`-43..55` / `-13..38`) — but
+  because the fleet survey found one model reporting roughly a hundred times the others with
+  no `getMaxTilt()` to normalize against. Reopening that is **a phase of its own**: per-model
+  characterization by hand, unknown models staying at zero. It is what the side-of-lead
+  regime (lighter, broader, streakier as the pen lays over) would need, and it is the single
+  biggest thing this pencil is missing.
+- **The determinism constraint became stronger than the plan asked for.** The plan wanted no
+  reshuffle on reload; the grain also must not reshuffle at **pen-up**, because the live
+  preview and the bake run through the same renderer and a stroke that re-textures the
+  instant the pen lifts makes every mark end in a flinch. So `CanvasPaperView` now mints the
+  stroke's id when the contact starts (`pendingStrokeId`) instead of at commit, and the live
+  preview seeds off the id the stroke is *about to* be committed with. Stations are placed at
+  fixed arc length from the first point, never at input-point indices, so the flecks already
+  behind the pen do not move when the next sample lands — pinned by a test that renders a
+  10-point prefix and a 40-point stroke and demands the prefix match exactly.
+- **`StrokeRenderer.draw` gained a `seed: Int`** (defaulted, so nothing else changed).
+  Callers holding a `Stroke` pass `id.hashCode()`; that is the whole public-surface delta.
+- **Two flaws the offline preview caught that no test would have.** The lanes of tooth were
+  spread endpoint-to-endpoint across the mark, so the two outermost lanes sat exactly on the
+  lead's rim and took the full edge falloff — survivable on a broad lead with seven lanes
+  between them, ruinous on a fine one where those two lanes *are* two thirds of the mark: a
+  hard-pressed fine lead came out patchy grey instead of a firm dark line. Lanes are cell
+  centres now. And the fleck diameter floors the apparent width: a mark measures about
+  `width + 2 px` however fine the lead, so below ~2 px a lead stops getting finer. Both are
+  written into `docs/api.md` because a host picking pencil sizes needs the second one.
+- **The demo needed no change** — its Style button already cycles every `StrokeStyle`, so
+  `PENCIL` was always reachable and now draws graphite.
+- **Still owed, and the reason this is 🧪 not ✅:** the on-device pass. The live-vs-baked pop
+  (Onyx previews `PENCIL` as firmware `STROKE_STYLE_CHARCOAL`, Ratta as a plain `NEEDLE`
+  line) has not been looked at, and neither has how the grain reads on a Kaleido panel. The
+  constants in `GraphiteGrain` are all named and commented for exactly that pass; the light
+  end in particular (a feather touch deposits well under one fleck per tooth, by design) is
+  the most likely thing to want moving.
 
 ## Standing Open Questions (ask as they become relevant)
 
