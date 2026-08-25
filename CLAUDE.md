@@ -56,6 +56,17 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   spatial texture back into a tonal one and hands the panel greys to dither. Paintsprout's Wacom
   app reached the same rule from the other side (`BlurMaskFilter` on a software canvas measured
   twice its single largest per-frame cost; its grain is meshes with per-vertex colour).
+- **BOOX's per-pen-kind width multipliers are not cosmetic, and a live style must be chosen for
+  width before texture.** The firmware's texture pens scale the width they are given before rendering
+  — `CHARCOAL_STROKE_WIDTH_EXTRA_SCALE = 5.0`, `BRUSH_STROKE_WIDTH_EXTRA_SCALE = 2.0` — because their
+  grain bitmaps are scaled to the stroke and below roughly 20 px no texture exists at all. `PENCIL`
+  armed against `STROKE_STYLE_CHARCOAL` therefore previewed a 6 px lead at about 30 px and committed
+  6, and the mark collapsed to a fifth of itself at pen-up (measured NA5C, fixed in 0.1.8 by arming
+  the plain even line, style 0). **A preview that lies about width is far worse than one that lies
+  about texture: width is what the hand aims with, and the artist reads the collapse as the *bake*
+  being broken.** Any style armed against a texture pen must account for its scale factor or accept
+  the same collapse — `CROSS` still arms charcoal on purpose, because there it is approximating a
+  texture rather than a width.
 - **Tilt is captured as 0 and that is a fleet decision, not a hardware limit.** BOOX delivers
   `tiltX`/`tiltY` on every raw point and the NA5C's spans are sane (`-43..55` / `-13..38`), but one
   surveyed model reports roughly 100× the others and there is no `getMaxTilt()` to normalize

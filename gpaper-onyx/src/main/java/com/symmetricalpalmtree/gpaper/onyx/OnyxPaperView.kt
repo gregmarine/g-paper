@@ -192,13 +192,26 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
      * Live-ink firmware style for a [StrokeStyle] (the mapping table in `StrokeStyle`
      * KDoc / `docs/api.md`). CROSS has no firmware x-stream; CHARCOAL is the nearest
      * live texture — the bake corrects to true x-marks.
+     *
+     * **PENCIL arms the plain even line, not the firmware's textured charcoal, and the
+     * reason is width.** CHARCOAL is a stamp-based texture pen: BOOX scales its nominal
+     * width by `NoteConstant.CHARCOAL_STROKE_WIDTH_EXTRA_SCALE = 5.0` before rendering,
+     * because the grain bitmap is scaled to the stroke and below roughly 20 px there is
+     * no room for any texture to exist. So arming CHARCOAL at a 6 px pencil drew live ink
+     * about 30 px wide and the bake then committed 6 — the mark visibly collapsed to a
+     * fifth of itself the moment the pen lifted. A live preview that lies about width is
+     * worse than one that lies about texture: width is what the hand is aiming with.
+     *
+     * Style 0 is an even line at the width it is given, so live and baked now agree on the
+     * mark's size and differ only in grain, which appears as the stroke gaining its tooth
+     * at pen-up rather than shrinking. Measured on a NoteAir5C.
      */
     private fun liveStyleCode(style: StrokeStyle): Int = when (style) {
         StrokeStyle.PEN -> TouchHelper.STROKE_STYLE_PENCIL
         StrokeStyle.FOUNTAIN -> TouchHelper.STROKE_STYLE_FOUNTAIN
         StrokeStyle.MARKER -> TouchHelper.STROKE_STYLE_MARKER
         StrokeStyle.BRUSH -> TouchHelper.STROKE_STYLE_NEO_BRUSH
-        StrokeStyle.PENCIL -> TouchHelper.STROKE_STYLE_CHARCOAL
+        StrokeStyle.PENCIL -> TouchHelper.STROKE_STYLE_PENCIL
         StrokeStyle.CALLIGRAPHY -> TouchHelper.STROKE_STYLE_SQUARE_PEN
         StrokeStyle.DASH -> TouchHelper.STROKE_STYLE_DASH
         StrokeStyle.CROSS -> TouchHelper.STROKE_STYLE_CHARCOAL

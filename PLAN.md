@@ -404,7 +404,7 @@ in, same texture out; a re-render must be byte-identical). On-device: **NA5C** (
 Onyx target) and one mono BOOX panel for contrast, plus a Supernote for the `NEEDLE` mismatch, plus
 MIP11 for the generic engine on LCD. Live ink is the user's eye; committed grain screenshot-verifies.
 
-**Publishes:** 0.1.7 (`GPAPER_VERSION` bump + `publishToMavenLocal`). **Published.**
+**Publishes:** 0.1.7, then **0.1.8** with the live-mapping fix the device pass found. Both published.
 
 **Outcome (code complete; the panel has not seen it yet).** `PENCIL` renders as graphite:
 `geometry/GraphiteGrain.kt` works out which specks of the paper's tooth caught the lead,
@@ -450,7 +450,22 @@ MIP11 for the generic engine on LCD. Live ink is the user's eye; committed grain
   written into `docs/api.md` because a host picking pencil sizes needs the second one.
 - **The demo needed no change** — its Style button already cycles every `StrokeStyle`, so
   `PENCIL` was always reachable and now draws graphite.
-- **Still owed, and the reason this is 🧪 not ✅:** the on-device pass. The live-vs-baked pop
+- **The device pass found the live-vs-baked pop, and it was a width collapse, not a texture
+  difference — 0.1.8 fixes it by remapping the live style.** `PENCIL` armed the firmware's textured
+  charcoal (4), which is a *stamp* pen: BOOX multiplies its nominal width by
+  `NoteConstant.CHARCOAL_STROKE_WIDTH_EXTRA_SCALE = 5.0` before rendering, because the grain bitmap
+  is scaled to the stroke and below roughly 20 px no texture can exist at all. So a 6 px pencil
+  previewed about 30 px wide and committed 6 — the mark shrank to a fifth of itself the instant the
+  pen lifted, and it read as the *bake* being broken rather than the preview. It now arms the plain
+  even line (`STROKE_STYLE_PENCIL`, 0): live and baked agree on the mark's size and differ only in
+  grain, so a stroke **gains its tooth** at pen-up instead of shrinking.
+  **The general lesson, worth more than the fix:** a preview that lies about width is far worse than
+  one that lies about texture, because width is what the hand aims with — and the firmware's
+  per-pen-kind width multipliers are not cosmetic. Any future style armed against a BOOX texture pen
+  (`CHARCOAL`, `CHARCOAL_V2`, `NEO_BRUSH` ×2.0) has to account for its scale factor or accept the
+  same collapse. `CROSS` still arms charcoal deliberately — it is approximating a texture there, not
+  a width, and the bake corrects it to true x-marks.
+- **Still owed, and the reason this is 🧪 not ✅:** the on-device pass **of the pencil itself**. The live-vs-baked pop
   (Onyx previews `PENCIL` as firmware `STROKE_STYLE_CHARCOAL`, Ratta as a plain `NEEDLE`
   line) has not been looked at, and neither has how the grain reads on a Kaleido panel. The
   constants in `GraphiteGrain` are all named and commented for exactly that pass; the light

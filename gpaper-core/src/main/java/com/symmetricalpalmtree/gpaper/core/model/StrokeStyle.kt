@@ -20,7 +20,7 @@ package com.symmetricalpalmtree.gpaper.core.model
  * | [PEN] | uniform width | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
  * | [FOUNTAIN] | pressure/velocity-modulated width | `STROKE_STYLE_FOUNTAIN` (1) | `INK` (16) |
  * | [MARKER] | uniform, semi-transparent, flat caps | `STROKE_STYLE_MARKER` (2) | `NEEDLE` (10) |
- * | [PENCIL] | graphite grain on paper tooth; pressure → coverage + darkness | `STROKE_STYLE_CHARCOAL` (4) | `NEEDLE` (10) |
+ * | [PENCIL] | graphite grain on paper tooth; pressure → coverage + darkness | `STROKE_STYLE_PENCIL` (0) — even line at the true width; charcoal (4) is scaled ×5 by firmware | `NEEDLE` (10) |
  * | [BRUSH] | broad, strongly pressure-modulated | `STROKE_STYLE_NEO_BRUSH` (3) | `INK` (16) |
  * | [CALLIGRAPHY] | chisel nib (direction-dependent width) | `STROKE_STYLE_SQUARE_PEN` (7) | code 15 (14 as fallback) |
  * | [DASH] | uniform width, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
