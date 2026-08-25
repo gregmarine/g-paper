@@ -365,6 +365,47 @@ new standing rule: hosts present NO frames while `isPenActive` (demo defers stat
 ~30–50 frames/session after). 86 JVM tests green (14 new). Verified eyes-on: MIP11, NA5C,
 Nomad, Manta — full gesture checklist incl. false-positive writing on all four.
 
+### Phase 10 — Graphite: the textured PENCIL committed renderer (post-v0.1.0)
+**Status:** ⬜ Not started
+
+Requested by **Paintsprout Onyx** (`~/git/Paintsprout`, branch `onyx`, `apps/paintsprout_onyx/ONYX_PLAN.md`),
+whose entire arc 1 is a graphite pencil on white paper. Today `StrokeStyle.PENCIL` falls through to
+the `PEN` branch (`core/canvas/StrokeRenderer.kt:61`) — uniform width, no grain. Phase 2 deferred
+the textured styles deliberately; this phase pays `PENCIL` off. `BRUSH` and `CALLIGRAPHY` stay
+deferred.
+
+- **Real grain in `StrokeRenderer`** for `PENCIL`: graphite texture along the path, and
+  **pressure → darkness**. Portable Canvas code only — core has near-zero dependencies and no
+  device SDK may enter it.
+- **Deterministic grain.** Seed the texture from the stroke id, never from a running RNG: a host
+  reloading a page re-renders every committed stroke, and a grain that reshuffles on reload is a
+  drawing that changes behind the artist's back. This is the single most important constraint in
+  the phase.
+- **Pressure carries everything; tilt carries nothing.** `OnyxPaperView.kt:618` hard-zeroes tilt —
+  the fleet survey found per-device tilt scales with no SDK normalizer, so tilt is unusable until
+  calibrated. Ratta's firmware path supplies tilt, so the renderer may *read* it, but must look
+  right with `tilt = 0` because that is what BOOX will always deliver.
+- **Draw grain as geometry, not as a mask filter.** Carried knowledge from Paintsprout's Wacom app
+  (`apps/paintsprout_android`, `paint/Tool.kt:215` holds its pencil profile): grain and bristle
+  marks are drawn as meshes with per-vertex colour because a `BlurMaskFilter` on a software canvas
+  measured twice the single largest per-frame cost there. Geometry is also the only way a mark can
+  carry strength that varies along its length.
+- **`StrokeRasterizer` must match the live view exactly** — the offline door renders through the
+  same code, so a host compositing its own content bakes pixel-identical graphite.
+- **Live vs. baked mismatch is a finding, not a defect to hide.** Onyx maps live `PENCIL` to the
+  firmware's `STROKE_STYLE_CHARCOAL` while the bake is ours; Ratta maps it to `NEEDLE`, which is a
+  plain solid line and will disagree more. Measure the pen-up "pop" on both platforms and write
+  down what it looks like — the hosts need to know before they decide whether to care.
+- Demo gains a pencil control; `docs/api.md`'s committed-renderer status line and the
+  `StrokeStyle` KDoc table update in the same commit (public-surface rule).
+
+**Test:** JVM tests for the deterministic parts (grain sampling is pure — same stroke id and points
+in, same texture out; a re-render must be byte-identical). On-device: **NA5C** (the Paintsprout
+Onyx target) and one mono BOOX panel for contrast, plus a Supernote for the `NEEDLE` mismatch, plus
+MIP11 for the generic engine on LCD. Live ink is the user's eye; committed grain screenshot-verifies.
+
+**Publishes:** 0.1.7 (`GPAPER_VERSION` bump + `publishToMavenLocal`).
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
