@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.5**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.6**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -261,6 +261,40 @@ and `onPenLifted` does not fire for it.
   the erased strokes. Host content objects are **not** scribble-erasable — a scribble is
   an ink-level correction; deliberate whole-object erase belongs to the eraser tool,
   which since 0.1.4 does report content (`onContentErased`).
+
+### Snap to guides (opt-in)
+
+`snapToGuides` (default **off**) pulls a **dragged selection** to the page's own
+structure and to the objects already on it, drawing a dashed rule edge to edge wherever
+it caught. `snapMarginPx` (default 0) is the inset it measures margins by — set it to
+whatever your edge chrome is thick and content snapped to a margin lands exactly clear
+of the toolbar.
+
+| Axis | Page guides | Per non-selected content object |
+|---|---|---|
+| X | `0` · `margin` · `pageWidth/2` · `pageWidth − margin` · `pageWidth` | `left − margin` · `left` · `centerX` · `right` · `right + margin` |
+| Y | `0` · `margin` · `pageHeight/2` · `pageHeight − margin` · `pageHeight` | `top − margin` · `top` · `centerY` · `bottom` · `bottom + margin` |
+
+- **Page** means the rect `setPageSize` declared (the view's bounds until it does), so
+  guides agree with the template rather than the window. A non-positive page dimension
+  simply drops that axis's page guides.
+- **Object bounds come from `hitTargets()`**, snapshotted when the drag begins, minus
+  whatever is selected. **Strokes are never snap targets** — on a handwriting page ink is
+  everywhere, and a guide per stroke box is a thicket that fights the pen. The ±margin
+  *proximity* guides are what make equal spacing fall out of a drag: drag one object
+  below another and it catches exactly one margin-width from its neighbour's edge.
+- **Anchors** are the selection's leading edge, centre, and trailing edge per axis, taken
+  from its **tight** bounds — not the 12 px-inflated box the overlay draws, because the
+  user is aligning content. The nearest (anchor, guide) pair within **20 dp** wins; axes
+  are decided independently. Ties go to the page over an object, and to the leading edge
+  over the centre over the trailing edge.
+- **Nothing is clamped.** A guide holds only while the pen stays inside the threshold, so
+  dragging on always releases — snapping must never read as the page resisting the hand.
+- `onSelectionMoved` reports the **snapped** delta. Apply it as-is; do not recompute one
+  from pointer positions.
+- Toggle it between drags (a selection toolbar is the natural home). A change mid-drag
+  takes effect on the next sample, but without the object guides the drag did not start
+  with.
 
 **Raw input passthrough**: `setRawInputListener { event -> … }` observes the stylus
 stream (`RawInputEvent`: action, tool end, x/y/pressure/tilt/time) regardless of active

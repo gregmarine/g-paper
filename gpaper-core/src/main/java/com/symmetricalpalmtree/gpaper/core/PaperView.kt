@@ -124,6 +124,47 @@ interface PaperView {
      */
     var scribbleEraseEnabled: Boolean
 
+    // ── Snap to guides (opt-in, default off) ─────────────────────────────────
+
+    /**
+     * Snap-to-guide for a selection drag-move. Default **false**, in which case a drag
+     * is exactly the pen's own path.
+     *
+     * When on, a dragged selection is pulled to the nearest *meaningful* position within
+     * 20 dp and a dashed guide is drawn where it caught:
+     *
+     * - **Page guides** — the page's edges, [snapMarginPx] inset from each edge, and the
+     *   centre, on both axes. Measured against the rect [setPageSize] declared (the
+     *   view's own bounds until it does), so guides agree with the template.
+     * - **Object guides** — for every content object *not* in the selection, its edges,
+     *   its centre, and one [snapMarginPx] outside each edge, on both axes. Bounds come
+     *   from [ContentRenderer.hitTargets], snapshotted when the drag begins. Strokes are
+     *   never snap targets: on a handwriting page a guide per stroke is a thicket.
+     *
+     * The selection contributes three anchors per axis (leading edge, centre, trailing
+     * edge) from its **tight** bounds, not the inflated box the overlay draws — the user
+     * is aligning content, so an object snapped to the top margin starts *at* the margin.
+     * Axes are decided independently. Nothing is clamped: a guide holds only while the
+     * pen stays within the threshold, so dragging on always releases.
+     *
+     * [PaperListener.onSelectionMoved] reports the **snapped** delta — apply it as-is.
+     * Toggle between drags; a change mid-drag takes effect on the next sample, without
+     * the object guides the drag did not start with.
+     */
+    var snapToGuides: Boolean
+
+    /**
+     * Margin inset in px for [snapToGuides] — both the page margin guides and the
+     * object proximity gap. Zero (the default) collapses the margin guides onto the page
+     * edges and the proximity guides onto the object edges; harmless, but it throws away
+     * half the feature, so hosts that arm [snapToGuides] should set this.
+     *
+     * g-paper holds no dimens, so the host chooses the value. A good one is whatever the
+     * app's own edge chrome is thick, so content snapped to a margin lands exactly clear
+     * of it.
+     */
+    var snapMarginPx: Float
+
     // ── Stroke data in ───────────────────────────────────────────────────────
 
     /**

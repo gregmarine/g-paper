@@ -26,6 +26,8 @@ import com.symmetricalpalmtree.gpaper.core.engine.GPaper
 import com.symmetricalpalmtree.gpaper.core.geometry.EraseHitTest
 import com.symmetricalpalmtree.gpaper.core.geometry.GestureRecognizer
 import com.symmetricalpalmtree.gpaper.core.geometry.LassoHitTest
+import com.symmetricalpalmtree.gpaper.core.geometry.SnapEngine
+import com.symmetricalpalmtree.gpaper.core.geometry.SnapGuide
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
 import com.symmetricalpalmtree.gpaper.core.model.Selection
 import com.symmetricalpalmtree.gpaper.core.model.SelectionMove
@@ -89,6 +91,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         /** The selection box is drawn (and drag-hit) this far outside the tight
          *  [Selection.bounds], so thin selections still present a grabbable box. */
         const val SELECTION_BOX_INFLATE_PX = 12f
+
+        /**
+         * How near a guide a dragged selection must come to catch it, in dp
+         * (reference value). Small on purpose: a guide holds only while the pen stays
+         * inside this, so dragging on always releases and snapping never reads as the
+         * page resisting the hand. See [PaperView.snapToGuides].
+         */
+        const val SNAP_THRESHOLD_DP = 20f
     }
 
     /** What the current stylus contact is doing; latched at ACTION_DOWN. */
@@ -206,6 +216,29 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         isAntiAlias = false
     }
 
+    /**
+     * The guide rule drawn where a snapped drag caught. Same weight and blackness as
+     * [selectionPaint] — whole pixels, because a sub-pixel hairline is a coin flip on an
+     * EPD panel at a fractional density — but a much longer dash stride, so a full-length
+     * ruler never reads as another selection box. Butt caps keep the dash length honest.
+     */
+    private val snapGuidePaint = Paint().apply {
+        style = Paint.Style.STROKE
+        color = Color.BLACK
+        strokeWidth = 2f
+        pathEffect = DashPathEffect(floatArrayOf(24f, 12f), 0f)
+        strokeCap = Paint.Cap.BUTT
+        isAntiAlias = false
+    }
+
+    /** Guides the live drag is currently caught on — at most one per axis, empty
+     *  whenever [snapToGuides] is off or nothing is in range. */
+    private var activeSnapGuides: List<SnapGuide> = emptyList()
+
+    /** Tight bounds of the non-selected content objects, snapshotted at drag start so
+     *  the per-sample snap costs no renderer calls; empty outside a snapped drag. */
+    private var snapTargets: List<Bounds> = emptyList()
+
     // Pen-gate state. Volatile: device pipelines may report proximity from their raw
     // input thread (the Onyx SDK event bus), while hosts read [isPenActive] on main.
     @Volatile private var penDown = false
@@ -252,6 +285,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     override var smartLassoEnabled: Boolean = false
 
     override var scribbleEraseEnabled: Boolean = false
+
+    // ── PaperView: snap to guides ────────────────────────────────────────────
+
+    // Off by default, so hosts that never set it pay nothing: the target snapshot is
+    // taken only when a drag begins with snapping already armed.
+    override var snapToGuides: Boolean = false
+
+    override var snapMarginPx: Float = 0f
 
     // ── PaperView: stroke data in ────────────────────────────────────────────
 
@@ -358,8 +399,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         val hadDragVisual = dragActive && dragThresholdMet
         dragActive = false
         dragThresholdMet = false
+        dragDx = 0f
+        dragDy = 0f
         dragStrokes = emptyList()
         dragContentTargets = emptyList()
+        snapTargets = emptyList()
+        activeSnapGuides = emptyList()
         val hadHidden = dragHiddenIds.isNotEmpty() || dragHiddenContentIds.isNotEmpty()
         dragHiddenIds = emptySet()
         dragHiddenContentIds = emptySet()
@@ -395,8 +440,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         smartLassoSession = false
         dragActive = false
         dragThresholdMet = false
+        dragDx = 0f
+        dragDy = 0f
         dragStrokes = emptyList()
         dragContentTargets = emptyList()
+        snapTargets = emptyList()
+        activeSnapGuides = emptyList()
         dragHiddenIds = emptySet()
         dragHiddenContentIds = emptySet()
         lassoCapturing = false
@@ -641,6 +690,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         // draw translated on top. Selected host content draws live through the
         // renderer's drawObject when implemented, else as a dashed ghost of its bounds.
         if (dragActive && dragThresholdMet) {
+            // Guides first, under the content they aligned — a rule the ink crosses reads
+            // as a line on the page; one laid over the ink reads as a strike-through.
+            for (guide in activeSnapGuides) {
+                when (guide) {
+                    is SnapGuide.Vertical ->
+                        canvas.drawLine(guide.x, 0f, guide.x, height.toFloat(), snapGuidePaint)
+                    is SnapGuide.Horizontal ->
+                        canvas.drawLine(0f, guide.y, width.toFloat(), guide.y, snapGuidePaint)
+                }
+            }
             val save = canvas.save()
             canvas.translate(dragDx, dragDy)
             for (s in dragStrokes) {
@@ -1094,11 +1153,25 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         dragDx = 0f
         dragDy = 0f
         dragStrokes = strokeList.filter { it.id in sel.strokeIds }
-        dragContentTargets = contentRenderers.flatMap { renderer ->
-            renderer.hitTargets()
-                .filter { it.contentId in sel.contentIds }
-                .map { renderer to it }
+        // One hitTargets() pass per renderer, split two ways: the selected objects ride the
+        // drag layer, and — when snapping is armed — the rest become its guides. A host's
+        // hitTargets() is arbitrary work, so it is asked once, not once per purpose.
+        val travelling = ArrayList<Pair<ContentRenderer, HitTarget>>()
+        val staying = ArrayList<Bounds>()
+        for (renderer in contentRenderers) {
+            for (target in renderer.hitTargets()) {
+                if (target.contentId in sel.contentIds) {
+                    travelling.add(renderer to target)
+                } else if (snapToGuides) {
+                    // The page's fixed points. Strokes are deliberately not among them: on a
+                    // handwriting page ink is everywhere, and a guide per stroke box would be
+                    // a thicket that fights the pen rather than helping it.
+                    staying.add(target.bounds)
+                }
+            }
         }
+        dragContentTargets = travelling
+        snapTargets = staying
         return true
     }
 
@@ -1122,9 +1195,40 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             paperListener?.onSelectionDragStarted()
             redrawCommitted()
         }
-        dragDx = dx
-        dragDy = dy
+        applyDragDelta(dx, dy)
         throttledLassoInvalidate()
+    }
+
+    /**
+     * Turn a raw contact delta into the delta actually applied, updating [dragDx]/[dragDy]
+     * and [activeSnapGuides]. Pass-through unless [snapToGuides] is armed and a selection
+     * is live.
+     *
+     * Both the move samples and the lift go through here, so the drop can never disagree
+     * with what the drag was doing a moment earlier.
+     */
+    private fun applyDragDelta(rawDx: Float, rawDy: Float) {
+        val sel = selection
+        if (!snapToGuides || sel == null) {
+            dragDx = rawDx
+            dragDy = rawDy
+            activeSnapGuides = emptyList()
+            return
+        }
+        val page = templateDestRect()
+        val snap = SnapEngine.computeSnap(
+            box = sel.bounds,
+            rawDx = rawDx,
+            rawDy = rawDy,
+            pageWidth = page.width(),
+            pageHeight = page.height(),
+            marginPx = snapMarginPx,
+            thresholdPx = SNAP_THRESHOLD_DP * resources.displayMetrics.density,
+            targets = snapTargets,
+        )
+        dragDx = snap.dx
+        dragDy = snap.dy
+        activeSnapGuides = snap.guides
     }
 
     /**
@@ -1141,18 +1245,27 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (!dragThresholdMet) {
             dragStrokes = emptyList()
             dragContentTargets = emptyList()
+            snapTargets = emptyList()
+            activeSnapGuides = emptyList()
             if (selection != null) {
                 if (fromFinger) scheduleEscrowedTap(x, y) else paperListener?.onSelectionTapped(x, y)
             }
             return
         }
         dragThresholdMet = false
-        val dx = x - dragStartX
-        val dy = y - dragStartY
+        // Settle on the lift position — freshest, and a fast drag can travel a real
+        // distance between the last move sample and the lift — but through the SAME snap
+        // pass the samples took. Reading `x - dragStartX` raw here would silently undo the
+        // snap the user just watched catch.
+        applyDragDelta(x - dragStartX, y - dragStartY)
+        val dx = dragDx
+        val dy = dragDy
         dragDx = 0f
         dragDy = 0f
         dragStrokes = emptyList()
         dragContentTargets = emptyList()
+        snapTargets = emptyList()
+        activeSnapGuides = emptyList()
         dragHiddenIds = emptySet()
         dragHiddenContentIds = emptySet()
         onSelectionDragVisual(false)

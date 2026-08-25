@@ -108,6 +108,23 @@ come with enabling them:
   undo already handle the eraser tool, they already handle scribbles. The gesture stroke
   itself is never committed or reported.
 
+## Snap to guides (opt-in, 0.1.6)
+
+`snapToGuides` makes a dragged selection catch on the page's edges, margins and centres and
+on the other content objects' edges, centres and ±margin proximities — full table in
+[api.md](api.md). Default off; three host obligations:
+
+- **Set `snapMarginPx`.** g-paper holds no dimens, so with the default 0 the margin guides
+  collapse onto the page edges and half the feature is gone. Pass whatever your edge chrome
+  is thick — content snapped to a margin then lands exactly clear of the toolbar.
+- **Apply `onSelectionMoved`'s delta as-is.** It is the snapped delta. A host that recomputes
+  a move from its own pointer tracking would silently undo the snap the user just watched.
+- **Own the toggle.** The component draws the guides but never the switch; put it wherever
+  the selection is acted on, and flip it between drags rather than during one.
+
+Nothing else changes: objects are snap targets automatically through the `hitTargets()` you
+already return, and strokes are deliberately excluded.
+
 ## Host content
 
 Register a `ContentRenderer` to draw your objects into the committed layer (z-ordered below or
