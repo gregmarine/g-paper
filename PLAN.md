@@ -679,6 +679,16 @@ already the answer the filter would have settled on.
 start the transient is on display.** Check the beginning of a mark whenever smoothing is introduced
 anywhere in this renderer.
 
+**0.1.19 — the dome was a blob, because a contact patch is an ellipse.** 0.1.17 capped a stroke with
+a half-disc of *the mark's own half-width*, which on a lead laid over is a rounded end 7 mm across;
+the artist called it glop, and a circle is blunt besides — halfway along one the width is still 87%
+of full. The physics corrects it: a tilted lead smears its mark many times sideways but still leaves
+the paper over the width of **the lead**, so the cap reaches the lead's radius *along* the stroke
+while spanning the mark's half-width *across* it. An ellipse flattened along the direction of travel.
+Held upright the two are equal and it is a circle again, which is right, because then the patch is
+one. Measurement first ruled out density — the tip was *lighter* than the body, not heavier — which
+is what pointed at shape.
+
 **Left for the device:** the middle of the width curve, and grain density now that the texture is
 even enough to judge it. Both fits were anchored on an artist's estimate of
 *relative* widths at three angles, so 44° is the least constrained point on it.

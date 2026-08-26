@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.18**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.19**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -179,7 +179,7 @@ migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. All live mappings above are confirmed on-device
 (BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status at v0.1.18 (`core/canvas/StrokeRenderer.kt`):
+Committed-renderer status at v0.1.19 (`core/canvas/StrokeRenderer.kt`):
 `PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path),
 `FOUNTAIN` (pressure-modulated width) and `PENCIL` (graphite grain — 0.1.7) render for
 real; `BRUSH` and `CALLIGRAPHY` still render as `PEN`.
@@ -199,8 +199,11 @@ live on a NoteAir5C's panel and again after the bake, and comparing ink per unit
 two covered the same width and the bake was depositing about 30% less inside it (0.1.11). Hosts choosing distinguishable pencil sizes should space them by more
 than that.
 
-**A stroke ends in a dome, not a chisel (0.1.17).** A lead meets the paper as a *disc*, so where it
-touches down and lifts the ink ends in a half-round of the mark's own half-width. Stopping at the
+**A stroke ends in the shape of the lead's contact patch (0.1.17, 0.1.19).** Not a straight cut, and
+not a half-disc either: the patch of a tilted lead is an **ellipse**, smearing many times sideways
+while still leaving the paper over the width of the *lead*. So a cap reaches the lead's radius along
+the stroke and the mark's own half-width across it. Capping a broad stroke with a half-disc of its
+half-width puts a blob on the end of it; held upright the two are equal and it is a circle again. Stopping at the
 last cross-section leaves a straight cut clean across the mark, corners and all. The touch-down cap
 is laid before the body so ink already on the paper keeps its place as the stroke grows; only the
 lifting cap travels with the pen, as the real one does.

@@ -324,9 +324,16 @@ object GraphiteGrain {
      *
      * A stroke that simply stops at its last cross-section ends in a straight cut clean across the
      * mark, corners and all — a chisel, not a pencil. Nothing in a pencil is straight: the lead
-     * meets the paper as a *disc*, so the ink ends in a half-round of the mark's own half-width.
-     * Walking out past the end and shrinking the half-width along a circle is that disc, drawn the
-     * only way this renderer knows how.
+     * meets the paper as a patch, and the ink ends in the shape of that patch.
+     *
+     * **The patch is an ellipse, not a circle, and using a circle is what makes an end look like a
+     * blob.** A lead laid over smears its mark sideways — many times the lead's own width — but it
+     * still leaves the paper over the width of the *lead*, not over the width of the smear. Capping
+     * a broad stroke with a half-disc of its own half-width puts a 7 mm dome on the end of it, and
+     * a circle is blunt besides: halfway along one, the width is still 87% of full. So [reach] is
+     * the lead's radius and travels along the stroke, while the half-width across it is whatever
+     * the tilt has made it — an ellipse flattened along the direction of travel. Held upright the
+     * two are equal and it is a circle again, which is right, because then the patch is one.
      *
      * [sign] is `+1` to cap the finish and `-1` to cap the start; [station0] seeds the hashing away
      * from the body's own stations so a cap never repeats a cross-section that is already there.
@@ -341,15 +348,16 @@ object GraphiteGrain {
         lean: Float,
         arc: Float,
         half: Float,
+        reach: Float,
         seed: Int,
         station0: Int,
         sign: Float,
     ) {
-        if (half <= TOOTH_PITCH_PX) return
+        if (reach <= TOOTH_PITCH_PX || half <= 0f) return
         var d = TOOTH_PITCH_PX
         var k = 0
-        while (d < half) {
-            val shrunk = sqrt(half * half - d * d)
+        while (d < reach) {
+            val shrunk = half * sqrt(1f - (d / reach) * (d / reach))
             if (shrunk >= TOOTH_PITCH_PX * 0.5f) {
                 deposit(
                     out = out,
@@ -485,7 +493,7 @@ object GraphiteGrain {
                 if (!capped) {
                     capped = true
                     cap(
-                        out, cx, cy, travelX, travelY, pressure, coverLean, nextAt, half,
+                        out, cx, cy, travelX, travelY, pressure, coverLean, nextAt, half, base,
                         seed, -1, -1f,
                     )
                 }
@@ -499,7 +507,7 @@ object GraphiteGrain {
         if (station == 0) return tap(points[0], base, seed)
         // And the lifting end gets its dome too.
         cap(
-            out, lastCx, lastCy, travelX, travelY, lastPress, lastLean, lastArc, lastHalf,
+            out, lastCx, lastCy, travelX, travelY, lastPress, lastLean, lastArc, lastHalf, base,
             seed, station + 1, 1f,
         )
         return out.grain()

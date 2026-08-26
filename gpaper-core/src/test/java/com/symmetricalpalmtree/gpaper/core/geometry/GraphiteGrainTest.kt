@@ -179,6 +179,34 @@ class GraphiteGrainTest {
     }
 
     @Test
+    fun `a laid-over stroke ends over the lead's width, not the smear's`() {
+        // The contact patch of a tilted lead is an ellipse: it smears many times sideways but still
+        // leaves the paper over the width of the lead. Capping with a half-disc of the mark's own
+        // half-width puts a blob on the end of a broad stroke.
+        val width = 14f
+        val pts = listOf(
+            StrokePoint(200f, 400f, 0.8f, deg(75f)),
+            StrokePoint(600f, 400f, 0.8f, deg(75f)),
+        )
+        val g = GraphiteGrain.of(pts, width, 808)
+        var beyond = 0f
+        var across = 0f
+        for (i in 0 until g.count) {
+            val past = g.xy[i * 2] - 600f
+            if (past > beyond) beyond = past
+            val off = abs(g.xy[i * 2 + 1] - 400f)
+            if (off > across) across = off
+        }
+        val slack = GraphiteGrain.TOOTH_PITCH_PX + GraphiteGrain.FLECK_MAX_PX
+        assertTrue(
+            "the end ran $beyond past the last cross-section; the lead is only ${width / 2f} wide",
+            beyond <= width / 2f + slack,
+        )
+        // ...while the mark itself is many times wider than that, which is the point.
+        assertTrue("the smear should dwarf the cap ($across vs $beyond)", across > beyond * 3f)
+    }
+
+    @Test
     fun `a stroke ends in a dome, not a chisel`() {
         // A lead meets the paper as a disc, so where it touches down and lifts the ink ends in a
         // half-round. Stopping at the last cross-section leaves a straight cut clean across the
