@@ -654,6 +654,17 @@ the input, or the frame the output is placed in, is wrong.** Also worth keeping:
 at the size it will be looked at.** Every wrong diagnosis in this sequence came from magnifying past
 the scale the defect lives at.
 
+**0.1.17 — the ends were chisels.** With the texture finally right, the artist compared the ends
+against BOOX's own Notes app: theirs finish in a rounded dome, ours in a straight cut clean across
+the mark with corners on it. **A lead meets the paper as a disc**, so the ink ends in a half-round of
+the mark's own half-width — walking out past the end and shrinking the half-width along a circle is
+that disc, drawn the only way this renderer knows how.
+
+Ordering matters: the touch-down cap is laid **before** the body, so everything already on the paper
+keeps its index as the stroke grows, and only the lifting cap moves with the pen — which is what the
+real tip does. The prefix-stability test was tightened rather than loosened to say exactly that: the
+guarantee covers ink already laid down and stops at the pen.
+
 **Left for the device:** the middle of the width curve, and grain density now that the texture is
 even enough to judge it. Both fits were anchored on an artist's estimate of
 *relative* widths at three angles, so 44° is the least constrained point on it.

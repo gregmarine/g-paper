@@ -68,18 +68,27 @@ class GraphiteGrainTest {
 
     @Test
     fun `the grain already laid down does not move as the stroke grows`() {
-        // The live preview and the bake are the same stroke, so the flecks behind the pen
-        // must not shift when the next sample arrives. Stations are placed at fixed arc
-        // length from the first point, which is what makes the prefix stable.
+        // The live preview and the bake are the same stroke, so the flecks behind the pen must not
+        // shift when the next sample arrives. Stations are placed at fixed arc length from the
+        // first point, which is what makes the prefix stable.
+        //
+        // The guarantee is about ink *already laid down*, and stops at the pen. The dome that caps
+        // the lifting end is not laid down — it is the tip, and it travels with the pen exactly as
+        // the real one does, so the comparison ends a lead's width short of it.
         val seed = "growing".hashCode()
         val short = GraphiteGrain.of(line(10), 6f, seed)
         val long = GraphiteGrain.of(line(40), 6f, seed)
         assertTrue("the longer stroke should carry more graphite", long.count > short.count)
+        val tipX = line(10).last().x - 6f
+        var compared = 0
         for (i in 0 until short.count) {
+            if (short.xy[i * 2] > tipX) continue
             assertEquals("x[$i]", short.xy[i * 2], long.xy[i * 2], 0f)
             assertEquals("y[$i]", short.xy[i * 2 + 1], long.xy[i * 2 + 1], 0f)
             assertEquals("level[$i]", short.level[i], long.level[i])
+            compared++
         }
+        assertTrue("nothing was actually compared", compared > short.count / 2)
     }
 
     @Test
@@ -118,8 +127,10 @@ class GraphiteGrainTest {
 
     @Test
     fun `every fleck lands on the mark`() {
-        // Nothing may stray outside the lead's own width plus the jitter that scatters it
-        // off the lattice — a pencil does not spray.
+        // Nothing may stray outside the lead's own width plus the jitter that scatters it off the
+        // lattice — a pencil does not spray. Lengthwise the mark reaches half a width past each
+        // end, and no further: that is the round tip touching down and lifting, and it is bounded
+        // by the same disc it is drawn from.
         val width = 8f
         val pts = listOf(
             StrokePoint(100f, 100f, 0.8f),
@@ -127,13 +138,48 @@ class GraphiteGrainTest {
         )
         val g = GraphiteGrain.of(pts, width, 4242)
         val slack = GraphiteGrain.TOOTH_PITCH_PX + GraphiteGrain.FLECK_MAX_PX
+        val reach = width / 2f + slack
         for (i in 0 until g.count) {
             val x = g.xy[i * 2]
             val y = g.xy[i * 2 + 1]
-            assertTrue("x=$x off the near end", x >= 100f - slack)
-            assertTrue("x=$x off the far end", x <= 300f + slack)
-            assertTrue("y=$y off the mark", abs(y - 100f) <= width / 2f + slack)
+            assertTrue("x=$x off the near end", x >= 100f - reach)
+            assertTrue("x=$x off the far end", x <= 300f + reach)
+            assertTrue("y=$y off the mark", abs(y - 100f) <= reach)
         }
+    }
+
+    @Test
+    fun `a stroke ends in a dome, not a chisel`() {
+        // A lead meets the paper as a disc, so where it touches down and lifts the ink ends in a
+        // half-round. Stopping at the last cross-section leaves a straight cut clean across the
+        // mark, corners and all — which reads as a chisel and not a pencil.
+        val width = 16f
+        val pts = listOf(
+            StrokePoint(200f, 400f, 0.85f),
+            StrokePoint(500f, 400f, 0.85f),
+        )
+        val g = GraphiteGrain.of(pts, width, 606)
+        // How far the ink reaches past the finish, measured at the centreline and at the flank.
+        fun reachBeyond(nearCentre: Boolean): Float {
+            var far = 0f
+            for (i in 0 until g.count) {
+                val y = g.xy[i * 2 + 1]
+                val offAxis = abs(y - 400f)
+                val want = if (nearCentre) offAxis < 2f else offAxis > width / 2f - 2.5f
+                if (!want) continue
+                val x = g.xy[i * 2]
+                if (x > far) far = x
+            }
+            return far - 500f
+        }
+        val centre = reachBeyond(true)
+        val flank = reachBeyond(false)
+        assertTrue("the centreline should run past the last cross-section", centre > width / 4f)
+        assertTrue(
+            "the flank should stop short of the centreline — that is what makes it round " +
+                "(centre $centre, flank $flank)",
+            flank < centre - 1.5f,
+        )
     }
 
     @Test

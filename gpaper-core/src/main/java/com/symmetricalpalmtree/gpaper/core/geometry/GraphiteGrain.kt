@@ -319,6 +319,59 @@ object GraphiteGrain {
 
     // ── The mark ─────────────────────────────────────────────────────────────
 
+    /**
+     * The dome a round tip leaves where it touches down and lifts.
+     *
+     * A stroke that simply stops at its last cross-section ends in a straight cut clean across the
+     * mark, corners and all — a chisel, not a pencil. Nothing in a pencil is straight: the lead
+     * meets the paper as a *disc*, so the ink ends in a half-round of the mark's own half-width.
+     * Walking out past the end and shrinking the half-width along a circle is that disc, drawn the
+     * only way this renderer knows how.
+     *
+     * [sign] is `+1` to cap the finish and `-1` to cap the start; [station0] seeds the hashing away
+     * from the body's own stations so a cap never repeats a cross-section that is already there.
+     */
+    private fun cap(
+        out: Sink,
+        cx: Float,
+        cy: Float,
+        tx: Float,
+        ty: Float,
+        pressure: Float,
+        lean: Float,
+        arc: Float,
+        half: Float,
+        seed: Int,
+        station0: Int,
+        sign: Float,
+    ) {
+        if (half <= TOOTH_PITCH_PX) return
+        var d = TOOTH_PITCH_PX
+        var k = 0
+        while (d < half) {
+            val shrunk = sqrt(half * half - d * d)
+            if (shrunk >= TOOTH_PITCH_PX * 0.5f) {
+                deposit(
+                    out = out,
+                    cx = cx + sign * tx * d,
+                    cy = cy + sign * ty * d,
+                    tx = tx,
+                    ty = ty,
+                    pressure = pressure,
+                    lean = lean,
+                    arc = arc + sign * d,
+                    station = station0 + sign.toInt() * k,
+                    lanes = laneCount(shrunk),
+                    half = shrunk,
+                    seed = seed,
+                )
+            }
+            d += TOOTH_PITCH_PX
+            k++
+            if (out.count >= MAX_FLECKS) return
+        }
+    }
+
     private fun sweep(points: List<StrokePoint>, base: Float, seed: Int): Grain {
         val out = Sink()
         var traveled = 0f
@@ -331,6 +384,14 @@ object GraphiteGrain {
         val turning = 1f - exp(-TOOTH_PITCH_PX / TANGENT_SMOOTH_PX)
         var travelX = 0f
         var travelY = 0f
+        // Whatever the last cross-section was, so the finish can be capped with the same lead.
+        var lastCx = 0f
+        var lastCy = 0f
+        var lastPress = 0f
+        var lastLean = 0f
+        var lastHalf = 0f
+        var lastArc = 0f
+        var capped = false
         for (i in 1 until points.size) {
             val a = points[i - 1]
             val b = points[i]
@@ -365,20 +426,39 @@ object GraphiteGrain {
                 val tilt = a.tilt + t * (b.tilt - a.tilt)
                 leanTilt += (tilt - leanTilt) * smoothing
                 val half = base * widthFactor(leanTilt)
+                val coverLean = coverageFactor(leanTilt)
+                val cx = a.x + t * dx
+                val cy = a.y + t * dy
+                val pressure = a.pressure + t * (b.pressure - a.pressure)
                 deposit(
                     out = out,
-                    cx = a.x + t * dx,
-                    cy = a.y + t * dy,
+                    cx = cx,
+                    cy = cy,
                     tx = travelX,
                     ty = travelY,
-                    pressure = a.pressure + t * (b.pressure - a.pressure),
-                    lean = coverageFactor(leanTilt),
+                    pressure = pressure,
+                    lean = coverLean,
                     arc = nextAt,
                     station = station,
                     lanes = laneCount(half),
                     half = half,
                     seed = seed,
                 )
+                lastCx = cx
+                lastCy = cy
+                lastPress = pressure
+                lastLean = coverLean
+                lastHalf = half
+                lastArc = nextAt
+                // The touch-down dome, laid before the body so everything already on the paper
+                // keeps its place as the stroke grows — only the lifting end moves with the pen.
+                if (!capped) {
+                    capped = true
+                    cap(
+                        out, cx, cy, travelX, travelY, pressure, coverLean, nextAt, half,
+                        seed, -1, -1f,
+                    )
+                }
                 station++
                 nextAt += TOOTH_PITCH_PX
                 if (out.count >= MAX_FLECKS) return out.grain()
@@ -387,6 +467,11 @@ object GraphiteGrain {
         }
         // A path shorter than one pitch never reaches a station; it still left graphite.
         if (station == 0) return tap(points[0], base, seed)
+        // And the lifting end gets its dome too.
+        cap(
+            out, lastCx, lastCy, travelX, travelY, lastPress, lastLean, lastArc, lastHalf,
+            seed, station + 1, 1f,
+        )
         return out.grain()
     }
 
