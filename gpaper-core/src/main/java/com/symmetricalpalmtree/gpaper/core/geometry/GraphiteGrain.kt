@@ -3,6 +3,7 @@ package com.symmetricalpalmtree.gpaper.core.geometry
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -167,6 +168,30 @@ object GraphiteGrain {
     private const val MIN_WIDTH_PX = 1f
 
     /**
+     * How far the lean is averaged over, in px of arc length, before it is allowed to set a width.
+     *
+     * **A digitizer's tilt reading is noisy and the pen's actual angle is not.** A hand cannot roll
+     * a pencil several degrees in a fraction of a millimetre, but the reading does exactly that —
+     * one measured stroke on a NoteAir5C swung 65.7° to 85.6° along its length, which through the
+     * width curve is a 9× to 13× swing in how broad the mark should be. Fed in raw, that becomes
+     * *geometry*: the mark's edges ripple at the sample rate and the stroke grows a fringe of fine
+     * hairs down both sides. An artist called it a pipe cleaner, and reported the same look in
+     * Paintsprout's Wacom app — which drives its pencil width from raw tilt too. Different
+     * renderers, one shared mistake: **noise that becomes shape has to be smoothed; noise that
+     * becomes tone does not.**
+     *
+     * Which is why pressure is deliberately left raw. It sets darkness, and darkness noise reads as
+     * grain — it is doing the same job the tooth is.
+     *
+     * The average is **causal**, over what has already been drawn and never over what comes next.
+     * A centred window would give a point one answer while the pen is still travelling and a
+     * different one once the stroke is finished, so the mark would re-shape itself at pen-up and
+     * again on every reload. Roughly 3 mm at this panel's density — far shorter than a deliberate
+     * roll of the wrist, far longer than the jitter.
+     */
+    private const val TILT_SMOOTH_PX = 40f
+
+    /**
      * Below this lean the mark does not widen at all. A pencil held "upright" is never at zero —
      * a hand deliberately holding one vertical measured a mean of 9° — and a mark that visibly
      * breathed with the last few degrees of an ordinary grip would read as instability rather than
@@ -274,6 +299,10 @@ object GraphiteGrain {
         var traveled = 0f
         var station = 0
         var nextAt = 0f
+        // Exponential, one pole, walked forward with the stations — so it depends only on the path
+        // already covered and a prefix of the stroke renders identically to the whole of it.
+        val smoothing = 1f - exp(-TOOTH_PITCH_PX / TILT_SMOOTH_PX)
+        var leanTilt = points[0].tilt
         for (i in 1 until points.size) {
             val a = points[i - 1]
             val b = points[i]
@@ -289,7 +318,8 @@ object GraphiteGrain {
                 // start: a shading stroke is a hand rolling the pencil over as it travels, and
                 // taking either once would render the gesture as a uniform bar.
                 val tilt = a.tilt + t * (b.tilt - a.tilt)
-                val half = base * widthFactor(tilt)
+                leanTilt += (tilt - leanTilt) * smoothing
+                val half = base * widthFactor(leanTilt)
                 deposit(
                     out = out,
                     cx = a.x + t * dx,
@@ -297,7 +327,7 @@ object GraphiteGrain {
                     tx = tx,
                     ty = ty,
                     pressure = a.pressure + t * (b.pressure - a.pressure),
-                    lean = coverageFactor(tilt),
+                    lean = coverageFactor(leanTilt),
                     arc = nextAt,
                     station = station,
                     lanes = laneCount(half),

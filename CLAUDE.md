@@ -81,6 +81,14 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   disagree on size, **match the firmware** rather than flattening the style: `TouchHelper` exposes
   only style/colour/width (verified by `javap`), so a textured live style cannot be had without
   whatever tilt response it comes with.
+- **Noise that becomes SHAPE must be smoothed; noise that becomes TONE need not be.** A digitizer's
+  tilt jitters several degrees sample to sample and a hand cannot roll a pen that fast — fed raw into
+  a width it fringes both edges of the mark with fine hairs ("pipe cleaner"). `GraphiteGrain` averages
+  the lean over ~40 px of arc, **causally**, so a prefix still renders like the whole stroke; pressure
+  stays raw because it sets darkness and darkness noise reads as grain. Paintsprout's Wacom app has
+  the identical fault (`tiltGain` off raw tilt) — **the shared symptom across two unrelated renderers
+  is what identified the shared input.** When a rendering fault survives redesigning the renderer,
+  suspect the input.
 - **Graphite laid down as CONNECTED geometry looks like hair.** A grain fleck wider than the lattice
   that spaces it must touch its neighbours, and touching flecks become little worms a fleck thick and
   several long — half a millimetre of bristle at 300 dpi, which an artist called a "pipe cleaner".

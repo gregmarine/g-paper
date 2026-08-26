@@ -614,6 +614,26 @@ saturates once the tooth is full, so past that point a growing fleck is the only
 darken with. The whole lattice also came finer (pitch 1.1 → 0.8). Ink mass per tone was held within
 about 10% end to end while all of this moved, checked by simulation before shipping.
 
+**0.1.15 — the pipe cleaner, actually found: noise that becomes shape.** 0.1.13 and 0.1.14 each
+removed something real about the grain and neither touched what the artist was seeing, which was the
+signal that the fault was not in the grain at all. The clue that cracked it was his own: *the Wacom
+app has always looked like this too* — and those two renderers share almost nothing. What they share
+is that **both drive pencil width from raw tilt.**
+
+A digitizer's tilt jitters by several degrees sample to sample; a hand cannot roll a pencil that
+fast. One measured stroke on a NoteAir5C swung 65.7°–85.6° along its length, which through the width
+curve is a 9×–13× swing in how broad the mark should be. Fed in raw that becomes geometry: both
+edges ripple at the sample rate and the stroke grows a fringe of hairs. Rendering the same stroke
+with the reading smoothed put the two side by side and settled it in one image.
+
+The lean is now averaged over ~40 px of arc — **causally**, over the path already covered and never
+over samples that have not arrived, so a prefix still renders identically to the whole stroke.
+Pressure stays raw on purpose. **The rule worth carrying: noise that becomes *shape* must be
+smoothed; noise that becomes *tone* need not be, because there it is doing the same job the tooth
+is.** Two tests pin it — a jittering reading may not wander an edge more than a steady one, and a
+deliberate roll must still broaden the mark, because smoothing must not flatten the gesture it
+exists to render.
+
 **Left for the device:** the middle of the width curve, and grain density now that the texture is
 even enough to judge it. Both fits were anchored on an artist's estimate of
 *relative* widths at three angles, so 44° is the least constrained point on it.

@@ -323,6 +323,59 @@ class GraphiteGrainTest {
     }
 
     @Test
+    fun `a noisy tilt reading does not fringe the mark's edges`() {
+        // A digitizer's tilt jitters; a hand cannot roll a pencil several degrees in a fraction of
+        // a millimetre. Fed in raw it becomes geometry, and the stroke grows a fringe of hairs down
+        // both sides — the "pipe cleaner". The lean is averaged along the path before it sets a
+        // width, so a jittering reading and a clean one must produce edges of the same steadiness.
+        fun edgeRipple(tilts: List<Float>): Float {
+            val pts = tilts.mapIndexed { i, t ->
+                StrokePoint(40f + i * 1.5f, 300f, 0.7f, deg(t))
+            }
+            val g = GraphiteGrain.of(pts, 8f, 99)
+            // Top edge of the mark, sampled per column: how much does it wander?
+            val top = HashMap<Int, Float>()
+            for (i in 0 until g.count) {
+                val x = g.xy[i * 2].toInt()
+                val y = g.xy[i * 2 + 1]
+                if (y < (top[x] ?: Float.MAX_VALUE)) top[x] = y
+            }
+            val xs = top.keys.sorted().drop(8).dropLast(8)
+            if (xs.size < 20) return 0f
+            var sum = 0f
+            for (i in 1 until xs.size) sum += abs(top[xs[i]]!! - top[xs[i - 1]]!!)
+            return sum / (xs.size - 1)
+        }
+        val steady = edgeRipple(List(260) { 60f })
+        val jittery = edgeRipple(List(260) { i -> 60f + (if (i % 2 == 0) 5f else -5f) })
+        assertTrue(
+            "a jittering tilt made the edge wander $jittery vs $steady on a steady one",
+            jittery < steady * 1.6f + 0.6f,
+        )
+    }
+
+    @Test
+    fun `a deliberate roll still broadens the mark`() {
+        // Smoothing must not flatten the gesture it exists to render: laying the pen over across a
+        // stroke is a real change and has to survive.
+        val pts = (0..300).map {
+            StrokePoint(40f + it * 2f, 300f, 0.7f, deg(5f + it * 0.25f))
+        }
+        val g = GraphiteGrain.of(pts, 8f, 5)
+        fun spreadNear(x: Float): Float {
+            var lo = Float.MAX_VALUE; var hi = -Float.MAX_VALUE
+            for (i in 0 until g.count) {
+                if (abs(g.xy[i * 2] - x) > 25f) continue
+                val y = g.xy[i * 2 + 1]
+                if (y < lo) lo = y
+                if (y > hi) hi = y
+            }
+            return hi - lo
+        }
+        assertTrue("the roll must still show", spreadNear(580f) > spreadNear(120f) * 2f)
+    }
+
+    @Test
     fun `tilt does not disturb the grain's determinism`() {
         val pts = (0 until 40).map {
             StrokePoint(10f + it * 4f, 50f, 0.6f, deg(10f + it))
