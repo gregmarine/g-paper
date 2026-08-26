@@ -688,6 +688,19 @@ excess accumulates along the outline as a dark arc. Corrected by asking for cove
 *area* rather than per lane, and by stopping the cap while its strips are still a tooth wide instead
 of chasing them to nothing.
 
+**0.1.20 — and the "glop" was the same transient again, in the filter I had not gone back to fix.**
+0.1.18 seeded the *travelled direction* from a chord because seeding from the first sample gave every
+broad stroke a hook. The **lean** filter was left seeded from `points[0].tilt` — and a digitizer's
+tilt at the instant of touch-down is the least trustworthy reading it produces, the pen being barely
+on the glass. Read low, a stroke the artist began with the lead already laid over starts narrow and
+dark and flares open across the next few millimetres: an arrowhead with a dense nub on the point.
+Reproducing a roll-in synthetically drew that shape exactly and settled it. Seeded now from the
+arc-length-weighted mean over the smoothing window, like the tangent.
+
+**The lesson, having now paid for it twice: fix a class of bug everywhere it lives, not where it was
+found.** Two filters were introduced together, one seed was corrected, and the other went on
+producing a differently-shaped version of the same artifact for two more releases.
+
 **A wrong turn on the way, worth recording.** The first attempt reshaped the cap into an ellipse
 reaching only the lead's radius — on the theory that a tilted lead leaves the paper over its own
 width rather than the smear's. That is sound physics and it looked far worse: on an 85 px half-width

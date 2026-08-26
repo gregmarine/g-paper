@@ -94,6 +94,11 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   density. The excess landed on the cap's outline (its outermost lanes sit there by construction) and
   drew a dark bead round the end of every stroke. Ask for coverage per unit of **area**, not per lane
   (0.1.19), and stop a cap while its strips are still a tooth wide.
+- **Fix a class of bug everywhere it lives, not where it was found.** The tangent and lean filters
+  were introduced together; the tangent's seed was corrected in 0.1.18 and the lean's was not, so it
+  went on producing a differently-shaped version of the same artifact (a wedge instead of a hook) for
+  two more releases. **A digitizer's readings at touch-down are its least reliable** — the pen is
+  barely on the glass — so no filter may be seeded from the first sample.
 - **A filter added to remove noise brings a transient of its own, and a stroke's start puts it on
   display.** The tangent smoother (0.1.16) was seeded from the first pair of samples and began every
   broad mark with a hook — the touch-down cap thrown along a wrong heading, plus the filter swinging

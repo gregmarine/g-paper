@@ -213,6 +213,41 @@ class GraphiteGrainTest {
     }
 
     @Test
+    fun `a stroke laid over from the first sample does not begin as a wedge`() {
+        // A digitizer's tilt at touch-down is its least reliable reading. Seeding the lean filter
+        // there makes a stroke the artist began with the lead already over start narrow and dark
+        // and flare open over the next few millimetres — an arrowhead with a nub on the point.
+        // One bad opening sample must not reshape the start of the mark.
+        fun startWidth(openingTilt: Float): Float {
+            val pts = (0..240).map {
+                StrokePoint(
+                    x = 100f + it * 2.5f,
+                    y = 300f,
+                    pressure = 0.8f,
+                    tilt = deg(if (it == 0) openingTilt else 72f),
+                )
+            }
+            val g = GraphiteGrain.of(pts, 12f, 313)
+            var lo = Float.MAX_VALUE
+            var hi = -Float.MAX_VALUE
+            for (i in 0 until g.count) {
+                val x = g.xy[i * 2]
+                if (x < 110f || x > 150f) continue
+                val y = g.xy[i * 2 + 1]
+                if (y < lo) lo = y
+                if (y > hi) hi = y
+            }
+            return hi - lo
+        }
+        val honest = startWidth(72f)
+        val badOpeningSample = startWidth(6f)
+        assertTrue(
+            "one low opening sample narrowed the start from $honest to $badOpeningSample",
+            badOpeningSample > honest * 0.8f,
+        )
+    }
+
+    @Test
     fun `a stroke ends in a dome, not a chisel`() {
         // A lead meets the paper as a disc, so where it touches down and lifts the ink ends in a
         // half-round. Stopping at the last cross-section leaves a straight cut clean across the

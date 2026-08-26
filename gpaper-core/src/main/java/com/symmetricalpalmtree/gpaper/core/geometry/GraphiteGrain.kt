@@ -310,6 +310,28 @@ object GraphiteGrain {
      */
     fun coverageFactor(tilt: Float): Float = 1f - TILT_LIGHTEN * lean(tilt)
 
+    /**
+     * The lean to start the filter at: the mean over the first [TILT_SMOOTH_PX] of travel, so there
+     * is no transient to climb out of. Weighted by arc length rather than by sample, because a pen
+     * that slows down delivers many samples over very little paper and would otherwise dominate.
+     */
+    private fun seedLean(points: List<StrokePoint>): Float {
+        var reach = 0f
+        var weighted = 0f
+        var i = 1
+        while (i < points.size && reach < TILT_SMOOTH_PX) {
+            val a = points[i - 1]
+            val b = points[i]
+            val step = sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))
+            if (step > 0f) {
+                weighted += (a.tilt + b.tilt) * 0.5f * step
+                reach += step
+            }
+            i++
+        }
+        return if (reach > 0f) weighted / reach else points[0].tilt
+    }
+
     /** How far past upright the pen is leaned, `0`..`1`. */
     private fun lean(tilt: Float): Float {
         val degrees = Math.toDegrees(tilt.toDouble()).toFloat()
@@ -403,7 +425,17 @@ object GraphiteGrain {
         // Exponential, one pole, walked forward with the stations — so it depends only on the path
         // already covered and a prefix of the stroke renders identically to the whole of it.
         val smoothing = 1f - exp(-TOOTH_PITCH_PX / TILT_SMOOTH_PX)
-        var leanTilt = points[0].tilt
+        // Seeded from the mean lean over the smoothing window, never from the first sample.
+        //
+        // Same transient as the travelled direction, and it shows up as a wedge instead of a hook.
+        // A digitizer's tilt at the instant of touch-down is the least trustworthy reading it
+        // produces — the pen is barely on the glass — and seeding the filter there makes the mark
+        // begin at whatever that first sample happened to say and take a whole window to climb to
+        // the angle the pen is really held at. Read low, and a stroke the artist began with the
+        // lead already laid over starts narrow and dark and flares out over the next few
+        // millimetres: an arrowhead with a dense nub on the point, which is exactly as much like
+        // graphite as it sounds.
+        var leanTilt = seedLean(points)
         val turning = 1f - exp(-TOOTH_PITCH_PX / TANGENT_SMOOTH_PX)
         // Seed the travelled direction from a chord across the whole smoothing window, never from
         // the first pair of samples.
