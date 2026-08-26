@@ -714,6 +714,27 @@ stroke held flat stays paler than one held upright — the artist's earlier requ
 stroke no longer flashes dark where the pen passes through vertical. Pinned by a pair of tests that
 state both halves.
 
+**The knot at the start of a broad stroke is understood, and not yet cured.** It is not the caps
+(it predates them, verified by thresholding a 0.1.16 build) and not the roll-in (softening the
+darkness coupling in 0.1.21 changed the artist's stroke by two pixels out of a thousand). It is the
+**path**: a pen touches down and the hand settles, a few pixels' excursion before the stroke sets
+off. On a fine lead that is invisible; on a lead laid over — ten times broader — the mark folds
+across itself there, and graphite laid twice on the same paper composites to solid black. Reproduced
+synthetically, it draws the same Y-shaped knot the panel shows.
+
+**Damping the path does not fix it, and the attempt is worth recording so nobody repeats it.** A
+plain running average lags, which shortens every stroke and pulls its end cap inside the mark — a
+test for the shape of an end caught that immediately. Adding a trend term to cancel the lag makes the
+filter *track* the path faithfully, excursion included: measured peak pile-up stayed at 13–16 flecks
+per pixel at every strength from 6 px to 30 px, while the clean baseline got *worse* (4 → 10). **A
+filter can lag or it can damp a sustained excursion; it cannot do both.** Reverted rather than
+shipped.
+
+What would actually cure it is architectural: a single continuous stroke should deposit **once** on
+any given paper — the lead drags, it does not stamp twice — which means compositing a stroke's grain
+through one alpha mask rather than fleck by fleck. Crossings *between* strokes would still darken,
+which is right. Not attempted; it is a real change to how every style renders.
+
 **A wrong turn on the way, worth recording.** The first attempt reshaped the cap into an ellipse
 reaching only the lead's radius — on the theory that a tilted lead leaves the paper over its own
 width rather than the smear's. That is sound physics and it looked far worse: on an 85 px half-width

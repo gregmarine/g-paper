@@ -236,6 +236,7 @@ object GraphiteGrain {
      */
     private const val TANGENT_SMOOTH_PX = 10f
 
+
     /**
      * Below this lean the mark does not widen at all. A pencil held "upright" is never at zero —
      * a hand deliberately holding one vertical measured a mean of 9° — and a mark that visibly

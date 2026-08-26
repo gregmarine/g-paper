@@ -94,6 +94,15 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   density. The excess landed on the cap's outline (its outermost lanes sit there by construction) and
   drew a dark bead round the end of every stroke. Ask for coverage per unit of **area**, not per lane
   (0.1.19), and stop a cap while its strips are still a tooth wide.
+- **A filter can lag or it can damp a sustained excursion — not both.** Damping the *path* to remove
+  a pen-landing wobble was tried and reverted: a plain average lags, which shortens every stroke and
+  pulls its end cap inside the mark, and a trend term that cancels the lag makes the filter track the
+  excursion faithfully instead of absorbing it (measured: pile-up unchanged at every strength, clean
+  baseline worse). Position noise is not tilt noise; the same tool does not work on it.
+- **Overlap within ONE stroke composites to solid black.** A pen-landing wobble folds a laid-over
+  mark across itself and leaves a knot. Curing it properly means a stroke depositing **once** on any
+  paper — one alpha mask per stroke rather than fleck-by-fleck — since a lead drags rather than
+  stamping twice; crossings *between* strokes should still darken. Not done.
 - **When one input drives two outputs in opposite directions, they must not both be instantaneous.**
   Tilt makes a mark broader *and* paler, so read from the same instant a brief near-upright moment is
   ten times narrower and twice as dark at once — a black nub, and touch-down is where a pen is most
