@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.10**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.11**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -179,13 +179,13 @@ migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. All live mappings above are confirmed on-device
 (BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status at v0.1.10 (`core/canvas/StrokeRenderer.kt`):
+Committed-renderer status at v0.1.11 (`core/canvas/StrokeRenderer.kt`):
 `PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path),
 `FOUNTAIN` (pressure-modulated width) and `PENCIL` (graphite grain — 0.1.7) render for
 real; `BRUSH` and `CALLIGRAPHY` still render as `PEN`.
 The enum may grow; hosts should treat unknown persisted values as `PEN`.
 
-**`PENCIL` (0.1.7; tilt in 0.1.9, refitted in 0.1.10).** Graphite is laid down as a scatter of
+**`PENCIL` (0.1.7; tilt in 0.1.9, refitted in 0.1.10, grain density in 0.1.11).** Graphite is laid down as a scatter of
 flecks on the paper's tooth with bare paper between them, not as a tinted line. **Pressure
 darkens; tilt broadens and lightens.** Leaning on the pencil fills in more of the tooth and darkens what lands, without
 moving the width; laying it over draws with the flank of the lead rather than its point, and
@@ -194,7 +194,9 @@ leaves less of itself on any one peak, which is why shading with the side of a p
 out grey however hard you lean. Measured against an artist's eye on a NoteAir5C: ≈1× wide at
 9°, ≈4.9× at 44°, ≈10.9× at 75°. A mark's apparent width comes
 out roughly `width + 2 px` at any one angle, the bleed of one fleck; below about 2 px a lead
-stops getting finer. Hosts choosing distinguishable pencil sizes should space them by more
+stops getting finer. How much graphite lands inside that width was set by photographing strokes
+live on a NoteAir5C's panel and again after the bake, and comparing ink per unit length — the
+two covered the same width and the bake was depositing about 30% less inside it (0.1.11). Hosts choosing distinguishable pencil sizes should space them by more
 than that.
 
 **Tilt is supplied per-model, and zero everywhere else.** BOOX puts `tiltX`/`tiltY` on every

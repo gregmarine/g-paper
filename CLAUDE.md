@@ -81,6 +81,18 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   disagree on size, **match the firmware** rather than flattening the style: `TouchHelper` exposes
   only style/colour/width (verified by `javap`), so a textured live style cannot be had without
   whatever tilt response it comes with.
+- **A binary threshold cannot measure a texture whose nature is partial coverage.** Comparing a
+  photographed live stroke against its bake, thresholding high enough to segment cleanly made the
+  baked bands read ~30% narrower — the threshold was discarding pale outer flecks, and it inflated
+  the coverage measured inside the band at the same time, so width and density were entangled and
+  both wrong. Threshold-free statistics settle it: **total ink mass per unit length**, and the
+  profile's second moment. At a threshold low enough to keep the pale flecks the extents matched
+  within 4%.
+- **When a correction is aimed at one axis, keep it flat across the others.** 0.1.11 raised grain
+  density by a factor deliberately constant over the whole pressure range, because the light-to-hard
+  response had already been approved — a density fix that also moved pressure would have undone a
+  settled decision while appearing to fix something else. The same logic pins the upright width
+  anchor when the tilt curve is retuned.
 - **Measure the device before explaining it.** Phase 11 lost a round trip to an inference from
   `NoteConstant.CHARCOAL_STROKE_WIDTH_EXTRA_SCALE` — a constant BOOX's *own app* applies, reasoned
   from a finding about the NeoPen *software* renderers, a different code path from the firmware

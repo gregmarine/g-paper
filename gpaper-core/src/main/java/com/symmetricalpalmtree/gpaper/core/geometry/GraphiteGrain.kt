@@ -19,6 +19,12 @@ import kotlin.math.sqrt
  * scatter: given a path and how hard the hand pressed along it, it says which specks of
  * tooth caught graphite and how much each one caught.
  *
+ * The three constants that decide *how much* graphite lands — [EDGE_BARE], [SKATE_DEPTH] and
+ * [FLECK_PX] — were set by photographing three strokes live on a NoteAir5C's panel and again after
+ * they baked, then comparing total ink per unit length. The two covered the same width; the bake
+ * was laying down about 30% less inside it. They were raised together, by a factor flat across the
+ * whole pressure range, so the light-to-hard response the artist had already approved did not move.
+ *
  * **The texture is spatial, not tonal, and that is the whole point on e-ink.** A panel with
  * a handful of grey levels will dither any continuous grey we hand it, inventing a texture
  * of its own on top of ours; a mark already built out of black flecks and white paper needs
@@ -87,7 +93,7 @@ object GraphiteGrain {
      * hard-pressed line is a line rather than a dotted one, while an isolated fleck at the
      * pale end is still a speck of grit and not a pinprick.
      */
-    const val FLECK_PX: Float = 2.3f
+    const val FLECK_PX: Float = 2.55f
 
     /**
      * How many darknesses a fleck may have. Three, and few on purpose: tone here is supposed
@@ -109,8 +115,13 @@ object GraphiteGrain {
      * How much coverage the rim of the mark loses relative to its core, and how sharply.
      * A pencil tip is round: its centre bears on the paper and its edge merely grazes it, so
      * a mark thins out toward both sides instead of ending at a wall.
+     *
+     * Softened from 0.55 after photographing the same three strokes live on the panel and again
+     * after the bake: the two covered the **same width**, and the bake simply had less graphite
+     * inside it. Most of the shortfall was here — a mark that gives up half its coverage at the
+     * rim spends a lot of its width on almost nothing.
      */
-    private const val EDGE_BARE = 0.55f
+    private const val EDGE_BARE = 0.32f
     private const val EDGE_POW = 1.6f
 
     /**
@@ -120,7 +131,7 @@ object GraphiteGrain {
      * run and [SKATE_DEPTH] how much coverage it can steal at its lightest.
      */
     private const val SKATE_LEN_PX = 26f
-    private const val SKATE_DEPTH = 0.28f
+    private const val SKATE_DEPTH = 0.16f
 
     /**
      * Pressure curve. BOOX digitizers saturate — a firm stroke pins at the ceiling and stays

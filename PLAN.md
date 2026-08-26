@@ -473,7 +473,7 @@ MIP11 for the generic engine on LCD. Live ink is the user's eye; committed grain
   the most likely thing to want moving.
 
 ### Phase 11 — Tilt on Onyx: the pencil's other half (post-v0.1.0)
-**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.9, then 0.1.10 (both published)
+**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.9, 0.1.10, 0.1.11 (all published)
 
 Opened by Phase 10's own device pass. The pencil's grain was right and its *width* was not: laid
 over, the firmware's live ink drew several times wider than the bake, and the mark visibly collapsed
@@ -537,7 +537,26 @@ Anchored at 0.45 at full lean, the figure Paintsprout's Wacom app judged against
 Cost check, since the curve got much steeper: a full-screen broad lead laid flat is ≈47k flecks —
 three `drawPoints` calls, and well inside the 240k cap.
 
-**Left for the device:** the middle of the curve. Both fits were anchored on an artist's estimate of
+**0.1.11 — grain density, set by photograph rather than by eye.** The artist photographed the same
+three strokes live on the panel and again after the bake. Measuring them settled two things that
+looking could not.
+
+**The width was already right, and the first reading said otherwise.** Thresholding the photos
+high enough to segment cleanly made the baked bands look ~30% narrower — but that was the threshold
+discarding the bake's pale outer flecks. At a threshold low enough to keep them the extents match
+within 4% at all three angles. *A binary threshold cannot measure a texture whose whole nature is
+partial coverage;* the honest statistics are threshold-free ones. Total ink mass per unit length
+was the one that answered it.
+
+**By that measure the bake laid down ~30% less graphite — and by the same amount at every angle.**
+Flat across tilt is what identifies the cause: the upright stroke gets no tilt-lightening at all and
+was still 0.68×, so this was baseline coverage, not the lightening being too strong. [EDGE_BARE]
+(0.55 → 0.32), [SKATE_DEPTH] (0.28 → 0.16) and [FLECK_PX] (2.3 → 2.55) came up together, chosen so
+the factor is **flat across the whole pressure range** — the light-to-hard response had already been
+approved and must not move while fixing something else. Most of it was the rim: a mark giving up
+half its coverage at the edge spends a lot of its width on almost nothing.
+
+**Left for the device:** the middle of the width curve. Both fits were anchored on an artist's estimate of
 *relative* widths at three angles, so 44° is the least constrained point on it.
 
 ## Standing Open Questions (ask as they become relevant)
