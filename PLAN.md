@@ -665,6 +665,20 @@ keeps its index as the stroke grows, and only the lifting cap moves with the pen
 real tip does. The prefix-stability test was tightened rather than loosened to say exactly that: the
 guarantee covers ink already laid down and stops at the pen.
 
+**0.1.18 — the smoothing filter had a startup transient, and it began every broad stroke with a
+hook.** Introduced by 0.1.16 and spotted by the artist on the panel: only the widest strokes did it,
+which is the signature of an error multiplied by the half-width. The tangent filter was **seeded
+from the first pair of samples** — the single noisiest direction measurement in a stroke — and two
+things hang on that seed: the touch-down dome is thrown backwards along it (a half-disc of the
+mark's half-width, aimed tens of degrees wrong) and the filter then swings for a window's worth of
+travel as it converges, sweeping the first cross-sections through a curve. Seeded instead from a
+**chord across the whole smoothing window**, there is no transient to converge from — the seed is
+already the answer the filter would have settled on.
+
+**Worth carrying: a filter added to remove noise brings a transient of its own, and at a stroke's
+start the transient is on display.** Check the beginning of a mark whenever smoothing is introduced
+anywhere in this renderer.
+
 **Left for the device:** the middle of the width curve, and grain density now that the texture is
 even enough to judge it. Both fits were anchored on an artist's estimate of
 *relative* widths at three angles, so 44° is the least constrained point on it.

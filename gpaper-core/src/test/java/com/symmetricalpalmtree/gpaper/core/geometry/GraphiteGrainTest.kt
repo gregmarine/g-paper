@@ -149,6 +149,36 @@ class GraphiteGrainTest {
     }
 
     @Test
+    fun `a broad stroke does not begin with a hook`() {
+        // Seeded from the first pair of samples — the noisiest direction measurement in a stroke —
+        // the touch-down dome is thrown backwards along a wrong heading and the tangent filter
+        // swings as it converges, curling a comma out of the start. Both errors scale with the
+        // half-width, so this is checked on a broad mark: nothing at the start may sit off to the
+        // side of the path the pen actually took.
+        val jitter = floatArrayOf(0.4f, -0.35f, 0.3f, -0.45f, 0.25f, -0.3f, 0.35f, -0.25f)
+        val pts = (0..200).map {
+            StrokePoint(
+                x = 200f + it * 3f + jitter[it % jitter.size],
+                y = 500f + jitter[(it * 3) % jitter.size],
+                pressure = 0.8f,
+                tilt = deg(75f),
+            )
+        }
+        val g = GraphiteGrain.of(pts, 14f, 4141)
+        // Everything laid near the start must stay within the mark's own half-width of the path,
+        // which runs flat along y = 500. A hook is ink that swings well outside that.
+        val half = 14f / 2f * GraphiteGrain.widthFactor(deg(75f))
+        val allowed = half + GraphiteGrain.TOOTH_PITCH_PX + GraphiteGrain.FLECK_MAX_PX + 1f
+        var worst = 0f
+        for (i in 0 until g.count) {
+            if (g.xy[i * 2] > 200f + half) continue   // only the start
+            val off = abs(g.xy[i * 2 + 1] - 500f)
+            if (off > worst) worst = off
+        }
+        assertTrue("the start swung $worst off the path, allowed $allowed", worst <= allowed)
+    }
+
+    @Test
     fun `a stroke ends in a dome, not a chisel`() {
         // A lead meets the paper as a disc, so where it touches down and lifts the ink ends in a
         // half-round. Stopping at the last cross-section leaves a straight cut clean across the

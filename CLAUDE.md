@@ -88,6 +88,12 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   grain tens of pixels out of line and the mark grows bristles ("pipe cleaner", 0.1.16). Smoothed over
   ~10 px of arc, causally. Paintsprout's Wacom app builds its mesh normals the same way and has the
   same fault.
+- **A filter added to remove noise brings a transient of its own, and a stroke's start puts it on
+  display.** The tangent smoother (0.1.16) was seeded from the first pair of samples and began every
+  broad mark with a hook — the touch-down cap thrown along a wrong heading, plus the filter swinging
+  as it converged, both scaled by the half-width. Seed from a **chord across the whole smoothing
+  window** instead: no transient, because the seed is already where the filter would settle. Check
+  the beginning of a mark whenever smoothing is introduced.
 - **When a rendering fault survives redesigning the renderer, the renderer is not the problem** — the
   input, or the frame the output is placed in, is. Three releases of grain work changed nothing the
   artist could see, because the grain was never wrong.

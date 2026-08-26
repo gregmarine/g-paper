@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.17**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.18**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -179,7 +179,7 @@ migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. All live mappings above are confirmed on-device
 (BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status at v0.1.17 (`core/canvas/StrokeRenderer.kt`):
+Committed-renderer status at v0.1.18 (`core/canvas/StrokeRenderer.kt`):
 `PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path),
 `FOUNTAIN` (pressure-modulated width) and `PENCIL` (graphite grain — 0.1.7) render for
 real; `BRUSH` and `CALLIGRAPHY` still render as `PEN`.

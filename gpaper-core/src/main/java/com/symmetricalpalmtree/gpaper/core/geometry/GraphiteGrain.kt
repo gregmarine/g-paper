@@ -382,8 +382,38 @@ object GraphiteGrain {
         val smoothing = 1f - exp(-TOOTH_PITCH_PX / TILT_SMOOTH_PX)
         var leanTilt = points[0].tilt
         val turning = 1f - exp(-TOOTH_PITCH_PX / TANGENT_SMOOTH_PX)
+        // Seed the travelled direction from a chord across the whole smoothing window, never from
+        // the first pair of samples.
+        //
+        // Seeded from one segment, a stroke begins with a **hook**. The first pair of samples is
+        // the single noisiest direction measurement there is, and two things are hung on it: the
+        // touch-down dome is thrown backwards along it — a half-disc of the mark's half-width,
+        // aimed tens of degrees wrong — and the filter then swings for a smoothing window's worth
+        // of travel as it converges, sweeping the first cross-sections through a curve. Both
+        // errors scale with the half-width, so a fine lead starts cleanly and a lead laid over
+        // starts with a comma curling out of it. A chord has no transient to converge from: it is
+        // already the answer the filter would have settled on.
         var travelX = 0f
         var travelY = 0f
+        run {
+            val first = points[0]
+            var reach = 0f
+            var i = 1
+            while (i < points.size - 1 && reach < TANGENT_SMOOTH_PX) {
+                val a = points[i - 1]
+                val b = points[i]
+                reach += sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))
+                i++
+            }
+            val ahead = points[i]
+            val sx = ahead.x - first.x
+            val sy = ahead.y - first.y
+            val len = sqrt(sx * sx + sy * sy)
+            if (len > 1e-6f) {
+                travelX = sx / len
+                travelY = sy / len
+            }
+        }
         // Whatever the last cross-section was, so the finish can be capped with the same lead.
         var lastCx = 0f
         var lastCy = 0f
