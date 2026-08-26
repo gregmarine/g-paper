@@ -236,6 +236,29 @@ object GraphiteGrain {
      */
     private const val TANGENT_SMOOTH_PX = 10f
 
+    /**
+     * How far into a stroke to look for the pen still arriving, in px of arc.
+     *
+     * **A pen landing is not a mark.** It touches, the hand settles, and the recorded path takes a
+     * small excursion — out and back, or a little loop — before the stroke sets off. On a fine lead
+     * nobody would ever see it. On a lead laid over, ten times broader, the mark **folds across
+     * itself** there, and graphite laid twice on the same paper composites to solid black: a knot at
+     * the start of every broad stroke, shaped like a Y where the mark crosses back over its own
+     * edge. It is neither the grain nor the cap, which is why work on both left it untouched.
+     *
+     * It cannot be filtered away either. Damping the path was tried and reverted: a plain average
+     * lags, which shortens every stroke and pulls its end cap inside the mark, and a trend term that
+     * cancels the lag makes the filter *track* the excursion rather than absorb it. A filter can lag
+     * or it can damp a sustained excursion — not both.
+     *
+     * So the arrival is dropped instead of smoothed. Inside this window the last sample at which the
+     * pen was travelling **against** the direction the stroke turned out to go is found, and the mark
+     * starts after it: whatever the hand did while landing is discarded, and everything from the
+     * moment the stroke committed is kept exactly. A clean touch-down never travels backwards, so it
+     * trims nothing at all.
+     */
+    private const val LANDING_TRIM_PX = 25f
+
 
     /**
      * Below this lean the mark does not widen at all. A pencil held "upright" is never at zero —
@@ -336,10 +359,10 @@ object GraphiteGrain {
      * transient to climb out of. Weighted by arc length rather than by sample, because a pen
      * that slows down delivers many samples over very little paper and would otherwise dominate.
      */
-    private fun seedLean(points: List<StrokePoint>, window: Float): Float {
+    private fun seedLean(points: List<StrokePoint>, from: Int, window: Float): Float {
         var reach = 0f
         var weighted = 0f
-        var i = 1
+        var i = from + 1
         while (i < points.size && reach < window) {
             val a = points[i - 1]
             val b = points[i]
@@ -350,7 +373,7 @@ object GraphiteGrain {
             }
             i++
         }
-        return if (reach > 0f) weighted / reach else points[0].tilt
+        return if (reach > 0f) weighted / reach else points[from].tilt
     }
 
     /** How far past upright the pen is leaned, `0`..`1`. */
@@ -438,6 +461,67 @@ object GraphiteGrain {
         return (exact / lanes).coerceIn(0f, 1f)
     }
 
+    /**
+     * Unit direction of the chord from `points[from]` to the sample [window] px of arc later —
+     * the direction a stretch of path is *going*, rather than what one pair of samples measured.
+     * Returns `0, 0` for a path with no length. Writes into [into] to avoid an allocation per call.
+     */
+    private fun chordDirection(
+        points: List<StrokePoint>,
+        from: Int,
+        window: Float,
+        into: FloatArray,
+    ) {
+        into[0] = 0f
+        into[1] = 0f
+        if (from >= points.size - 1) return
+        var reach = 0f
+        var i = from + 1
+        while (i < points.size - 1 && reach < window) {
+            val a = points[i - 1]
+            val b = points[i]
+            reach += sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))
+            i++
+        }
+        val first = points[from]
+        val ahead = points[i]
+        val sx = ahead.x - first.x
+        val sy = ahead.y - first.y
+        val len = sqrt(sx * sx + sy * sy)
+        if (len > 1e-6f) {
+            into[0] = sx / len
+            into[1] = sy / len
+        }
+    }
+
+    /**
+     * Where the stroke actually begins: past the pen's arrival. See [LANDING_TRIM_PX].
+     * [dirX]/[dirY] is the direction the stroke turned out to go.
+     */
+    private fun landingEnd(points: List<StrokePoint>, dirX: Float, dirY: Float): Int {
+        var reach = 0f
+        var last = 0
+        var i = 1
+        while (i < points.size && reach < LANDING_TRIM_PX) {
+            val a = points[i - 1]
+            val b = points[i]
+            val sx = b.x - a.x
+            val sy = b.y - a.y
+            val step = sqrt(sx * sx + sy * sy)
+            if (step > 0f) {
+                // Anything more than sixty degrees off where the stroke is going is the pen still
+                // arriving. Backward steps are the obvious case; the *kink* where the path rejoins
+                // the stroke's line is the one that catches you out, because trimming only the
+                // backward part leaves a corner sharp enough to fold the mark over itself all over
+                // again.
+                if ((sx * dirX + sy * dirY) / step < 0.5f) last = i
+                reach += step
+            }
+            i++
+        }
+        return last
+    }
+
     private fun sweep(points: List<StrokePoint>, base: Float, seed: Int): Grain {
         val out = Sink()
         var traveled = 0f
@@ -445,6 +529,12 @@ object GraphiteGrain {
         var nextAt = 0f
         // Exponential, one pole, walked forward with the stations — so it depends only on the path
         // already covered and a prefix of the stroke renders identically to the whole of it.
+        // The arrival is found first, with a chord long enough to see past it, and everything after
+        // is seeded from where the stroke actually begins — otherwise the seeds are themselves
+        // measured across the wobble they exist to be immune to.
+        val dir = FloatArray(2)
+        chordDirection(points, 0, LANDING_TRIM_PX * 2f, dir)
+        val from = landingEnd(points, dir[0], dir[1])
         val smoothing = 1f - exp(-TOOTH_PITCH_PX / TILT_SMOOTH_PX)
         // Seeded from the mean lean over the smoothing window, never from the first sample.
         //
@@ -456,9 +546,9 @@ object GraphiteGrain {
         // lead already laid over starts narrow and dark and flares out over the next few
         // millimetres: an arrowhead with a dense nub on the point, which is exactly as much like
         // graphite as it sounds.
-        var leanTilt = seedLean(points, TILT_SMOOTH_PX)
+        var leanTilt = seedLean(points, from, TILT_SMOOTH_PX)
         val covering = 1f - exp(-TOOTH_PITCH_PX / COVER_SMOOTH_PX)
-        var coverTilt = seedLean(points, COVER_SMOOTH_PX)
+        var coverTilt = seedLean(points, from, COVER_SMOOTH_PX)
         val turning = 1f - exp(-TOOTH_PITCH_PX / TANGENT_SMOOTH_PX)
         // Seed the travelled direction from a chord across the whole smoothing window, never from
         // the first pair of samples.
@@ -471,27 +561,9 @@ object GraphiteGrain {
         // errors scale with the half-width, so a fine lead starts cleanly and a lead laid over
         // starts with a comma curling out of it. A chord has no transient to converge from: it is
         // already the answer the filter would have settled on.
-        var travelX = 0f
-        var travelY = 0f
-        run {
-            val first = points[0]
-            var reach = 0f
-            var i = 1
-            while (i < points.size - 1 && reach < TANGENT_SMOOTH_PX) {
-                val a = points[i - 1]
-                val b = points[i]
-                reach += sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))
-                i++
-            }
-            val ahead = points[i]
-            val sx = ahead.x - first.x
-            val sy = ahead.y - first.y
-            val len = sqrt(sx * sx + sy * sy)
-            if (len > 1e-6f) {
-                travelX = sx / len
-                travelY = sy / len
-            }
-        }
+        chordDirection(points, from, TANGENT_SMOOTH_PX, dir)
+        var travelX = dir[0]
+        var travelY = dir[1]
         // Whatever the last cross-section was, so the finish can be capped with the same lead.
         var lastCx = 0f
         var lastCy = 0f
@@ -500,7 +572,7 @@ object GraphiteGrain {
         var lastHalf = 0f
         var lastArc = 0f
         var capped = false
-        for (i in 1 until points.size) {
+        for (i in from + 1 until points.size) {
             val a = points[i - 1]
             val b = points[i]
             val dx = b.x - a.x
@@ -575,7 +647,7 @@ object GraphiteGrain {
             traveled += segLen
         }
         // A path shorter than one pitch never reaches a station; it still left graphite.
-        if (station == 0) return tap(points[0], base, seed)
+        if (station == 0) return tap(points[from], base, seed)
         // And the lifting end gets its dome too.
         cap(
             out, lastCx, lastCy, travelX, travelY, lastPress, lastLean, lastArc, lastHalf,

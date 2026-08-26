@@ -722,6 +722,18 @@ off. On a fine lead that is invisible; on a lead laid over — ten times broader
 across itself there, and graphite laid twice on the same paper composites to solid black. Reproduced
 synthetically, it draws the same Y-shaped knot the panel shows.
 
+**0.1.22 fixes it by dropping the arrival instead of smoothing it.** Whatever the hand did while
+landing is not a mark, so the renderer finds the last sample within 25 px of arc at which the pen was
+travelling more than 60° off the direction the stroke turned out to go, and starts there. A clean
+touch-down never travels off-course, so it is trimmed by nothing — pinned by a test.
+
+**Two attempts were needed and the first one is instructive.** Trimming only *backward* steps left
+the path rejoining the stroke's line at a **kink** sharp enough to fold the mark over itself all over
+again: measured pile-up 10 flecks per pixel against 4 for a clean start, barely better than the 13 it
+began at. The rule has to catch the corner as well as the reversal. Also: the trim is found first,
+with a chord long enough to see past the arrival, and every filter is then seeded from the *trimmed*
+start — otherwise the seeds are measured across the very wobble they exist to be immune to.
+
 **Damping the path does not fix it, and the attempt is worth recording so nobody repeats it.** A
 plain running average lags, which shortens every stroke and pulls its end cap inside the mark — a
 test for the shape of an end caught that immediately. Adding a trend term to cancel the lag makes the

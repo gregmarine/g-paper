@@ -94,6 +94,12 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   density. The excess landed on the cap's outline (its outermost lanes sit there by construction) and
   drew a dark bead round the end of every stroke. Ask for coverage per unit of **area**, not per lane
   (0.1.19), and stop a cap while its strips are still a tooth wide.
+- **A pen's arrival is not a mark — drop it, do not filter it.** Touch-down leaves a small path
+  excursion; on a laid-over lead the mark folds across itself there and composites to solid black
+  (0.1.22). The renderer skips to the last sample within 25 px travelling more than 60° off the
+  stroke's eventual direction. **Trimming only the backward steps is not enough** — the kink where
+  the path rejoins the line folds the mark just as badly. Seed every other filter from the *trimmed*
+  start, or they are measured across the wobble they exist to be immune to.
 - **A filter can lag or it can damp a sustained excursion — not both.** Damping the *path* to remove
   a pen-landing wobble was tried and reverted: a plain average lags, which shortens every stroke and
   pulls its end cap inside the mark, and a trend term that cancels the lag makes the filter track the

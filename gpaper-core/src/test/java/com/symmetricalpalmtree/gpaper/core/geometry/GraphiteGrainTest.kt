@@ -308,6 +308,65 @@ class GraphiteGrainTest {
         assertTrue("flat should stay paler than upright", density(75f) < density(5f))
     }
 
+    private fun deepestPileUp(settle: Float): Int {
+        // A pen touching down: it lands, the hand settles through a small excursion, and only then
+        // does the stroke set off. [settle] is the size of that excursion in px.
+        val pts = ArrayList<StrokePoint>()
+        for (i in 0 until 14) {
+            val t = i / 13f
+            pts.add(
+                StrokePoint(
+                    x = 300f + settle * kotlin.math.sin(t * 3.1f),
+                    y = 400f + settle * 0.55f * kotlin.math.cos(t * 3.1f),
+                    pressure = 0.8f,
+                    tilt = deg(72f),
+                )
+            )
+        }
+        for (i in 1 until 200) pts.add(StrokePoint(300f + i * 2f, 400f, 0.8f, deg(72f)))
+        val g = GraphiteGrain.of(pts, 14f, 5150)
+        val bins = HashMap<Int, Int>()
+        var worst = 0
+        for (i in 0 until g.count) {
+            val x = g.xy[i * 2]
+            if (x < 260f || x > 345f) continue
+            val key = x.toInt() * 4096 + g.xy[i * 2 + 1].toInt()
+            val n = (bins[key] ?: 0) + 1
+            bins[key] = n
+            if (n > worst) worst = n
+        }
+        return worst
+    }
+
+    @Test
+    fun `a landing wobble does not fold a broad mark over itself`() {
+        // On a fine lead the pen's arrival is invisible. On a lead laid over — ten times broader —
+        // the mark folds across itself there and graphite laid twice composites to solid black: a
+        // knot at the start of every broad stroke. Neither the grain nor the caps can cure it, and
+        // it cannot be filtered away (a filter can lag or damp a sustained excursion, not both), so
+        // the arrival is dropped instead. What the hand did while landing is not a mark.
+        val clean = deepestPileUp(0f)
+        val wobbled = deepestPileUp(9f)
+        assertTrue(
+            "a landing wobble piled $wobbled flecks onto one pixel against $clean without it",
+            wobbled <= clean + 1,
+        )
+    }
+
+    @Test
+    fun `a clean touch-down is not trimmed`() {
+        // The trim looks for the pen travelling *against* where the stroke turned out to go. A
+        // stroke that sets off cleanly never does, so it must keep every millimetre it was drawn
+        // with — the arrival is dropped, not the first stretch of the mark.
+        val pts = (0..200).map { StrokePoint(300f + it * 2f, 400f, 0.8f, deg(72f)) }
+        val g = GraphiteGrain.of(pts, 14f, 5150)
+        var earliest = Float.MAX_VALUE
+        for (i in 0 until g.count) if (g.xy[i * 2] < earliest) earliest = g.xy[i * 2]
+        val cap = 14f / 2f * GraphiteGrain.widthFactor(deg(72f))
+        assertTrue("the start was eaten: ink begins at $earliest, not 300", earliest <= 300f + 2f)
+        assertTrue("ink should reach back over the cap", earliest >= 300f - cap - 3f)
+    }
+
     @Test
     fun `a stroke ends in a dome, not a chisel`() {
         // A lead meets the paper as a disc, so where it touches down and lifts the ink ends in a

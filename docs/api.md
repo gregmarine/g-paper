@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.21**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.22**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -179,7 +179,7 @@ migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. All live mappings above are confirmed on-device
 (BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status at v0.1.21 (`core/canvas/StrokeRenderer.kt`):
+Committed-renderer status at v0.1.22 (`core/canvas/StrokeRenderer.kt`):
 `PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path),
 `FOUNTAIN` (pressure-modulated width) and `PENCIL` (graphite grain — 0.1.7) render for
 real; `BRUSH` and `CALLIGRAPHY` still render as `PEN`.
@@ -216,6 +216,13 @@ cross-section of grain is then rotated by that much. On a lead laid over it thro
 pixels out of line and the stroke grows bristles: a pipe cleaner. Smoothed over ~10 px of arc,
 causally. **A texture cannot be fixed by working on the texture when the frame it is laid in is
 noisy.**
+
+**The pen's arrival is dropped, not drawn (0.1.22).** A pen touches down, the hand settles, and the
+path takes a small excursion before the stroke sets off. On a fine lead nobody sees it; on a lead
+laid over the mark folds across itself there and graphite laid twice composites to solid black — a
+knot at the start of every broad stroke. `PENCIL` finds the last sample within 25 px at which the pen
+was travelling more than 60° off where the stroke turned out to go, and begins after it. A clean
+touch-down never is, so nothing is trimmed from one.
 
 **Darkness follows a slower lean than width does (0.1.21).** Tilt drives the two in opposite
 directions — laying the pen over makes a mark broader *and* paler — so read from the same instant
