@@ -473,7 +473,7 @@ MIP11 for the generic engine on LCD. Live ink is the user's eye; committed grain
   the most likely thing to want moving.
 
 ### Phase 11 — Tilt on Onyx: the pencil's other half (post-v0.1.0)
-**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.9 (published)
+**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.9, then 0.1.10 (both published)
 
 Opened by Phase 10's own device pass. The pencil's grain was right and its *width* was not: laid
 over, the firmware's live ink drew several times wider than the bake, and the mark visibly collapsed
@@ -520,9 +520,25 @@ incompatible scales — is true *across* models and false *within* one that has 
 worse than one that lies about texture. Width is what the hand aims with, and the artist reads the
 collapse as the *bake* being broken.
 
-**Left for the device:** whether the fitted curve actually matches V2 by eye at intermediate angles.
-The three anchor points came from an artist's estimate of relative widths, so the middle of the curve
-is the least constrained part of it.
+**0.1.10 — refitted against the artist's eye, and the flank made paler.** The first curve came from
+*estimating* the firmware's live widths and landed at half of what was needed: upright was already
+right, tilted needed about twice the girth. Refitting with the origin pinned moved the exponent as
+well as the gain — **1× at 9°, ≈4.9× at 44°, ≈10.9× at 75°.** Pinning the origin is not negotiable:
+upright is the width the artist chose from the tin, and a pencil that does not draw the width it was
+set to is a broken tool rather than a differently-tuned one.
+
+The same release added **tilt lightening**, which the artist asked for on the same look. A lead laid
+over spreads the same graphite across a broader band and leaves less of itself on any one peak, which
+is why shading with the side of a pencil comes out grey however hard you lean. It reduces *coverage*
+rather than fleck darkness — tone in this renderer comes from how many specks of tooth catch, and
+darkening the flecks instead would have quietly turned a spatial texture back into a tonal one.
+Anchored at 0.45 at full lean, the figure Paintsprout's Wacom app judged against real pencils.
+
+Cost check, since the curve got much steeper: a full-screen broad lead laid flat is ≈47k flecks —
+three `drawPoints` calls, and well inside the 240k cap.
+
+**Left for the device:** the middle of the curve. Both fits were anchored on an artist's estimate of
+*relative* widths at three angles, so 44° is the least constrained point on it.
 
 ## Standing Open Questions (ask as they become relevant)
 

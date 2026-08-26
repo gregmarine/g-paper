@@ -194,12 +194,44 @@ class GraphiteGrainTest {
 
     @Test
     fun `the width curve matches what the panel's own firmware does`() {
-        // Fitted to a NoteAir5C: a hand drew at the angles its digitizer reported as 9, 44 and 75
-        // degrees, and the firmware charcoal's marks came out about 1x, 2.5x and 5.5x wide. The
-        // bake has to agree with the live ink or the mark changes size when the pen lifts.
+        // Fitted on a NoteAir5C against the artist's eye, at the angles its digitizer reported as
+        // 9, 44 and 75 degrees. The bake has to agree with the live ink or the mark changes size
+        // when the pen lifts.
         assertEquals(1.0f, GraphiteGrain.widthFactor(deg(9f)), 0.01f)
-        assertEquals(2.5f, GraphiteGrain.widthFactor(deg(44f)), 0.25f)
-        assertEquals(5.5f, GraphiteGrain.widthFactor(deg(75f)), 0.35f)
+        assertEquals(4.9f, GraphiteGrain.widthFactor(deg(44f)), 0.4f)
+        assertEquals(10.9f, GraphiteGrain.widthFactor(deg(75f)), 0.6f)
+    }
+
+    @Test
+    fun `the flank of the lead deposits lighter than its point`() {
+        // Shading with the side of a pencil comes out grey however hard you lean, because the same
+        // graphite is spread over a broader band.
+        assertEquals(1f, GraphiteGrain.coverageFactor(0f), 0f)
+        assertEquals(1f, GraphiteGrain.coverageFactor(deg(9f)), 0f)
+        assertTrue(GraphiteGrain.coverageFactor(deg(44f)) < 1f)
+        assertTrue(GraphiteGrain.coverageFactor(deg(75f)) < GraphiteGrain.coverageFactor(deg(44f)))
+        // Never so light that a laid-over stroke stops being a mark.
+        assertTrue(GraphiteGrain.coverageFactor(deg(90f)) > 0.4f)
+    }
+
+    @Test
+    fun `a laid-over stroke is paler per unit of paper than an upright one`() {
+        fun density(tiltDeg: Float): Float {
+            val pts = listOf(
+                StrokePoint(100f, 400f, 0.7f, deg(tiltDeg)),
+                StrokePoint(500f, 400f, 0.7f, deg(tiltDeg)),
+            )
+            val g = GraphiteGrain.of(pts, 6f, 31)
+            var lo = Float.MAX_VALUE
+            var hi = -Float.MAX_VALUE
+            for (i in 0 until g.count) {
+                val y = g.xy[i * 2 + 1]
+                if (y < lo) lo = y
+                if (y > hi) hi = y
+            }
+            return g.count / ((hi - lo) * 400f)
+        }
+        assertTrue("flat should be paler per unit area than upright", density(75f) < density(5f))
     }
 
     @Test

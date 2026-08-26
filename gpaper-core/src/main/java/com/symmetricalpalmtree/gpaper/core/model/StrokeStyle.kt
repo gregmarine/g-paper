@@ -20,7 +20,7 @@ package com.symmetricalpalmtree.gpaper.core.model
  * | [PEN] | uniform width | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
  * | [FOUNTAIN] | pressure/velocity-modulated width | `STROKE_STYLE_FOUNTAIN` (1) | `INK` (16) |
  * | [MARKER] | uniform, semi-transparent, flat caps | `STROKE_STYLE_MARKER` (2) | `NEEDLE` (10) |
- * | [PENCIL] | graphite grain on tooth; pressure → darkness, tilt → width | `STROKE_STYLE_CHARCOAL_V2` (6) | `NEEDLE` (10) |
+ * | [PENCIL] | graphite grain on tooth; pressure → darkness, tilt → width (and paler) | `STROKE_STYLE_CHARCOAL_V2` (6) | `NEEDLE` (10) |
  * | [BRUSH] | broad, strongly pressure-modulated | `STROKE_STYLE_NEO_BRUSH` (3) | `INK` (16) |
  * | [CALLIGRAPHY] | chisel nib (direction-dependent width) | `STROKE_STYLE_SQUARE_PEN` (7) | code 15 (14 as fallback) |
  * | [DASH] | uniform width, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
@@ -49,9 +49,10 @@ enum class StrokeStyle {
 
     /**
      * Graphite. Flecks of mineral caught on the paper's tooth with bare paper between them.
-     * **Pressure darkens, tilt broadens** — leaning on it fills in more of the tooth, laying
-     * it over draws with the flank of the lead instead of its point, which is how anyone
-     * shades. The grain is seeded from the stroke's id, so a page re-renders fleck for fleck
+     * **Pressure darkens; tilt broadens and lightens** — leaning on it fills in more of the
+     * tooth, while laying it over draws with the flank of the lead instead of its point: many
+     * times wider, and paler with it, because the same graphite spread over a broader band
+     * leaves less on any one peak. That is how anyone shades, and why shading comes out grey. The grain is seeded from the stroke's id, so a page re-renders fleck for fleck
      * however many times it is reloaded. Engines that cannot honestly supply an angle report
      * `tilt = 0`, which simply means a pencil held upright — a fixed-width mark, not a
      * broken one.

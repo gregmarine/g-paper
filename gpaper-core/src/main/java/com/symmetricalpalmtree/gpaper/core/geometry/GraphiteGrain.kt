@@ -52,13 +52,16 @@ import kotlin.math.sqrt
  * pressure drives **darkness**, which is the same division of labour Paintsprout's Wacom app
  * arrived at against real pencils.
  *
- * The curve is not invented, and it is deliberately *not* the Wacom app's. It was fitted to what
- * a BOOX NoteAir5C's own firmware charcoal does with the same pen, because on that panel the live
- * ink is drawn by the device and the bake by this file, and a preview that disagrees with what
- * commits is worse than either being slightly wrong on its own. A hand drew at three angles the
- * digitizer reported as 9°, 44° and 75°, and the marks came out roughly 1×, 2.5× and 5.5× wide.
- * Notably that blooms **earlier** than the Wacom pencil's profile, which stays thin until the pen
- * is nearly flat; matching the panel mattered more than matching the sibling app.
+ * The curve is not invented, and it is deliberately *not* the Wacom app's. It was fitted on a BOOX
+ * NoteAir5C, against the artist's eye, at three angles the digitizer reported as 9°, 44° and 75° —
+ * roughly 1×, 4.9× and 10.9× wide. It blooms **earlier** than the Wacom pencil's profile, which
+ * stays thin until the pen is nearly flat; matching this panel mattered more than matching the
+ * sibling app, because there the live ink is drawn by the device's own firmware and the bake by this
+ * file, and a preview that disagrees with what commits is worse than either being slightly wrong.
+ *
+ * And the flank deposits **lighter**, not just broader: the same graphite spread over a wider band
+ * leaves less of itself on any one peak, which is why shading with the side of a pencil comes out
+ * grey however hard you lean on it.
  *
  * **A renderer here must still look right at `tilt = 0`, and always will.** Engines report zero
  * whenever they cannot honestly supply an angle — on BOOX that is every model nobody has measured,
@@ -146,10 +149,30 @@ object GraphiteGrain {
 
     /**
      * How much broader the flank of the lead is than its point, and how the two blend.
-     * Fitted to a NoteAir5C's firmware charcoal: 1× at 9°, ≈2.5× at 44°, ≈5.5× at 75°.
+     *
+     * Refitted against the artist's eye on a NoteAir5C: **1× at 9°, ≈4.9× at 44°, ≈10.9× at 75°.**
+     * The first fit came from estimating the firmware's live widths and landed at half of this —
+     * upright was already right, so the correction doubled the tilted end and left the origin
+     * pinned, which is why the exponent moved too rather than the gain alone. Held upright, the
+     * lead draws exactly the width it was set to; that anchor is not negotiable, because it is the
+     * one the artist chose from the tin.
      */
-    private const val TILT_GAIN = 6.4f
-    private const val TILT_POW = 1.75f
+    private const val TILT_GAIN = 13.4f
+    private const val TILT_POW = 1.46f
+
+    /**
+     * How much lighter the flank of the lead deposits than its point, at full lean.
+     *
+     * The same graphite spread over a broader band leaves less of itself on any given peak, which
+     * is why shading with the side of a pencil comes out grey rather than black however hard you
+     * lean. Not the full `1/width` the naive reading suggests — a laid-over lead also puts far more
+     * of its surface on the paper, so there is more graphite available to give. The figure comes
+     * from Paintsprout's Wacom app, which judged it against real pencils.
+     *
+     * It reduces **coverage**, not fleck darkness, because that is the whole premise of this file:
+     * tone comes from how many specks of tooth catch, not from how grey each one is.
+     */
+    private const val TILT_LIGHTEN = 0.45f
 
     /**
      * Upper bound on flecks for one stroke. A mark long enough or broad enough to pass this
@@ -193,11 +216,19 @@ object GraphiteGrain {
      * shading stroke and the mark has to broaden with it — a single tilt taken at pen-down would
      * make every stroke uniform and lose the exact gesture this exists to render.
      */
-    fun widthFactor(tilt: Float): Float {
+    fun widthFactor(tilt: Float): Float = 1f + TILT_GAIN * lean(tilt).pow(TILT_POW)
+
+    /**
+     * How much of the graphite still lands, as a fraction, at [tilt] radians from vertical.
+     * `1` upright; a lead laid right over leaves a paler mark for the same press.
+     */
+    fun coverageFactor(tilt: Float): Float = 1f - TILT_LIGHTEN * lean(tilt)
+
+    /** How far past upright the pen is leaned, `0`..`1`. */
+    private fun lean(tilt: Float): Float {
         val degrees = Math.toDegrees(tilt.toDouble()).toFloat()
-        if (degrees <= TILT_UPRIGHT_DEG) return 1f
-        val u = ((degrees - TILT_UPRIGHT_DEG) / (TILT_FLAT_DEG - TILT_UPRIGHT_DEG)).coerceIn(0f, 1f)
-        return 1f + TILT_GAIN * u.pow(TILT_POW)
+        if (degrees <= TILT_UPRIGHT_DEG) return 0f
+        return ((degrees - TILT_UPRIGHT_DEG) / (TILT_FLAT_DEG - TILT_UPRIGHT_DEG)).coerceIn(0f, 1f)
     }
 
     // ── The mark ─────────────────────────────────────────────────────────────
@@ -221,7 +252,8 @@ object GraphiteGrain {
                 // Both the lean and the press are read at this station, not at the stroke's
                 // start: a shading stroke is a hand rolling the pencil over as it travels, and
                 // taking either once would render the gesture as a uniform bar.
-                val half = base * widthFactor(a.tilt + t * (b.tilt - a.tilt))
+                val tilt = a.tilt + t * (b.tilt - a.tilt)
+                val half = base * widthFactor(tilt)
                 deposit(
                     out = out,
                     cx = a.x + t * dx,
@@ -229,6 +261,7 @@ object GraphiteGrain {
                     tx = tx,
                     ty = ty,
                     pressure = a.pressure + t * (b.pressure - a.pressure),
+                    lean = coverageFactor(tilt),
                     arc = nextAt,
                     station = station,
                     lanes = laneCount(half),
@@ -258,6 +291,7 @@ object GraphiteGrain {
         tx: Float,
         ty: Float,
         pressure: Float,
+        lean: Float,
         arc: Float,
         station: Int,
         lanes: Int,
@@ -270,7 +304,7 @@ object GraphiteGrain {
         val skate = skate(arc, seed)
         for (lane in 0 until lanes) {
             val u = laneOffset(lane, lanes)
-            val cover = coverage(press, u) * skate
+            val cover = coverage(press, u) * skate * lean
             if (cover <= 0f) continue
             if (unit(hash(seed, station, lane xor 0x2af1)) >= cover) continue
             val alongJitter = (unit(hash(seed, station, lane)) - 0.5f) * JITTER * TOOTH_PITCH_PX
@@ -289,6 +323,7 @@ object GraphiteGrain {
     private fun tap(p: StrokePoint, base: Float, seed: Int): Grain {
         val out = Sink()
         val half = base * widthFactor(p.tilt)
+        val lean = coverageFactor(p.tilt)
         val press = p.pressure.coerceIn(0f, 1f).pow(PRESSURE_GAMMA)
         val lanes = laneCount(half)
         for (row in 0 until lanes) {
@@ -297,7 +332,7 @@ object GraphiteGrain {
                 val u = laneOffset(lane, lanes)
                 val r = sqrt(u * u + v * v)
                 if (r > 1f) continue
-                val cover = coverage(press, r)
+                val cover = coverage(press, r) * lean
                 if (unit(hash(seed, row, lane xor 0x2af1)) >= cover) continue
                 val jx = (unit(hash(seed, row, lane)) - 0.5f) * JITTER * TOOTH_PITCH_PX
                 val jy = (unit(hash(seed, row, lane xor 0x5bf0)) - 0.5f) * JITTER * TOOTH_PITCH_PX

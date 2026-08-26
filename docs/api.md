@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.9**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.10**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -179,17 +179,20 @@ migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. All live mappings above are confirmed on-device
 (BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status at v0.1.9 (`core/canvas/StrokeRenderer.kt`):
+Committed-renderer status at v0.1.10 (`core/canvas/StrokeRenderer.kt`):
 `PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path),
 `FOUNTAIN` (pressure-modulated width) and `PENCIL` (graphite grain — 0.1.7) render for
 real; `BRUSH` and `CALLIGRAPHY` still render as `PEN`.
 The enum may grow; hosts should treat unknown persisted values as `PEN`.
 
-**`PENCIL` (0.1.7; tilt in 0.1.9).** Graphite is laid down as a scatter of flecks on the
-paper's tooth with bare paper between them, not as a tinted line. **Pressure darkens; tilt
-broadens.** Leaning on the pencil fills in more of the tooth and darkens what lands, without
+**`PENCIL` (0.1.7; tilt in 0.1.9, refitted in 0.1.10).** Graphite is laid down as a scatter of
+flecks on the paper's tooth with bare paper between them, not as a tinted line. **Pressure
+darkens; tilt broadens and lightens.** Leaning on the pencil fills in more of the tooth and darkens what lands, without
 moving the width; laying it over draws with the flank of the lead rather than its point, and
-the mark grows several times wider — which is how anyone shades. A mark's apparent width comes
+the mark grows many times wider *and paler* — the same graphite spread over a broader band
+leaves less of itself on any one peak, which is why shading with the side of a pencil comes
+out grey however hard you lean. Measured against an artist's eye on a NoteAir5C: ≈1× wide at
+9°, ≈4.9× at 44°, ≈10.9× at 75°. A mark's apparent width comes
 out roughly `width + 2 px` at any one angle, the bleed of one fleck; below about 2 px a lead
 stops getting finer. Hosts choosing distinguishable pencil sizes should space them by more
 than that.
@@ -214,7 +217,7 @@ live-vs-baked caveat above; a pop at pen-up is expected there, not a bug.
 textured pens draw far wider than the width they are given when the pen is laid over, and that extra
 width is **tilt**, not a scale factor — measured on a NoteAir5C, not inferred. `TouchHelper` exposes
 only style, colour and width, so a textured live style cannot be had without its tilt response;
-`GraphiteGrain` therefore widens the bake on the same curve (≈1× at 9°, 2.5× at 44°, 5.5× at 75°).
+`GraphiteGrain` therefore widens the bake on the same curve (≈1× at 9°, 4.9× at 44°, 10.9× at 75°).
 Live and baked agree on the mark's size at every angle, and a stroke gains its tooth at pen-up
 rather than changing size. Ratta's `NEEDLE` is a plain solid line and disagrees by texture alone.
 
