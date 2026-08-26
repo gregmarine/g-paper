@@ -20,7 +20,7 @@ import kotlin.math.sqrt
  * tooth caught graphite and how much each one caught.
  *
  * The three constants that decide *how much* graphite lands — [EDGE_BARE], [SKATE_DEPTH] and
- * [FLECK_PX] — were set by photographing three strokes live on a NoteAir5C's panel and again after
+ * the fleck size — were set by photographing three strokes live on a NoteAir5C's panel and again after
  * they baked, then comparing total ink per unit length. The two covered the same width; the bake
  * was laying down about 30% less inside it. They were raised together, by a factor flat across the
  * whole pressure range, so the light-to-hard response the artist had already approved did not move.
@@ -85,15 +85,29 @@ object GraphiteGrain {
      * physical because core knows nothing about screen density; a host on a coarser panel
      * gets a proportionally coarser tooth, which is the right way round.
      */
-    const val TOOTH_PITCH_PX: Float = 1.1f
+    const val TOOTH_PITCH_PX: Float = 0.8f
 
     /**
-     * Diameter of one fleck of graphite in px. Deliberately larger than [TOOTH_PITCH_PX] —
-     * about 1.35× — so that at full coverage the flecks overlap into solid black and a
-     * hard-pressed line is a line rather than a dotted one, while an isolated fleck at the
-     * pale end is still a speck of grit and not a pinprick.
+     * Diameter of one fleck of graphite in px, at the palest darkness and at the darkest.
+     *
+     * **A fleck wider than the lattice that spaces it cannot help but touch its neighbours**, and
+     * once flecks touch they stop being specks and become chains — little worms a fleck thick and
+     * several long. At half a millimetre on a 300 dpi panel that reads unmistakably as bristle, and
+     * an artist called it a pipe cleaner. It is the same failure Paintsprout's Wacom app has from
+     * the other direction, where the grain is drawn as continuous lanes running along the stroke:
+     * both put graphite down as *connected geometry*, and connected geometry looks like hair.
+     *
+     * So the fleck is sized against [TOOTH_PITCH_PX] rather than fixed. At the pale end it is about
+     * one pitch — specks that mostly stand alone, which is what the panel's own charcoal looks like
+     * under magnification, essentially a one-pixel dither. At the dark end it is over two, so the
+     * flecks flood together and a hard-pressed line is solid rather than a grey mesh. Between the
+     * two the chains that do form are ~1 px thick, which is under the eye's reach at this density.
+     *
+     * It carries pressure as well as coverage, and that is deliberate: coverage saturates once the
+     * tooth is full, so past that point a growing fleck is the only thing left to darken with.
      */
-    const val FLECK_PX: Float = 1.65f
+    const val FLECK_MIN_PX: Float = 0.75f
+    const val FLECK_MAX_PX: Float = 1.6f
 
     /**
      * How many darknesses a fleck may have. Tone here still comes chiefly from *how many* flecks
@@ -207,6 +221,12 @@ object GraphiteGrain {
     class Grain(val xy: FloatArray, val level: IntArray, val count: Int)
 
     private val EMPTY = Grain(FloatArray(0), IntArray(0), 0)
+
+    /** Fleck diameter in px for darkness index [level] — see [FLECK_MIN_PX]. */
+    fun fleckPx(level: Int): Float =
+        if (LEVELS <= 1) FLECK_MAX_PX
+        else FLECK_MIN_PX + (FLECK_MAX_PX - FLECK_MIN_PX) *
+            (level.coerceIn(0, LEVELS - 1).toFloat() / (LEVELS - 1))
 
     /** Alpha multiplier for darkness index [level]; `LEVEL_FLOOR` at 0, 1 at the top. */
     fun levelAlpha(level: Int): Float =

@@ -593,6 +593,27 @@ being matched while the texture was plainly wrong in a way a magnified crop show
 combed texture at a given coverage does not *look* like an even scatter at the same coverage, so a
 density judgement made over a structurally wrong grain is not worth acting on.
 
+**0.1.14 — the grain was made of chains, and chains look like hair.** 0.1.13 removed the texture's
+*direction* but not its *connectedness*: the artist still saw it, and named it exactly —
+"pipe cleaner". A pixel-level `screencap` of the re-baked strokes (the bake is screencap-visible, so
+this needed no camera at all) showed why. **A fleck wider than the lattice that spaces it cannot
+help but touch its neighbours**, and once flecks touch they stop being specks and become little
+worms a fleck thick and several long — half a millimetre of connected bristle at 300 dpi. The
+panel's own charcoal, magnified, is essentially a one-pixel dither: nothing in it is connected.
+
+The same fault explains the report that Paintsprout's Wacom app has always looked like this too.
+Its grain is drawn as continuous *lanes* running along the stroke. Different geometry, same
+mistake — **graphite laid down as connected geometry looks like hair, whichever way the geometry
+runs.**
+
+The cure is that the fleck is now sized **against the pitch, and ramped by darkness**: about one
+pitch at the pale end, where specks must stand alone, and over two at the dark end, where they
+should flood together so a hard-pressed line is solid rather than a grey mesh. In between, chains
+are ~1 px and under the eye's reach. It carries pressure as well, which is welcome — coverage
+saturates once the tooth is full, so past that point a growing fleck is the only thing left to
+darken with. The whole lattice also came finer (pitch 1.1 → 0.8). Ink mass per tone was held within
+about 10% end to end while all of this moved, checked by simulation before shipping.
+
 **Left for the device:** the middle of the width curve, and grain density now that the texture is
 even enough to judge it. Both fits were anchored on an artist's estimate of
 *relative* widths at three angles, so 44° is the least constrained point on it.

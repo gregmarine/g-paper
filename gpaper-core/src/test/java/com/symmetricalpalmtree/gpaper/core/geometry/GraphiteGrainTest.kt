@@ -126,7 +126,7 @@ class GraphiteGrainTest {
             StrokePoint(300f, 100f, 0.8f),
         )
         val g = GraphiteGrain.of(pts, width, 4242)
-        val slack = GraphiteGrain.TOOTH_PITCH_PX
+        val slack = GraphiteGrain.TOOTH_PITCH_PX + GraphiteGrain.FLECK_MAX_PX
         for (i in 0 until g.count) {
             val x = g.xy[i * 2]
             val y = g.xy[i * 2 + 1]
@@ -145,7 +145,7 @@ class GraphiteGrainTest {
     fun `a tap leaves a disc of grit`() {
         val g = GraphiteGrain.of(listOf(StrokePoint(50f, 50f, 0.9f)), 10f, 3)
         assertTrue("a tap should leave something", g.count > 0)
-        val slack = 5f + GraphiteGrain.TOOTH_PITCH_PX
+        val slack = 5f + GraphiteGrain.TOOTH_PITCH_PX + GraphiteGrain.FLECK_MAX_PX
         for (i in 0 until g.count) {
             assertTrue(abs(g.xy[i * 2] - 50f) <= slack)
             assertTrue(abs(g.xy[i * 2 + 1] - 50f) <= slack)
@@ -182,10 +182,26 @@ class GraphiteGrainTest {
     }
 
     @Test
-    fun `flecks overlap into solid ink at full coverage`() {
-        // At the hardest press the tooth fills in, so the mark must read as a line rather
-        // than a dotted one: flecks are wider than the pitch that spaces them.
-        assertTrue(GraphiteGrain.FLECK_PX > GraphiteGrain.TOOTH_PITCH_PX)
+    fun `pale flecks stand apart and dark ones flood together`() {
+        // The whole cure for the "pipe cleaner": a fleck wider than the lattice that spaces it
+        // touches its neighbours and the grain becomes chains of little worms instead of specks.
+        // So the palest fleck is about one pitch — separate specks, like the panel's own dither —
+        // and the darkest is over two, so a hard-pressed line floods solid.
+        assertTrue(
+            "the palest fleck must not chain",
+            GraphiteGrain.fleckPx(0) <= GraphiteGrain.TOOTH_PITCH_PX * 1.05f,
+        )
+        assertTrue(
+            "the darkest fleck must flood",
+            GraphiteGrain.fleckPx(GraphiteGrain.LEVELS - 1) > GraphiteGrain.TOOTH_PITCH_PX * 1.8f,
+        )
+        for (l in 1 until GraphiteGrain.LEVELS) {
+            assertTrue(GraphiteGrain.fleckPx(l) > GraphiteGrain.fleckPx(l - 1))
+        }
+        assertEquals(GraphiteGrain.fleckPx(0), GraphiteGrain.fleckPx(-3), 0f)
+        assertEquals(
+            GraphiteGrain.fleckPx(GraphiteGrain.LEVELS - 1), GraphiteGrain.fleckPx(99), 0f
+        )
     }
 
     // ── Tilt widens the mark ─────────────────────────────────────────────────

@@ -107,7 +107,6 @@ internal object StrokeRenderer {
     ) {
         val grain = GraphiteGrain.of(points, width, seed)
         if (grain.count == 0) return
-        paint.strokeWidth = GraphiteGrain.FLECK_PX
         paint.strokeCap = Paint.Cap.ROUND
         val packed = FloatArray(grain.count * 2)
         for (level in 0 until GraphiteGrain.LEVELS) {
@@ -118,6 +117,9 @@ internal object StrokeRenderer {
                 packed[n++] = grain.xy[i * 2 + 1]
             }
             if (n == 0) continue
+            // Darker flecks are bigger as well as darker — the pass per darkness is already
+            // grouped, so this costs nothing and is what stops mid-tones chaining into bristle.
+            paint.strokeWidth = GraphiteGrain.fleckPx(level)
             paint.color = withAlphaFactor(color, GraphiteGrain.levelAlpha(level))
             canvas.drawPoints(packed, 0, n, paint)
         }

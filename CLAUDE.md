@@ -81,6 +81,17 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   disagree on size, **match the firmware** rather than flattening the style: `TouchHelper` exposes
   only style/colour/width (verified by `javap`), so a textured live style cannot be had without
   whatever tilt response it comes with.
+- **Graphite laid down as CONNECTED geometry looks like hair.** A grain fleck wider than the lattice
+  that spaces it must touch its neighbours, and touching flecks become little worms a fleck thick and
+  several long — half a millimetre of bristle at 300 dpi, which an artist called a "pipe cleaner".
+  Paintsprout's Wacom app has the same fault from the other direction (its grain is continuous
+  *lanes* along the stroke). The cure (0.1.14): size the fleck **against the pitch and ramp it by
+  darkness** — about one pitch at the pale end so specks stand alone, over two at the dark end so
+  they flood into solid ink. The panel's own charcoal, magnified, is essentially a one-pixel dither;
+  nothing in it is connected.
+- **The bake is `screencap`-visible even when live EPD ink is not**, and marks re-render from stored
+  data on open — so a pixel-exact image of what the *current* renderer makes of an old drawing is one
+  `adb exec-out screencap`, no camera needed. Reach for that before photographing anything.
 - **An aggregate statistic cannot see structure — magnify the texture and compare it.** Mass, extent
   and coverage were all matching the panel's ink while our grain was plainly wrong: the flecks were
   combed into short dashes running *along* the stroke where the panel's speckle is isotropic. A
