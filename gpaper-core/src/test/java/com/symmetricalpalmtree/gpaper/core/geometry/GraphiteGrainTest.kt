@@ -179,31 +179,37 @@ class GraphiteGrainTest {
     }
 
     @Test
-    fun `a laid-over stroke ends over the lead's width, not the smear's`() {
-        // The contact patch of a tilted lead is an ellipse: it smears many times sideways but still
-        // leaves the paper over the width of the lead. Capping with a half-disc of the mark's own
-        // half-width puts a blob on the end of a broad stroke.
+    fun `the cap does not draw a bead of ink round its own outline`() {
+        // A cap's strips narrow as it closes, and laneCount rounds a lane count up so a hairline
+        // still gets grain. Uncorrected, that over-deposits every narrow strip — and since their
+        // outermost lanes sit on the cap's edge by construction, the excess accumulates along the
+        // outline as a dark arc. The cap must lay graphite at the body's rate, not above it.
         val width = 14f
         val pts = listOf(
-            StrokePoint(200f, 400f, 0.8f, deg(75f)),
-            StrokePoint(600f, 400f, 0.8f, deg(75f)),
+            StrokePoint(200f, 400f, 0.85f, deg(70f)),
+            StrokePoint(600f, 400f, 0.85f, deg(70f)),
         )
         val g = GraphiteGrain.of(pts, width, 808)
-        var beyond = 0f
-        var across = 0f
-        for (i in 0 until g.count) {
-            val past = g.xy[i * 2] - 600f
-            if (past > beyond) beyond = past
-            val off = abs(g.xy[i * 2 + 1] - 400f)
-            if (off > across) across = off
+        // Flecks per unit of paper, in the cap versus in the body.
+        fun density(from: Float, to: Float): Float {
+            var n = 0
+            var lo = Float.MAX_VALUE
+            var hi = -Float.MAX_VALUE
+            for (i in 0 until g.count) {
+                val x = g.xy[i * 2]
+                if (x < from || x >= to) continue
+                n++
+                val y = g.xy[i * 2 + 1]
+                if (y < lo) lo = y
+                if (y > hi) hi = y
+            }
+            if (n == 0) return 0f
+            return n / ((to - from) * (hi - lo))
         }
-        val slack = GraphiteGrain.TOOTH_PITCH_PX + GraphiteGrain.FLECK_MAX_PX
-        assertTrue(
-            "the end ran $beyond past the last cross-section; the lead is only ${width / 2f} wide",
-            beyond <= width / 2f + slack,
-        )
-        // ...while the mark itself is many times wider than that, which is the point.
-        assertTrue("the smear should dwarf the cap ($across vs $beyond)", across > beyond * 3f)
+        val body = density(350f, 450f)
+        val cap = density(601f, 601f + width)
+        assertTrue("nothing in the cap", cap > 0f)
+        assertTrue("the cap ($cap) out-deposits the body ($body)", cap < body * 1.35f)
     }
 
     @Test

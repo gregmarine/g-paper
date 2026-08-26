@@ -88,10 +88,12 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   grain tens of pixels out of line and the mark grows bristles ("pipe cleaner", 0.1.16). Smoothed over
   ~10 px of arc, causally. Paintsprout's Wacom app builds its mesh normals the same way and has the
   same fault.
-- **A stroke's cap is the lead's CONTACT PATCH, and a tilted lead's patch is an ellipse.** It smears
-  many times sideways but still leaves the paper over the width of the lead, so a cap reaches the
-  lead's radius along the stroke and the mark's half-width across it (0.1.19). Capping with a
-  half-disc of the mark's own half-width puts a blob on the end of a broad stroke.
+- **A rounding that is harmless in bulk can dominate at a boundary.** `laneCount` rounds up so a
+  hairline still gets grain — invisible in a stroke's body, where lanes number in the dozens, and
+  badly wrong in its cap, where strips narrow to a tooth or two and that one extra lane doubles their
+  density. The excess landed on the cap's outline (its outermost lanes sit there by construction) and
+  drew a dark bead round the end of every stroke. Ask for coverage per unit of **area**, not per lane
+  (0.1.19), and stop a cap while its strips are still a tooth wide.
 - **A filter added to remove noise brings a transient of its own, and a stroke's start puts it on
   display.** The tangent smoother (0.1.16) was seeded from the first pair of samples and began every
   broad mark with a hook — the touch-down cap thrown along a wrong heading, plus the filter swinging

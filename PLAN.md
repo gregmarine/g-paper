@@ -679,15 +679,21 @@ already the answer the filter would have settled on.
 start the transient is on display.** Check the beginning of a mark whenever smoothing is introduced
 anywhere in this renderer.
 
-**0.1.19 — the dome was a blob, because a contact patch is an ellipse.** 0.1.17 capped a stroke with
-a half-disc of *the mark's own half-width*, which on a lead laid over is a rounded end 7 mm across;
-the artist called it glop, and a circle is blunt besides — halfway along one the width is still 87%
-of full. The physics corrects it: a tilted lead smears its mark many times sideways but still leaves
-the paper over the width of **the lead**, so the cap reaches the lead's radius *along* the stroke
-while spanning the mark's half-width *across* it. An ellipse flattened along the direction of travel.
-Held upright the two are equal and it is a circle again, which is right, because then the patch is
-one. Measurement first ruled out density — the tip was *lighter* than the body, not heavier — which
-is what pointed at shape.
+**0.1.19 — the "glop" was a bead of ink drawn round the cap's outline.** The dome's shape was right;
+its *density* was not. [laneCount] rounds a lane count up so a mark thinner than one tooth still gets
+grain — harmless in the body where lanes number in the dozens, and badly wrong in a cap, where the
+strips narrow to a tooth or two and that one extra lane doubles or triples their candidates. Every
+station over-deposits, and because their outermost lanes sit on the cap's edge by construction, the
+excess accumulates along the outline as a dark arc. Corrected by asking for coverage per unit of
+*area* rather than per lane, and by stopping the cap while its strips are still a tooth wide instead
+of chasing them to nothing.
+
+**A wrong turn on the way, worth recording.** The first attempt reshaped the cap into an ellipse
+reaching only the lead's radius — on the theory that a tilted lead leaves the paper over its own
+width rather than the smear's. That is sound physics and it looked far worse: on an 85 px half-width
+it collapses the cap to a near-straight cut with a spike, and it did nothing about the dark arc,
+which was the actual complaint. **A plausible physical story is not evidence; the artifact was
+visible in both versions and should have been isolated before anything was reshaped.**
 
 **Left for the device:** the middle of the width curve, and grain density now that the texture is
 even enough to judge it. Both fits were anchored on an artist's estimate of

@@ -199,11 +199,11 @@ live on a NoteAir5C's panel and again after the bake, and comparing ink per unit
 two covered the same width and the bake was depositing about 30% less inside it (0.1.11). Hosts choosing distinguishable pencil sizes should space them by more
 than that.
 
-**A stroke ends in the shape of the lead's contact patch (0.1.17, 0.1.19).** Not a straight cut, and
-not a half-disc either: the patch of a tilted lead is an **ellipse**, smearing many times sideways
-while still leaving the paper over the width of the *lead*. So a cap reaches the lead's radius along
-the stroke and the mark's own half-width across it. Capping a broad stroke with a half-disc of its
-half-width puts a blob on the end of it; held upright the two are equal and it is a circle again. Stopping at the
+**A stroke ends in a dome, not a chisel (0.1.17, 0.1.19).** A lead meets the paper as a patch, so
+the ink ends in a half-round of the mark's own half-width rather than a straight cut with corners on
+it. The cap's strips narrow as it closes, and their coverage is corrected for that (0.1.19) — without
+it the lane-count rounding over-deposits every narrow strip and the excess draws a dark bead round
+the cap's own outline. Stopping at the
 last cross-section leaves a straight cut clean across the mark, corners and all. The touch-down cap
 is laid before the body so ink already on the paper keeps its place as the stroke grows; only the
 lifting cap travels with the pen, as the real one does.

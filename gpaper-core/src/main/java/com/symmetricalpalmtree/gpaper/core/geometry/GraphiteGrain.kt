@@ -326,14 +326,18 @@ object GraphiteGrain {
      * mark, corners and all — a chisel, not a pencil. Nothing in a pencil is straight: the lead
      * meets the paper as a patch, and the ink ends in the shape of that patch.
      *
-     * **The patch is an ellipse, not a circle, and using a circle is what makes an end look like a
-     * blob.** A lead laid over smears its mark sideways — many times the lead's own width — but it
-     * still leaves the paper over the width of the *lead*, not over the width of the smear. Capping
-     * a broad stroke with a half-disc of its own half-width puts a 7 mm dome on the end of it, and
-     * a circle is blunt besides: halfway along one, the width is still 87% of full. So [reach] is
-     * the lead's radius and travels along the stroke, while the half-width across it is whatever
-     * the tilt has made it — an ellipse flattened along the direction of travel. Held upright the
-     * two are equal and it is a circle again, which is right, because then the patch is one.
+     * **A cap's strips get narrow, and narrow strips need their density corrected or the outline
+     * draws itself.** [laneCount] adds one lane so that a mark thinner than a single tooth still
+     * gets grain at all — harmless in the body, where lanes number in the dozens, and badly wrong
+     * here: as the cap closes, that one extra lane doubles or triples the candidates in a strip
+     * only a tooth or two wide. Every station then over-deposits, and because their outermost lanes
+     * sit on the cap's edge by construction, the excess accumulates along the outline as a dark
+     * arc — a bead of ink drawn round the end of the stroke. [laneDensity] cancels it by asking for
+     * coverage per unit of area rather than per lane.
+     *
+     * The cap also stops while its strips are still a tooth wide rather than chasing them to
+     * nothing. The last fraction of a millimetre of a dome is invisible; a column of near-degenerate
+     * strips at the very tip is not.
      *
      * [sign] is `+1` to cap the finish and `-1` to cap the start; [station0] seeds the hashing away
      * from the body's own stations so a cap never repeats a cross-section that is already there.
@@ -348,17 +352,17 @@ object GraphiteGrain {
         lean: Float,
         arc: Float,
         half: Float,
-        reach: Float,
         seed: Int,
         station0: Int,
         sign: Float,
     ) {
-        if (reach <= TOOTH_PITCH_PX || half <= 0f) return
+        if (half <= TOOTH_PITCH_PX) return
         var d = TOOTH_PITCH_PX
         var k = 0
-        while (d < reach) {
-            val shrunk = half * sqrt(1f - (d / reach) * (d / reach))
-            if (shrunk >= TOOTH_PITCH_PX * 0.5f) {
+        while (d < half) {
+            val shrunk = sqrt(half * half - d * d)
+            if (shrunk >= TOOTH_PITCH_PX) {
+                val lanes = laneCount(shrunk)
                 deposit(
                     out = out,
                     cx = cx + sign * tx * d,
@@ -366,10 +370,10 @@ object GraphiteGrain {
                     tx = tx,
                     ty = ty,
                     pressure = pressure,
-                    lean = lean,
+                    lean = lean * laneDensity(shrunk, lanes),
                     arc = arc + sign * d,
                     station = station0 + sign.toInt() * k,
-                    lanes = laneCount(shrunk),
+                    lanes = lanes,
                     half = shrunk,
                     seed = seed,
                 )
@@ -378,6 +382,17 @@ object GraphiteGrain {
             k++
             if (out.count >= MAX_FLECKS) return
         }
+    }
+
+    /**
+     * What a strip's coverage must be multiplied by so that its graphite lands at the same rate per
+     * unit of paper as the body's does, whatever [laneCount] rounded its lane count up to. `1` for
+     * any strip wide enough that the rounding does not matter, which is all of the body.
+     */
+    private fun laneDensity(half: Float, lanes: Int): Float {
+        if (lanes <= 1) return 1f
+        val exact = 2f * half / TOOTH_PITCH_PX
+        return (exact / lanes).coerceIn(0f, 1f)
     }
 
     private fun sweep(points: List<StrokePoint>, base: Float, seed: Int): Grain {
@@ -493,7 +508,7 @@ object GraphiteGrain {
                 if (!capped) {
                     capped = true
                     cap(
-                        out, cx, cy, travelX, travelY, pressure, coverLean, nextAt, half, base,
+                        out, cx, cy, travelX, travelY, pressure, coverLean, nextAt, half,
                         seed, -1, -1f,
                     )
                 }
@@ -507,7 +522,7 @@ object GraphiteGrain {
         if (station == 0) return tap(points[0], base, seed)
         // And the lifting end gets its dome too.
         cap(
-            out, lastCx, lastCy, travelX, travelY, lastPress, lastLean, lastArc, lastHalf, base,
+            out, lastCx, lastCy, travelX, travelY, lastPress, lastLean, lastArc, lastHalf,
             seed, station + 1, 1f,
         )
         return out.grain()
