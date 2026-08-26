@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.8**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.9**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -161,7 +161,7 @@ verified on five BOOX devices; the Ratta 0…31 pen-code sweep on Nomad + Manta)
 | `PEN` | uniform width | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
 | `FOUNTAIN` | pressure/velocity width | `STROKE_STYLE_FOUNTAIN` (1) | `INK` (16) |
 | `MARKER` | uniform, semi-transparent | `STROKE_STYLE_MARKER` (2) | `NEEDLE` (10) |
-| `PENCIL` | graphite grain on tooth; pressure → coverage + darkness, width fixed | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
+| `PENCIL` | graphite grain on tooth; pressure → darkness, tilt → width | `STROKE_STYLE_CHARCOAL_V2` (6) | `NEEDLE` (10) |
 | `BRUSH` | broad, pressure-modulated | `STROKE_STYLE_NEO_BRUSH` (3) | `INK` (16) |
 | `CALLIGRAPHY` | chisel nib, direction-dependent | `STROKE_STYLE_SQUARE_PEN` (7) | code 15 (14 fallback) |
 | `DASH` | uniform, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
@@ -179,35 +179,44 @@ migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. All live mappings above are confirmed on-device
 (BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status at v0.1.8 (`core/canvas/StrokeRenderer.kt`):
+Committed-renderer status at v0.1.9 (`core/canvas/StrokeRenderer.kt`):
 `PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path),
 `FOUNTAIN` (pressure-modulated width) and `PENCIL` (graphite grain — 0.1.7) render for
 real; `BRUSH` and `CALLIGRAPHY` still render as `PEN`.
 The enum may grow; hosts should treat unknown persisted values as `PEN`.
 
-**`PENCIL` (0.1.7).** Graphite is laid down as a scatter of flecks on the paper's tooth
-with bare paper between them, not as a tinted line: pressure fills in more of the tooth
-(and darkens what lands) while the **width never moves**, so a lead draws the width it is
-set to at any pressure. Tilt is deliberately unread — BOOX reports it on a scale that
-differs per model with no `getMaxTilt()` to normalize against, so a tilt-driven pencil
-would look right on a bench and flat on the fleet. A mark's apparent width comes out
-roughly `width + 2 px`, the bleed of one fleck; below about 2 px a lead stops getting
-finer. Hosts choosing distinguishable pencil sizes should space them by more than that.
+**`PENCIL` (0.1.7; tilt in 0.1.9).** Graphite is laid down as a scatter of flecks on the
+paper's tooth with bare paper between them, not as a tinted line. **Pressure darkens; tilt
+broadens.** Leaning on the pencil fills in more of the tooth and darkens what lands, without
+moving the width; laying it over draws with the flank of the lead rather than its point, and
+the mark grows several times wider — which is how anyone shades. A mark's apparent width comes
+out roughly `width + 2 px` at any one angle, the bleed of one fleck; below about 2 px a lead
+stops getting finer. Hosts choosing distinguishable pencil sizes should space them by more
+than that.
+
+**Tilt is supplied per-model, and zero everywhere else.** BOOX puts `tiltX`/`tiltY` on every
+raw point but the SDK has no `getMaxTilt()`, and a five-device survey found the raw numbers on
+wildly different scales — one model reporting in the thousands. So `gpaper-onyx` carries a list
+of models whose tilt has actually been *measured*, and every model not on it reports `0`.
+Measured on a NoteAir5C: `hypot(tiltX, tiltY)` is degrees from vertical, directly (a hand at a
+deliberate 45° read 44.3). **`tilt = 0` is not a degraded mode** — it means a pencil held
+upright, so an unmeasured device gets a fixed-width pencil rather than a broken one. Adding a
+model to that list is a measurement, never an inference.
 
 The grain is **deterministic**: it is seeded from the stroke's `id`, so the same stroke
 re-renders fleck for fleck on every reload, in `StrokeRasterizer`, and on any device. The
 live preview is seeded with the id the stroke is about to be committed with, so a pencil
 mark does not reshuffle at pen-up on engines that preview through the core renderer.
 Where the *live* ink is firmware the preview is the firmware's and the bake is ours — see the
-live-vs-baked caveat above; a pop at pen-up is expected there, not a bug. **Onyx deliberately arms
-the plain even line (`STROKE_STYLE_PENCIL`, 0) rather than the firmware's textured charcoal (4):
-charcoal is a stamp pen whose nominal width BOOX multiplies by 5 before rendering — the grain bitmap
-needs the room or no texture exists at all — so a 6 px lead previewed about 30 px wide and then
-committed 6, collapsing to a fifth of itself at pen-up. A preview that lies about *width* is worse
-than one that lies about texture, because width is what the hand aims with. Live and baked now agree
-on the mark's size and differ only in grain, so a stroke gains its tooth at pen-up instead of
-shrinking. Measured on a NoteAir5C.** Ratta's `NEEDLE` is a plain solid line and disagrees the same
-way, by texture alone.
+live-vs-baked caveat above; a pop at pen-up is expected there, not a bug.
+
+**Onyx arms `STROKE_STYLE_CHARCOAL_V2` (6), and the bake is fitted to match it.** The firmware's
+textured pens draw far wider than the width they are given when the pen is laid over, and that extra
+width is **tilt**, not a scale factor — measured on a NoteAir5C, not inferred. `TouchHelper` exposes
+only style, colour and width, so a textured live style cannot be had without its tilt response;
+`GraphiteGrain` therefore widens the bake on the same curve (≈1× at 9°, 2.5× at 44°, 5.5× at 75°).
+Live and baked agree on the mark's size at every angle, and a stroke gains its tooth at pen-up
+rather than changing size. Ratta's `NEEDLE` is a plain solid line and disagrees by texture alone.
 
 Selection (mechanics in the component, data in the host):
 

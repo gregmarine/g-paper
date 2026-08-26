@@ -45,15 +45,26 @@ import kotlin.math.sqrt
  * digitizer agree on, but the first 40 mm of a path is the first 40 mm of it whether four
  * more samples have arrived or four hundred.
  *
- * ## Tilt
+ * ## Tilt widens the mark, where the engine can supply it
  *
- * Deliberately unread. A real pencil laid over on its side deposits from the flank of the
- * lead — lighter, broader, streakier — and that is the other half of graphite. But BOOX
- * reports tilt on a scale that differs per model with no `getMaxTilt()` to normalize against
- * (a five-device survey found one model reporting roughly a hundred times the others), so the
- * Onyx engine captures tilt as zero and always will until someone characterizes it per model.
- * A renderer that leaned on tilt would therefore look right on a workbench and flat on every
- * BOOX panel in the field. Pressure carries the mark alone, on purpose.
+ * A real pencil laid over on its side draws with the flank of the lead instead of its point, and
+ * the mark gets dramatically broader — it is how anyone shades. So tilt drives **width** here and
+ * pressure drives **darkness**, which is the same division of labour Paintsprout's Wacom app
+ * arrived at against real pencils.
+ *
+ * The curve is not invented, and it is deliberately *not* the Wacom app's. It was fitted to what
+ * a BOOX NoteAir5C's own firmware charcoal does with the same pen, because on that panel the live
+ * ink is drawn by the device and the bake by this file, and a preview that disagrees with what
+ * commits is worse than either being slightly wrong on its own. A hand drew at three angles the
+ * digitizer reported as 9°, 44° and 75°, and the marks came out roughly 1×, 2.5× and 5.5× wide.
+ * Notably that blooms **earlier** than the Wacom pencil's profile, which stays thin until the pen
+ * is nearly flat; matching the panel mattered more than matching the sibling app.
+ *
+ * **A renderer here must still look right at `tilt = 0`, and always will.** Engines report zero
+ * whenever they cannot honestly supply an angle — on BOOX that is every model nobody has measured,
+ * because the SDK has no `getMaxTilt()` and a five-device survey found the raw numbers on wildly
+ * different scales. Zero simply means a pencil held upright, which is a pencil, so the degradation
+ * is a fixed-width mark rather than a broken one.
  */
 object GraphiteGrain {
 
@@ -123,6 +134,24 @@ object GraphiteGrain {
     private const val MIN_WIDTH_PX = 1f
 
     /**
+     * Below this lean the mark does not widen at all. A pencil held "upright" is never at zero —
+     * a hand deliberately holding one vertical measured a mean of 9° — and a mark that visibly
+     * breathed with the last few degrees of an ordinary grip would read as instability rather than
+     * as tilt.
+     */
+    private const val TILT_UPRIGHT_DEG = 9f
+
+    /** Flat on the paper. Past this the lead is not drawing with its flank, it is lying down. */
+    private const val TILT_FLAT_DEG = 90f
+
+    /**
+     * How much broader the flank of the lead is than its point, and how the two blend.
+     * Fitted to a NoteAir5C's firmware charcoal: 1× at 9°, ≈2.5× at 44°, ≈5.5× at 75°.
+     */
+    private const val TILT_GAIN = 6.4f
+    private const val TILT_POW = 1.75f
+
+    /**
      * Upper bound on flecks for one stroke. A mark long enough or broad enough to pass this
      * has already stopped being legible as grain, and the cap is here so a host that hands us
      * an absurd width or a path with a million points degrades instead of stalling the frame.
@@ -152,14 +181,28 @@ object GraphiteGrain {
      */
     fun of(points: List<StrokePoint>, width: Float, seed: Int): Grain {
         if (points.isEmpty()) return EMPTY
-        val half = (if (width < MIN_WIDTH_PX) MIN_WIDTH_PX else width) / 2f
-        return if (points.size == 1) tap(points[0], half, seed) else sweep(points, half, seed)
+        val base = (if (width < MIN_WIDTH_PX) MIN_WIDTH_PX else width) / 2f
+        return if (points.size == 1) tap(points[0], base, seed) else sweep(points, base, seed)
+    }
+
+    /**
+     * How much of the lead is meeting the paper, as a multiple of its point, at [tilt] radians
+     * from vertical. `1` upright; a lead laid right over draws several times broader.
+     *
+     * Measured per station rather than per stroke, because a hand rolls the pen over *during* a
+     * shading stroke and the mark has to broaden with it — a single tilt taken at pen-down would
+     * make every stroke uniform and lose the exact gesture this exists to render.
+     */
+    fun widthFactor(tilt: Float): Float {
+        val degrees = Math.toDegrees(tilt.toDouble()).toFloat()
+        if (degrees <= TILT_UPRIGHT_DEG) return 1f
+        val u = ((degrees - TILT_UPRIGHT_DEG) / (TILT_FLAT_DEG - TILT_UPRIGHT_DEG)).coerceIn(0f, 1f)
+        return 1f + TILT_GAIN * u.pow(TILT_POW)
     }
 
     // ── The mark ─────────────────────────────────────────────────────────────
 
-    private fun sweep(points: List<StrokePoint>, half: Float, seed: Int): Grain {
-        val lanes = laneCount(half)
+    private fun sweep(points: List<StrokePoint>, base: Float, seed: Int): Grain {
         val out = Sink()
         var traveled = 0f
         var station = 0
@@ -175,6 +218,10 @@ object GraphiteGrain {
             val ty = dy / segLen
             while (nextAt <= traveled + segLen) {
                 val t = (nextAt - traveled) / segLen
+                // Both the lean and the press are read at this station, not at the stroke's
+                // start: a shading stroke is a hand rolling the pencil over as it travels, and
+                // taking either once would render the gesture as a uniform bar.
+                val half = base * widthFactor(a.tilt + t * (b.tilt - a.tilt))
                 deposit(
                     out = out,
                     cx = a.x + t * dx,
@@ -184,7 +231,7 @@ object GraphiteGrain {
                     pressure = a.pressure + t * (b.pressure - a.pressure),
                     arc = nextAt,
                     station = station,
-                    lanes = lanes,
+                    lanes = laneCount(half),
                     half = half,
                     seed = seed,
                 )
@@ -195,7 +242,7 @@ object GraphiteGrain {
             traveled += segLen
         }
         // A path shorter than one pitch never reaches a station; it still left graphite.
-        if (station == 0) return tap(points[0], half, seed)
+        if (station == 0) return tap(points[0], base, seed)
         return out.grain()
     }
 
@@ -239,8 +286,9 @@ object GraphiteGrain {
     }
 
     /** A tap: the same tooth lattice, filled over a disc instead of swept along a path. */
-    private fun tap(p: StrokePoint, half: Float, seed: Int): Grain {
+    private fun tap(p: StrokePoint, base: Float, seed: Int): Grain {
         val out = Sink()
+        val half = base * widthFactor(p.tilt)
         val press = p.pressure.coerceIn(0f, 1f).pow(PRESSURE_GAMMA)
         val lanes = laneCount(half)
         for (row in 0 until lanes) {

@@ -472,6 +472,58 @@ MIP11 for the generic engine on LCD. Live ink is the user's eye; committed grain
   end in particular (a feather touch deposits well under one fleck per tooth, by design) is
   the most likely thing to want moving.
 
+### Phase 11 — Tilt on Onyx: the pencil's other half (post-v0.1.0)
+**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.9 (published)
+
+Opened by Phase 10's own device pass. The pencil's grain was right and its *width* was not: laid
+over, the firmware's live ink drew several times wider than the bake, and the mark visibly collapsed
+at pen-up. Two wrong turns on the way to the cause are worth keeping, because both are easy to
+repeat.
+
+**Wrong turn one — the wrong code path.** The collapse was first blamed on
+`NoteConstant.CHARCOAL_STROKE_WIDTH_EXTRA_SCALE = 5.0`. That constant is one BOOX's *own Notes app*
+applies before calling in; nothing multiplies on our behalf. And the "texture pens need width ≥ 20"
+finding it was reasoned from came from the **NeoPen software renderers**, a different path from the
+firmware overlay this engine uses. An inference from a neighbouring code path was stated as if it
+had been measured. It had not.
+
+**Wrong turn two — dismissing style 6 on a one-line description.** `CHARCOAL_V2` was written off as
+"textured, much thicker than style 4" without a test. It turned out to be the one the artist wanted:
+same tilt behaviour, better grain on a Kaleido panel.
+
+**What the measurement actually found.** A hand drew at three deliberate angles with per-stroke tilt
+logged, 1300–1600 samples each. `hypot(tiltX, tiltY)` **is degrees from vertical, directly**: a
+deliberate upright read a mean of 9.2, a deliberate 45° read 44.3, flat read 75.2. No scale factor,
+no fudge. The five-device survey's fear — that tilt is unusable because the fleet reports it on
+incompatible scales — is true *across* models and false *within* one that has been measured.
+
+**What landed:**
+
+- `gpaper-onyx` supplies tilt in radians for models on a **measured** allowlist (`NoteAir5C` today),
+  and zero for everyone else. Zero is not a degraded mode: it means a pencil held upright, so an
+  unmeasured device still gets a pencil. A plausibility ceiling backstops a firmware change that
+  moved the scale. **Adding a model is a measurement, never an inference** — the rule this phase
+  exists to enforce.
+- `GraphiteGrain` widens the mark with tilt, on a curve **fitted to what this firmware does**
+  (≈1× at 9°, 2.5× at 44°, 5.5× at 75°) rather than imported from Paintsprout's Wacom pencil, whose
+  profile stays thin until nearly flat and blooms far later. Matching the panel beat matching the
+  sibling app. Tilt is read **per station**, not once per stroke, because a shading stroke is a hand
+  rolling the pencil over as it travels.
+- Onyx arms `STROKE_STYLE_CHARCOAL_V2` for `PENCIL`. `TouchHelper`'s entire pen surface is
+  `setStrokeStyle` / `setStrokeColor` / `setStrokeWidth` — verified by `javap` on the AAR — so a
+  textured live style cannot be had without its tilt response. The answer was to match it, not fight
+  it.
+- 7 new JVM tests pin the curve, its monotonicity, the clamp past flat, the per-station broadening
+  and that tilt does not disturb determinism.
+
+**The general lesson, worth more than the fix:** a live preview that lies about **width** is far
+worse than one that lies about texture. Width is what the hand aims with, and the artist reads the
+collapse as the *bake* being broken.
+
+**Left for the device:** whether the fitted curve actually matches V2 by eye at intermediate angles.
+The three anchor points came from an artist's estimate of relative widths, so the middle of the curve
+is the least constrained part of it.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

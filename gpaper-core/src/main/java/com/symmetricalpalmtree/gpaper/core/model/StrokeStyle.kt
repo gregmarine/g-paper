@@ -20,7 +20,7 @@ package com.symmetricalpalmtree.gpaper.core.model
  * | [PEN] | uniform width | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
  * | [FOUNTAIN] | pressure/velocity-modulated width | `STROKE_STYLE_FOUNTAIN` (1) | `INK` (16) |
  * | [MARKER] | uniform, semi-transparent, flat caps | `STROKE_STYLE_MARKER` (2) | `NEEDLE` (10) |
- * | [PENCIL] | graphite grain on paper tooth; pressure → coverage + darkness | `STROKE_STYLE_PENCIL` (0) — even line at the true width; charcoal (4) is scaled ×5 by firmware | `NEEDLE` (10) |
+ * | [PENCIL] | graphite grain on tooth; pressure → darkness, tilt → width | `STROKE_STYLE_CHARCOAL_V2` (6) | `NEEDLE` (10) |
  * | [BRUSH] | broad, strongly pressure-modulated | `STROKE_STYLE_NEO_BRUSH` (3) | `INK` (16) |
  * | [CALLIGRAPHY] | chisel nib (direction-dependent width) | `STROKE_STYLE_SQUARE_PEN` (7) | code 15 (14 as fallback) |
  * | [DASH] | uniform width, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
@@ -48,11 +48,13 @@ enum class StrokeStyle {
     MARKER,
 
     /**
-     * Graphite. Flecks of mineral caught on the paper's tooth with bare paper between
-     * them — pressure fills in more of the tooth and darkens what lands, while the width
-     * stays exactly as set. The grain is seeded from the stroke's id, so a page re-renders
-     * fleck for fleck however many times it is reloaded. Tilt is not read: see
-     * `docs/api.md` for why the fleet cannot supply it.
+     * Graphite. Flecks of mineral caught on the paper's tooth with bare paper between them.
+     * **Pressure darkens, tilt broadens** — leaning on it fills in more of the tooth, laying
+     * it over draws with the flank of the lead instead of its point, which is how anyone
+     * shades. The grain is seeded from the stroke's id, so a page re-renders fleck for fleck
+     * however many times it is reloaded. Engines that cannot honestly supply an angle report
+     * `tilt = 0`, which simply means a pencil held upright — a fixed-width mark, not a
+     * broken one.
      */
     PENCIL,
 

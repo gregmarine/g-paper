@@ -2,6 +2,7 @@ package com.symmetricalpalmtree.gpaper.onyx
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Build
 import android.graphics.Rect
 import android.util.Log
 import android.view.MotionEvent
@@ -20,6 +21,7 @@ import com.symmetricalpalmtree.gpaper.core.Tool
 import com.symmetricalpalmtree.gpaper.core.canvas.CanvasPaperView
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
+import kotlin.math.hypot
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 
 /**
@@ -55,6 +57,16 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
 
     private companion object {
         const val TAG = "GPaperOnyx"
+
+        /**
+         * BOOX models whose `tiltX`/`tiltY` have been **measured** to be degrees from vertical.
+         * Every other model reports tilt as zero — see [tiltRadians]. One name per measurement;
+         * this list never grows by inference from a model that merely looks similar.
+         */
+        val TILT_DEGREES_MODELS = setOf("NoteAir5C")
+
+        /** A pen leans at most 90° from vertical; anything past this is not an angle. */
+        const val MAX_PLAUSIBLE_TILT_DEGREES = 95f
 
         /** Suppresses EPD hardware auto-GC16 refresh mid-session; quality refreshes are
          *  driven explicitly via `handwritingRepaint` at the handoff points. */
@@ -193,25 +205,35 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
      * KDoc / `docs/api.md`). CROSS has no firmware x-stream; CHARCOAL is the nearest
      * live texture — the bake corrects to true x-marks.
      *
-     * **PENCIL arms the plain even line, not the firmware's textured charcoal, and the
-     * reason is width.** CHARCOAL is a stamp-based texture pen: BOOX scales its nominal
-     * width by `NoteConstant.CHARCOAL_STROKE_WIDTH_EXTRA_SCALE = 5.0` before rendering,
-     * because the grain bitmap is scaled to the stroke and below roughly 20 px there is
-     * no room for any texture to exist. So arming CHARCOAL at a 6 px pencil drew live ink
-     * about 30 px wide and the bake then committed 6 — the mark visibly collapsed to a
-     * fifth of itself the moment the pen lifted. A live preview that lies about width is
-     * worse than one that lies about texture: width is what the hand is aiming with.
+     * **PENCIL arms `CHARCOAL_V2`, and the width it draws is tilt, not a scale factor.**
+     * The route to that took two wrong turns worth recording, because both are easy to
+     * take again.
      *
-     * Style 0 is an even line at the width it is given, so live and baked now agree on the
-     * mark's size and differ only in grain, which appears as the stroke gaining its tooth
-     * at pen-up rather than shrinking. Measured on a NoteAir5C.
+     * Style 4 (`CHARCOAL`) came first and drew far wider than the width it was given, so
+     * the mark collapsed at pen-up. That got blamed on
+     * `NoteConstant.CHARCOAL_STROKE_WIDTH_EXTRA_SCALE = 5.0` — which is wrong: that
+     * constant is one BOOX's *own Notes app* applies before calling in, nothing multiplies
+     * on our behalf, and the "texture needs width ≥ 20" finding behind it came from the
+     * NeoPen *software* renderers, a different path from this overlay entirely. Measuring
+     * on a NoteAir5C settled it: the extra width is **tilt**. Held upright the mark matches
+     * the width asked for; laid over it grows several times. There is nothing to divide out.
+     *
+     * `TouchHelper` has no tilt control — `setStrokeStyle`, `setStrokeColor`,
+     * `setStrokeWidth` is its entire pen surface — so a textured style cannot be had
+     * without its tilt response. The answer is therefore not to fight it but to **match**
+     * it: [tiltRadians] supplies the angle and core's `GraphiteGrain` widens the bake on
+     * the same curve, fitted to what this firmware actually does. Live and baked then agree
+     * at every angle, and a stroke gains its tooth at pen-up rather than changing size.
+     *
+     * V2 over 4 on the artist's eye: same tilt behaviour, and its grain reads better on a
+     * Kaleido panel.
      */
     private fun liveStyleCode(style: StrokeStyle): Int = when (style) {
         StrokeStyle.PEN -> TouchHelper.STROKE_STYLE_PENCIL
         StrokeStyle.FOUNTAIN -> TouchHelper.STROKE_STYLE_FOUNTAIN
         StrokeStyle.MARKER -> TouchHelper.STROKE_STYLE_MARKER
         StrokeStyle.BRUSH -> TouchHelper.STROKE_STYLE_NEO_BRUSH
-        StrokeStyle.PENCIL -> TouchHelper.STROKE_STYLE_PENCIL
+        StrokeStyle.PENCIL -> TouchHelper.STROKE_STYLE_CHARCOAL_V2
         StrokeStyle.CALLIGRAPHY -> TouchHelper.STROKE_STYLE_SQUARE_PEN
         StrokeStyle.DASH -> TouchHelper.STROKE_STYLE_DASH
         StrokeStyle.CROSS -> TouchHelper.STROKE_STYLE_CHARCOAL
@@ -628,12 +650,46 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     private fun TouchPoint.toStrokePoint(): StrokePoint = StrokePoint(
         x = x,
         y = y,
-        // Raw digitizer pressure; normalize per device. Tilt stays 0 — the fleet survey
-        // found per-device tilt scales with no SDK normalizer (unusable until calibrated).
+        // Raw digitizer pressure; normalize per device.
         pressure = if (maxTouchPressure > 0f) (pressure / maxTouchPressure).coerceIn(0f, 1f) else 1f,
-        tilt = 0f,
+        tilt = tiltRadians(tiltX, tiltY),
         timeMillis = timestamp,
     )
+
+    /**
+     * The pen's lean, in radians from vertical — or zero on a model nobody has measured.
+     *
+     * BOOX puts `tiltX`/`tiltY` on every raw point and this engine threw them away for a long
+     * time, for a good reason: a five-device survey found the numbers on wildly different scales
+     * across the line — four models within about ±60, and a Go 6 reporting in the thousands, with
+     * 2625 units of spread *inside a single stroke*. There is no `getMaxTilt()` anywhere in the SDK
+     * to normalize against, the way `getMaxTouchPressure()` normalizes pressure. Publishing that
+     * number unscaled would mean publishing a different unit per model, which is worse than
+     * publishing nothing.
+     *
+     * So it is measured, one model at a time, and every model nobody has measured keeps reporting
+     * zero — which is not a degradation but exactly the behaviour this engine had before, so a
+     * renderer that looks right at `tilt = 0` still looks right there.
+     *
+     * **Measured on the NoteAir5C: `hypot(tiltX, tiltY)` is degrees from vertical, directly.** A
+     * hand holding the pen deliberately upright read a mean of 9.2, deliberately at 45° read 44.3,
+     * and laid as flat as it would still draw read 75.2, over strokes of 1300–1600 samples each.
+     * No scale factor, no fudge — the digitizer is reporting an angle and the only conversion owed
+     * is degrees to radians.
+     *
+     * The plausibility ceiling is a backstop, not the mechanism. A measured model that one day
+     * ships firmware reporting on some other scale would otherwise feed a renderer angles of
+     * several thousand radians, and a mark kilometres wide is a nastier failure than a flat one.
+     *
+     * **Adding a model here is a measurement, never a guess.** Draw at known angles, read what the
+     * digitizer says, and only then add the name.
+     */
+    private fun tiltRadians(tiltX: Int, tiltY: Int): Float {
+        if (Build.MODEL !in TILT_DEGREES_MODELS) return 0f
+        val degrees = hypot(tiltX.toFloat(), tiltY.toFloat())
+        if (degrees > MAX_PLAUSIBLE_TILT_DEGREES) return 0f
+        return Math.toRadians(degrees.toDouble()).toFloat()
+    }
 
     private fun emitRaw(action: RawAction, rawTool: RawTool, tp: TouchPoint) {
         val p = tp.toStrokePoint()

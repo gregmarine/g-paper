@@ -67,12 +67,25 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   being broken.** Any style armed against a texture pen must account for its scale factor or accept
   the same collapse — `CROSS` still arms charcoal on purpose, because there it is approximating a
   texture rather than a width.
-- **Tilt is captured as 0 and that is a fleet decision, not a hardware limit.** BOOX delivers
-  `tiltX`/`tiltY` on every raw point and the NA5C's spans are sane (`-43..55` / `-13..38`), but one
-  surveyed model reports roughly 100× the others and there is no `getMaxTilt()` to normalize
-  against. Any tilt-driven feature therefore needs **per-model characterization** — its own phase,
-  with unknown models staying at zero — and until then a renderer must look right at `tilt = 0`,
-  because that is what every BOOX panel in the field will hand it.
+- **Tilt is supplied per measured model and zero everywhere else (Phase 11).** There is no
+  `getMaxTilt()` in the SDK and the fleet reports the raw numbers on incompatible scales (one model
+  in the thousands), so `gpaper-onyx` carries an allowlist of models whose tilt has actually been
+  *measured* and reports `0` for the rest. **Measured on the NoteAir5C: `hypot(tiltX, tiltY)` is
+  degrees from vertical, directly** — a hand at a deliberate 45° read 44.3 over 1400 samples.
+  **Adding a model to that list is a measurement, never an inference from a similar-looking one.**
+  `tilt = 0` is not a degraded mode — it means a pencil held upright — so a renderer must still look
+  right there, and an unmeasured device gets a fixed-width pencil rather than a broken one.
+- **A live preview that lies about WIDTH is far worse than one that lies about texture**, because
+  width is what the hand aims with — and the artist reads the collapse at pen-up as the *bake* being
+  broken, which sends the search to the wrong half of the system. When a firmware style and the bake
+  disagree on size, **match the firmware** rather than flattening the style: `TouchHelper` exposes
+  only style/colour/width (verified by `javap`), so a textured live style cannot be had without
+  whatever tilt response it comes with.
+- **Measure the device before explaining it.** Phase 11 lost a round trip to an inference from
+  `NoteConstant.CHARCOAL_STROKE_WIDTH_EXTRA_SCALE` — a constant BOOX's *own app* applies, reasoned
+  from a finding about the NeoPen *software* renderers, a different code path from the firmware
+  overlay — stated as if it had been measured. It lost another to writing off `CHARCOAL_V2` on a
+  one-line survey description; that style turned out to be the one the artist wanted.
 - **Pen-activity gate includes hover.** `isPenActive` = writing ∨ hovering + 350 ms tail — the palm
   lands before the pen tip, so proximity must close the gate. Traps: stylus hover is delivered
   to `onHoverEvent` first (pointer-source) — and since the paper view is not hoverable it returns

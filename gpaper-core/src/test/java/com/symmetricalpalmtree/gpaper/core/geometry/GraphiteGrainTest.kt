@@ -188,6 +188,100 @@ class GraphiteGrainTest {
         assertTrue(GraphiteGrain.FLECK_PX > GraphiteGrain.TOOTH_PITCH_PX)
     }
 
+    // ── Tilt widens the mark ─────────────────────────────────────────────────
+
+    private fun deg(d: Float): Float = Math.toRadians(d.toDouble()).toFloat()
+
+    @Test
+    fun `the width curve matches what the panel's own firmware does`() {
+        // Fitted to a NoteAir5C: a hand drew at the angles its digitizer reported as 9, 44 and 75
+        // degrees, and the firmware charcoal's marks came out about 1x, 2.5x and 5.5x wide. The
+        // bake has to agree with the live ink or the mark changes size when the pen lifts.
+        assertEquals(1.0f, GraphiteGrain.widthFactor(deg(9f)), 0.01f)
+        assertEquals(2.5f, GraphiteGrain.widthFactor(deg(44f)), 0.25f)
+        assertEquals(5.5f, GraphiteGrain.widthFactor(deg(75f)), 0.35f)
+    }
+
+    @Test
+    fun `an upright pencil draws the width it was set to`() {
+        // Zero is what every engine reports when it cannot honestly supply an angle, so this is
+        // also the guarantee that an unmeasured device still gets a pencil rather than a hairline.
+        assertEquals(1f, GraphiteGrain.widthFactor(0f), 0f)
+        assertEquals(1f, GraphiteGrain.widthFactor(deg(5f)), 0f)
+    }
+
+    @Test
+    fun `laying the pen over never narrows the mark`() {
+        var previous = 0f
+        var d = 0f
+        while (d <= 90f) {
+            val f = GraphiteGrain.widthFactor(deg(d))
+            assertTrue("width went backwards at $d deg", f >= previous - 1e-4f)
+            previous = f
+            d += 1f
+        }
+    }
+
+    @Test
+    fun `a lean past flat is clamped rather than extrapolated`() {
+        val flat = GraphiteGrain.widthFactor(deg(90f))
+        assertEquals(flat, GraphiteGrain.widthFactor(deg(120f)), 0f)
+        assertEquals(flat, GraphiteGrain.widthFactor(deg(400f)), 0f)
+    }
+
+    @Test
+    fun `a stroke laid over deposits over a broader band than an upright one`() {
+        fun band(tiltDeg: Float): Float {
+            val pts = listOf(
+                StrokePoint(100f, 200f, 0.7f, deg(tiltDeg)),
+                StrokePoint(400f, 200f, 0.7f, deg(tiltDeg)),
+            )
+            val g = GraphiteGrain.of(pts, 6f, 77)
+            var lo = Float.MAX_VALUE
+            var hi = -Float.MAX_VALUE
+            for (i in 0 until g.count) {
+                val y = g.xy[i * 2 + 1]
+                if (y < lo) lo = y
+                if (y > hi) hi = y
+            }
+            return hi - lo
+        }
+        val upright = band(5f)
+        val flat = band(75f)
+        assertTrue("flat $flat should be far broader than upright $upright", flat > upright * 3f)
+    }
+
+    @Test
+    fun `the pen rolling over mid-stroke broadens the mark as it goes`() {
+        // A shading stroke is a hand laying the pencil down as it travels. Tilt is read per
+        // station for exactly this; taken once at pen-down the mark would come out a uniform bar.
+        val pts = listOf(
+            StrokePoint(100f, 300f, 0.7f, deg(5f)),
+            StrokePoint(500f, 300f, 0.7f, deg(80f)),
+        )
+        val g = GraphiteGrain.of(pts, 6f, 91)
+        fun spreadNear(x: Float): Float {
+            var lo = Float.MAX_VALUE
+            var hi = -Float.MAX_VALUE
+            for (i in 0 until g.count) {
+                if (abs(g.xy[i * 2] - x) > 30f) continue
+                val y = g.xy[i * 2 + 1]
+                if (y < lo) lo = y
+                if (y > hi) hi = y
+            }
+            return hi - lo
+        }
+        assertTrue("the far end should be broader than the near end", spreadNear(460f) > spreadNear(140f) * 2f)
+    }
+
+    @Test
+    fun `tilt does not disturb the grain's determinism`() {
+        val pts = (0 until 40).map {
+            StrokePoint(10f + it * 4f, 50f, 0.6f, deg(10f + it))
+        }
+        assertSameGrain(GraphiteGrain.of(pts, 6f, 5), GraphiteGrain.of(pts, 6f, 5))
+    }
+
     @Test
     fun `an absurd stroke degrades instead of stalling the frame`() {
         val huge = (0 until 4000).map { StrokePoint(it * 3f, (it % 40) * 7f, 1f) }
