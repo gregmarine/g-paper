@@ -85,7 +85,7 @@ object GraphiteGrain {
      * physical because core knows nothing about screen density; a host on a coarser panel
      * gets a proportionally coarser tooth, which is the right way round.
      */
-    const val TOOTH_PITCH_PX: Float = 1.7f
+    const val TOOTH_PITCH_PX: Float = 1.1f
 
     /**
      * Diameter of one fleck of graphite in px. Deliberately larger than [TOOTH_PITCH_PX] —
@@ -93,16 +93,21 @@ object GraphiteGrain {
      * hard-pressed line is a line rather than a dotted one, while an isolated fleck at the
      * pale end is still a speck of grit and not a pinprick.
      */
-    const val FLECK_PX: Float = 2.55f
+    const val FLECK_PX: Float = 1.65f
 
     /**
-     * How many darknesses a fleck may have. Three, and few on purpose: tone here is supposed
-     * to come from *how many* flecks land, so the darkness ramp is a floor under the pale end
-     * — it keeps a barely-touched stroke from being a scatter of pure black dots — rather
-     * than the mechanism. More levels would quietly turn this back into a tonal renderer and
-     * hand the panel greys to dither after all.
+     * How many darknesses a fleck may have. Tone here still comes chiefly from *how many* flecks
+     * land — the darkness ramp is support under the pale end, keeping a barely-touched stroke from
+     * being a scatter of pure black dots, rather than the mechanism.
+     *
+     * Three at first, on the argument that more levels would quietly turn a spatial texture back
+     * into a tonal one. Raised to six when the artist reported the pressure ramp stepping where the
+     * panel's own ink graded smoothly: coverage saturates once the tooth is full, so above that
+     * point the darkness ramp is the *only* thing left carrying pressure, and three steps cannot
+     * carry it. The flecks' own scatter dithers across the extra levels, so this reads as a smoother
+     * gradient rather than as more bands.
      */
-    const val LEVELS: Int = 3
+    const val LEVELS: Int = 6
 
     /** Alpha multiplier of the palest fleck; the darkest is always 1. */
     private const val LEVEL_FLOOR = 0.45f
@@ -190,7 +195,7 @@ object GraphiteGrain {
      * has already stopped being legible as grain, and the cap is here so a host that hands us
      * an absurd width or a path with a million points degrades instead of stalling the frame.
      */
-    private const val MAX_FLECKS = 240_000
+    private const val MAX_FLECKS = 400_000
 
     /**
      * One stroke's worth of graphite: [count] flecks, their centres interleaved in [xy]
@@ -313,8 +318,15 @@ object GraphiteGrain {
         val ny = tx
         val press = pressure.coerceIn(0f, 1f).pow(PRESSURE_GAMMA)
         val skate = skate(arc, seed)
+        // Slide this cross-section's whole comb of lanes sideways by a random fraction of a lane.
+        // Without it, the same lane recurs at the same offset station after station, and since a
+        // fleck is wider than the pitch that spaces them, consecutive flecks in a lane fuse — the
+        // mark comes out as a bundle of little dashes running *along* the stroke, and reads as
+        // combed rather than deposited. Graphite has no direction; a random phase per station
+        // removes the only thing that gave it one.
+        val phase = unit(hash(seed, station, 0x1f7))
         for (lane in 0 until lanes) {
-            val u = laneOffset(lane, lanes)
+            val u = laneOffset(lane, lanes, phase)
             val cover = coverage(press, u) * skate * lean
             if (cover <= 0f) continue
             if (unit(hash(seed, station, lane xor 0x2af1)) >= cover) continue
@@ -338,9 +350,9 @@ object GraphiteGrain {
         val press = p.pressure.coerceIn(0f, 1f).pow(PRESSURE_GAMMA)
         val lanes = laneCount(half)
         for (row in 0 until lanes) {
-            val v = laneOffset(row, lanes)
+            val v = laneOffset(row, lanes, unit(hash(seed, row, 0x1f7)))
             for (lane in 0 until lanes) {
-                val u = laneOffset(lane, lanes)
+                val u = laneOffset(lane, lanes, unit(hash(seed, row, 0x2e8)))
                 val r = sqrt(u * u + v * v)
                 if (r > 1f) continue
                 val cover = coverage(press, r) * lean
@@ -373,8 +385,8 @@ object GraphiteGrain {
      * two thirds of the entire mark: a hard-pressed fine lead came out patchy and grey
      * instead of a firm dark line.
      */
-    private fun laneOffset(lane: Int, lanes: Int): Float =
-        if (lanes <= 1) 0f else -1f + (2f * lane + 1f) / lanes
+    private fun laneOffset(lane: Int, lanes: Int, phase: Float): Float =
+        if (lanes <= 1) 0f else -1f + 2f * (lane + phase) / lanes
 
     /** Fraction of peaks that catch graphite at this pressure, [u] px across the mark (-1..1). */
     private fun coverage(press: Float, u: Float): Float {

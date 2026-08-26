@@ -570,7 +570,31 @@ would get a different answer from the one on screen. Dividing the width the *eng
 that scales its pen widths up to suit hands the firmware exactly the number it got before, so the
 EPD's appearance is untouched and only the bake moves.
 
-**Left for the device:** the middle of the width curve. Both fits were anchored on an artist's estimate of
+**0.1.13 — the grain had a direction, and graphite has none.** Photographing the panel's ink beside
+ours *under magnification* showed what neither the eye at arm's length nor any aggregate statistic
+had: our flecks were combed into short dashes running **along** the stroke, while the panel's speckle
+was fine and isotropic. The cause was structural — a fleck is wider than the lattice pitch that
+spaces it, so the same lane recurring at the same offset station after station fused its flecks into
+a line. Fixed by sliding the whole comb sideways by a random fraction of a lane at every station:
+one hash, and the only thing that gave the texture a direction is gone.
+
+The grain also came **finer** in the same release (pitch 2.55/1.7 → 1.65/1.1) because the panel's
+speckle is visibly smaller-grained than ours was, and coarse grain reads as gravel. Scaling pitch
+and fleck by the same factor leaves coverage — and therefore density — untouched, which is what
+made it safe to change texture and density independently.
+
+And [LEVELS] went 3 → 6. Three was argued for on the grounds that more levels turn a spatial texture
+tonal; the artist reported the pressure ramp *stepping* where the panel graded smoothly, and the
+reason is that **coverage saturates once the tooth is full**, so past that point the darkness ramp is
+the only thing still carrying pressure and three steps cannot carry it.
+
+**Two lessons:** an aggregate statistic cannot see structure — mass, extent and coverage were all
+being matched while the texture was plainly wrong in a way a magnified crop showed instantly. And a
+combed texture at a given coverage does not *look* like an even scatter at the same coverage, so a
+density judgement made over a structurally wrong grain is not worth acting on.
+
+**Left for the device:** the middle of the width curve, and grain density now that the texture is
+even enough to judge it. Both fits were anchored on an artist's estimate of
 *relative* widths at three angles, so 44° is the least constrained point on it.
 
 ## Standing Open Questions (ask as they become relevant)

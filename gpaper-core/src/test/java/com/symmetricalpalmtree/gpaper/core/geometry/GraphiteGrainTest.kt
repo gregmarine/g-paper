@@ -318,7 +318,9 @@ class GraphiteGrainTest {
     fun `an absurd stroke degrades instead of stalling the frame`() {
         val huge = (0 until 4000).map { StrokePoint(it * 3f, (it % 40) * 7f, 1f) }
         val g = GraphiteGrain.of(huge, 60f, 5)
-        assertTrue("capped", g.count in 1..250_000)
+        // Bounded well below anything that would stall a frame, and never zero — the cap must
+        // degrade a monstrous stroke, not erase it.
+        assertTrue("capped, got ${g.count}", g.count in 1..420_000)
         assertNotEquals(0, g.count)
     }
 }

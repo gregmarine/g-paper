@@ -81,6 +81,19 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   disagree on size, **match the firmware** rather than flattening the style: `TouchHelper` exposes
   only style/colour/width (verified by `javap`), so a textured live style cannot be had without
   whatever tilt response it comes with.
+- **An aggregate statistic cannot see structure — magnify the texture and compare it.** Mass, extent
+  and coverage were all matching the panel's ink while our grain was plainly wrong: the flecks were
+  combed into short dashes running *along* the stroke where the panel's speckle is isotropic. A
+  fleck wider than the lattice pitch that spaces it fuses with its neighbour in the same lane, station
+  after station, and the mark grows a direction graphite does not have. Fixed in 0.1.13 by sliding
+  the comb sideways a random fraction of a lane at every station. **Any lattice-placed texture needs
+  something that decorrelates it along the path**, or it will comb.
+- **A combed texture does not look like an even scatter at the same coverage**, so a density
+  judgement made over a structurally wrong grain is not worth acting on — fix the structure first,
+  then re-judge density.
+- **Scale a texture's pitch and its grain size by the same factor** and coverage, and therefore
+  density, is untouched — which is what lets grain fineness be tuned independently of how dark a
+  mark is.
 - **A binary threshold cannot measure a texture whose nature is partial coverage.** Comparing a
   photographed live stroke against its bake, thresholding high enough to segment cleanly made the
   baked bands read ~30% narrower — the threshold was discarding pale outer flecks, and it inflated
