@@ -192,6 +192,26 @@ object GraphiteGrain {
     private const val TILT_SMOOTH_PX = 40f
 
     /**
+     * How far the lean is averaged over before it decides **darkness** — much further than before
+     * it decides width.
+     *
+     * Tilt drives two things in opposite directions: laying the pen over makes a mark broader and
+     * paler, bringing it upright makes it narrower and denser. Read from the same instant, those
+     * compound — a moment of near-upright inside a laid-over stroke comes out ten times narrower
+     * *and* nearly twice as dark, which is a hard black nub, and touch-down is exactly where the
+     * pen is most likely to be caught upright. Real graphite does that, but only in the shape of
+     * the mark; the paleness of side-of-lead shading is a property of how the lead is being *held*,
+     * not of a single sample.
+     *
+     * So darkness follows the lean the hand has settled into rather than its every flicker. A
+     * stroke drawn flat throughout is still paler than one drawn upright throughout — the effect
+     * the artist asked for is untouched — but a stroke does not flash dark where the pen happens
+     * to pass through vertical. Long enough that touching down cannot move it, short enough that a
+     * deliberate roll across a long stroke still lightens as it goes.
+     */
+    private const val COVER_SMOOTH_PX = 150f
+
+    /**
      * How far the *direction of travel* is averaged over, in px of arc, before a cross-section is
      * laid perpendicular to it.
      *
@@ -311,15 +331,15 @@ object GraphiteGrain {
     fun coverageFactor(tilt: Float): Float = 1f - TILT_LIGHTEN * lean(tilt)
 
     /**
-     * The lean to start the filter at: the mean over the first [TILT_SMOOTH_PX] of travel, so there
-     * is no transient to climb out of. Weighted by arc length rather than by sample, because a pen
+     * The lean to start a filter at: the mean over the first [window] px of travel, so there is no
+     * transient to climb out of. Weighted by arc length rather than by sample, because a pen
      * that slows down delivers many samples over very little paper and would otherwise dominate.
      */
-    private fun seedLean(points: List<StrokePoint>): Float {
+    private fun seedLean(points: List<StrokePoint>, window: Float): Float {
         var reach = 0f
         var weighted = 0f
         var i = 1
-        while (i < points.size && reach < TILT_SMOOTH_PX) {
+        while (i < points.size && reach < window) {
             val a = points[i - 1]
             val b = points[i]
             val step = sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))
@@ -435,7 +455,9 @@ object GraphiteGrain {
         // lead already laid over starts narrow and dark and flares out over the next few
         // millimetres: an arrowhead with a dense nub on the point, which is exactly as much like
         // graphite as it sounds.
-        var leanTilt = seedLean(points)
+        var leanTilt = seedLean(points, TILT_SMOOTH_PX)
+        val covering = 1f - exp(-TOOTH_PITCH_PX / COVER_SMOOTH_PX)
+        var coverTilt = seedLean(points, COVER_SMOOTH_PX)
         val turning = 1f - exp(-TOOTH_PITCH_PX / TANGENT_SMOOTH_PX)
         // Seed the travelled direction from a chord across the whole smoothing window, never from
         // the first pair of samples.
@@ -510,8 +532,9 @@ object GraphiteGrain {
                 // taking either once would render the gesture as a uniform bar.
                 val tilt = a.tilt + t * (b.tilt - a.tilt)
                 leanTilt += (tilt - leanTilt) * smoothing
+                coverTilt += (tilt - coverTilt) * covering
                 val half = base * widthFactor(leanTilt)
-                val coverLean = coverageFactor(leanTilt)
+                val coverLean = coverageFactor(coverTilt)
                 val cx = a.x + t * dx
                 val cy = a.y + t * dy
                 val pressure = a.pressure + t * (b.pressure - a.pressure)

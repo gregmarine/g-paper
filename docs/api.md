@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.20**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.21**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -179,7 +179,7 @@ migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. All live mappings above are confirmed on-device
 (BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status at v0.1.20 (`core/canvas/StrokeRenderer.kt`):
+Committed-renderer status at v0.1.21 (`core/canvas/StrokeRenderer.kt`):
 `PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path),
 `FOUNTAIN` (pressure-modulated width) and `PENCIL` (graphite grain — 0.1.7) render for
 real; `BRUSH` and `CALLIGRAPHY` still render as `PEN`.
@@ -216,6 +216,13 @@ cross-section of grain is then rotated by that much. On a lead laid over it thro
 pixels out of line and the stroke grows bristles: a pipe cleaner. Smoothed over ~10 px of arc,
 causally. **A texture cannot be fixed by working on the texture when the frame it is laid in is
 noisy.**
+
+**Darkness follows a slower lean than width does (0.1.21).** Tilt drives the two in opposite
+directions — laying the pen over makes a mark broader *and* paler — so read from the same instant
+they compound, and a moment of near-upright inside a laid-over stroke comes out ten times narrower
+*and* nearly twice as dark: a hard black nub, right where touch-down is most likely to catch the pen
+upright. Width follows the lean closely; darkness follows the lean the hand has settled into. A
+stroke held flat is still paler than one held upright, which is what side-of-lead shading looks like.
 
 **Tilt is averaged along the path before it sets a width (0.1.15).** A digitizer's tilt reading
 jitters by several degrees sample to sample and a hand cannot roll a pencil that fast; fed in raw

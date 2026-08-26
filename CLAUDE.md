@@ -94,6 +94,11 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   density. The excess landed on the cap's outline (its outermost lanes sit there by construction) and
   drew a dark bead round the end of every stroke. Ask for coverage per unit of **area**, not per lane
   (0.1.19), and stop a cap while its strips are still a tooth wide.
+- **When one input drives two outputs in opposite directions, they must not both be instantaneous.**
+  Tilt makes a mark broader *and* paler, so read from the same instant a brief near-upright moment is
+  ten times narrower and twice as dark at once — a black nub, and touch-down is where a pen is most
+  often caught upright. Width follows the lean closely (40 px); darkness follows the lean the hand has
+  *settled into* (150 px). Shape belongs to the instant, tone belongs to the grip.
 - **Fix a class of bug everywhere it lives, not where it was found.** The tangent and lean filters
   were introduced together; the tangent's seed was corrected in 0.1.18 and the lean's was not, so it
   went on producing a differently-shaped version of the same artifact (a wedge instead of a hook) for

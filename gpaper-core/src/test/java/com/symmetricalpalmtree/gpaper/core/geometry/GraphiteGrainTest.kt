@@ -248,6 +248,67 @@ class GraphiteGrainTest {
     }
 
     @Test
+    fun `passing through upright narrows a mark without darkening it`() {
+        // Tilt drives width and darkness in opposite directions. Read from the same instant they
+        // compound, and a moment of near-upright inside a laid-over stroke comes out ten times
+        // narrower AND nearly twice as dark — a hard black nub. Darkness follows the lean the hand
+        // has settled into, so the mark may narrow there but must not flash dark.
+        val pts = (0..300).map {
+            // laid over throughout, save for a brief pass through vertical
+            val upright = it in 60..80
+            StrokePoint(
+                x = 100f + it * 3f,
+                y = 400f,
+                pressure = 0.8f,
+                tilt = deg(if (upright) 10f else 72f),
+            )
+        }
+        val g = GraphiteGrain.of(pts, 12f, 2727)
+        fun density(from: Float, to: Float): Float {
+            var n = 0
+            var lo = Float.MAX_VALUE
+            var hi = -Float.MAX_VALUE
+            for (i in 0 until g.count) {
+                val x = g.xy[i * 2]
+                if (x < from || x >= to) continue
+                n++
+                val y = g.xy[i * 2 + 1]
+                if (y < lo) lo = y
+                if (y > hi) hi = y
+            }
+            return if (n == 0) 0f else n / ((to - from) * (hi - lo))
+        }
+        val throughUpright = density(300f, 340f)
+        val laidOver = density(700f, 740f)
+        assertTrue("nothing was measured", throughUpright > 0f && laidOver > 0f)
+        assertTrue(
+            "the mark flashed dark passing through upright ($throughUpright vs $laidOver)",
+            throughUpright < laidOver * 1.25f,
+        )
+    }
+
+    @Test
+    fun `a stroke held flat is still paler than one held upright`() {
+        // The steady-state effect must survive: this is what side-of-lead shading looks like, and
+        // it is the thing the slower darkness filter must NOT have thrown away.
+        fun density(tiltDeg: Float): Float {
+            val pts = (0..300).map {
+                StrokePoint(100f + it * 3f, 400f, 0.8f, deg(tiltDeg))
+            }
+            val g = GraphiteGrain.of(pts, 12f, 4545)
+            var lo = Float.MAX_VALUE
+            var hi = -Float.MAX_VALUE
+            for (i in 0 until g.count) {
+                val y = g.xy[i * 2 + 1]
+                if (y < lo) lo = y
+                if (y > hi) hi = y
+            }
+            return g.count / ((hi - lo) * 900f)
+        }
+        assertTrue("flat should stay paler than upright", density(75f) < density(5f))
+    }
+
+    @Test
     fun `a stroke ends in a dome, not a chisel`() {
         // A lead meets the paper as a disc, so where it touches down and lifts the ink ends in a
         // half-round. Stopping at the last cross-section leaves a straight cut clean across the

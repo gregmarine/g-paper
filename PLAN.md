@@ -701,6 +701,19 @@ arc-length-weighted mean over the smoothing window, like the tangent.
 found.** Two filters were introduced together, one seed was corrected, and the other went on
 producing a differently-shaped version of the same artifact for two more releases.
 
+**0.1.21 — two tilt effects were compounding, and one of them should not be instantaneous.** The
+dark nub at the start of a laid-over stroke turned out not to be a defect in the caps at all: it
+predates them (verified by thresholding a 0.1.16 build) and is the roll-in rendering exactly as the
+model said it should. Tilt drives width and darkness in *opposite* directions, so a moment of
+near-upright is ten times narrower and nearly twice as dark at once — and touch-down is precisely
+where a pen is most likely to be caught upright.
+
+The shape of a mark belongs to the instant; the paleness of side-of-lead shading belongs to how the
+lead is being *held*. So darkness now follows a much slower lean (150 px) than width does (40 px). A
+stroke held flat stays paler than one held upright — the artist's earlier request is intact — but a
+stroke no longer flashes dark where the pen passes through vertical. Pinned by a pair of tests that
+state both halves.
+
 **A wrong turn on the way, worth recording.** The first attempt reshaped the cap into an ellipse
 reaching only the lead's radius — on the theory that a tilted lead leaves the paper over its own
 width rather than the smear's. That is sound physics and it looked far worse: on an 85 px half-width
