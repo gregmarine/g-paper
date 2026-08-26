@@ -88,6 +88,14 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   both wrong. Threshold-free statistics settle it: **total ink mass per unit length**, and the
   profile's second moment. At a threshold low enough to keep the pale flecks the extents matched
   within 4%.
+- **`Stroke.width` means the width of the mark — protect that when a firmware disagrees.** BOOX's
+  `CHARCOAL_V2` overdraws ~1.3× (measured NA5C, constant across pen angle; corrected in 0.1.12 by
+  dividing the width `gpaper-onyx` hands `setStrokeWidth`). The live style and the bake are coupled
+  through one `penWidth`, so only one of them can be corrected — **correct the engine, never widen
+  the renderer.** Widening the bake to meet a firmware would make `Stroke.width` a per-device
+  fiction, and a host compositing its own ink through `StrokeRasterizer` would get a different
+  answer from the one on screen. It also costs the live ink nothing: a host that scales its pen
+  widths to suit hands the firmware the same number as before.
 - **When a correction is aimed at one axis, keep it flat across the others.** 0.1.11 raised grain
   density by a factor deliberately constant over the whole pressure range, because the light-to-hard
   response had already been approved — a density fix that also moved pressure would have undone a

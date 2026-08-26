@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.11**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.12**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -179,7 +179,7 @@ migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. All live mappings above are confirmed on-device
 (BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status at v0.1.11 (`core/canvas/StrokeRenderer.kt`):
+Committed-renderer status at v0.1.12 (`core/canvas/StrokeRenderer.kt`):
 `PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path),
 `FOUNTAIN` (pressure-modulated width) and `PENCIL` (graphite grain — 0.1.7) render for
 real; `BRUSH` and `CALLIGRAPHY` still render as `PEN`.
@@ -215,7 +215,12 @@ mark does not reshuffle at pen-up on engines that preview through the core rende
 Where the *live* ink is firmware the preview is the firmware's and the bake is ours — see the
 live-vs-baked caveat above; a pop at pen-up is expected there, not a bug.
 
-**Onyx arms `STROKE_STYLE_CHARCOAL_V2` (6), and the bake is fitted to match it.** The firmware's
+**Onyx arms `STROKE_STYLE_CHARCOAL_V2` (6), and the bake is fitted to match it.** That style also
+**overdraws** — its mark is ~1.3× the width handed to `setStrokeWidth`, constant across pen angle
+(measured NoteAir5C, 0.1.12) — so `gpaper-onyx` divides the width it asks for. That keeps
+**`Stroke.width` meaning the width of the mark** on every engine and in `StrokeRasterizer`, rather
+than making it a per-device fiction; a host that scales its own pen widths to suit hands the firmware
+the same number as before, so the live ink is unchanged and only the bake moves to meet it. The firmware's
 textured pens draw far wider than the width they are given when the pen is laid over, and that extra
 width is **tilt**, not a scale factor — measured on a NoteAir5C, not inferred. `TouchHelper` exposes
 only style, colour and width, so a textured live style cannot be had without its tilt response;

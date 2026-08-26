@@ -473,7 +473,7 @@ MIP11 for the generic engine on LCD. Live ink is the user's eye; committed grain
   the most likely thing to want moving.
 
 ### Phase 11 — Tilt on Onyx: the pencil's other half (post-v0.1.0)
-**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.9, 0.1.10, 0.1.11 (all published)
+**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.9 → 0.1.12 (all published)
 
 Opened by Phase 10's own device pass. The pencil's grain was right and its *width* was not: laid
 over, the firmware's live ink drew several times wider than the bake, and the mark visibly collapsed
@@ -555,6 +555,20 @@ was still 0.68×, so this was baseline coverage, not the lightening being too st
 the factor is **flat across the whole pressure range** — the light-to-hard response had already been
 approved and must not move while fixing something else. Most of it was the rim: a mark giving up
 half its coverage at the edge spends a lot of its width on almost nothing.
+
+**0.1.12 — the firmware overdraws, and the correction goes in the engine, not the renderer.** A
+second photo pair, after the density fix, showed the bake a uniform **0.76× the live width** — stable
+at 0.72–0.80 across every sensible threshold and, again, *the same at all three angles*, which
+exonerates the tilt curve and points at the base width. `CHARCOAL_V2`'s stamps overhang: its mark is
+about 1.3× the width handed to `setStrokeWidth`.
+
+Both paths run through one `penWidth`, so they can only be decoupled inside g-paper — and **which
+side to correct is the whole decision.** Widening the bake to meet the firmware would have made
+`Stroke.width` a per-device fiction, so a host compositing its own ink through `StrokeRasterizer`
+would get a different answer from the one on screen. Dividing the width the *engine* asks for keeps
+`Stroke.width` meaning the width of the mark everywhere. It also costs the live ink nothing: a host
+that scales its pen widths up to suit hands the firmware exactly the number it got before, so the
+EPD's appearance is untouched and only the bake moves.
 
 **Left for the device:** the middle of the width curve. Both fits were anchored on an artist's estimate of
 *relative* widths at three angles, so 44° is the least constrained point on it.

@@ -68,6 +68,12 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         /** A pen leans at most 90° from vertical; anything past this is not an angle. */
         const val MAX_PLAUSIBLE_TILT_DEGREES = 95f
 
+        /**
+         * How much wider `CHARCOAL_V2` draws than the width it is given — measured on a NoteAir5C,
+         * constant across pen angle. See [liveWidth].
+         */
+        const val CHARCOAL_V2_OVERDRAW = 1.30f
+
         /** Suppresses EPD hardware auto-GC16 refresh mid-session; quality refreshes are
          *  driven explicitly via `handwritingRepaint` at the handoff points. */
         const val EPD_UPDATE_LIST_SIZE = 512
@@ -239,12 +245,33 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         StrokeStyle.CROSS -> TouchHelper.STROKE_STYLE_CHARCOAL
     }
 
+    /**
+     * What to ask the firmware for so it draws the width the host actually asked for.
+     *
+     * `CHARCOAL_V2` **overdraws**: measured on a NoteAir5C by photographing three strokes live and
+     * again after the bake, its mark comes out about 1.3× the width handed to `setStrokeWidth`, at
+     * every pen angle alike (0.76 ± 0.03 across three angles and every sensible threshold). Its
+     * stamps simply overhang the nominal contact patch.
+     *
+     * Correcting it here rather than in the renderer keeps one thing true that is worth protecting:
+     * **`Stroke.width` is the width of the mark**, on every engine, in the bake, and in
+     * `StrokeRasterizer`. Widening the bake to meet the firmware instead would have made that
+     * property a per-device fiction, and any host compositing its own ink offline would have got a
+     * different answer from the one on screen.
+     *
+     * Note what this does *not* change: a host that scales its own pen widths up to compensate ends
+     * up handing the firmware exactly the number it got before, so the live ink looks precisely as
+     * it did — only the bake moves, to meet it.
+     */
+    private fun liveWidth(style: StrokeStyle, width: Float): Float =
+        if (style == StrokeStyle.PENCIL) width / CHARCOAL_V2_OVERDRAW else width
+
     /** Arm the firmware overlay with the pen's style/width/ink. `setStrokeStyle` needs
      *  no restart and takes effect on the very next stroke (device-proven). */
     private fun applyPenStyle() {
         if (!isSetup || penOwner !== this) return
         touchHelper.setStrokeStyle(liveStyleCode(penStyle))
-        touchHelper.setStrokeWidth(penWidth)
+        touchHelper.setStrokeWidth(liveWidth(penStyle, penWidth))
         // Explicit color always (NoteAir5C's color panel defaults to non-black).
         touchHelper.setStrokeColor(penColor)
     }
