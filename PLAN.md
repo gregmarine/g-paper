@@ -634,6 +634,26 @@ is.** Two tests pin it — a jittering reading may not wander an edge more than 
 deliberate roll must still broaden the mark, because smoothing must not flatten the gesture it
 exists to render.
 
+**0.1.16 — the pipe cleaner, at last, and it was never the grain.** Three releases had each removed
+something real about the texture and the artist reported no change at all from any of them. The
+mistake in the search was one of *scale*: the fault was inspected at 10× pixel zoom, where a bristle
+is one pixel wide and looks like ordinary speckle, and it is unmistakable **at life size**. Viewing
+the same stroke at 1× and 2× showed it in a second — transverse striations combing the mark.
+
+A cross-section of grain is laid perpendicular to the pen's direction, and that direction was taken
+from **one adjacent pair of raw samples**. At 2 px sample spacing, 0.35 px of digitizer jitter swings
+the computed angle with a standard deviation of ~14°, ranging past ±35°. Every comb of flecks is
+rotated by that much, and the error is multiplied by the half-width of the mark — on a lead laid over
+at 80-odd px, a 30° error throws its flecks tens of pixels out of line. Rendering one clean path and
+the same path with 0.35 px of jitter, side by side, produced a textbook pipe cleaner and settled it.
+
+Now smoothed over ~10 px of arc, causally, exactly as the lean is. **The general rule, stated twice
+over in two releases and worth more than either fix: noise that becomes shape must be smoothed. And
+when a rendering fault survives redesigning the renderer three times, stop working on the renderer —
+the input, or the frame the output is placed in, is wrong.** Also worth keeping: **inspect a texture
+at the size it will be looked at.** Every wrong diagnosis in this sequence came from magnifying past
+the scale the defect lives at.
+
 **Left for the device:** the middle of the width curve, and grain density now that the texture is
 even enough to judge it. Both fits were anchored on an artist's estimate of
 *relative* widths at three angles, so 44° is the least constrained point on it.

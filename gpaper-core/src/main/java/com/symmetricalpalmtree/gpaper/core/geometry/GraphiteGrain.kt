@@ -192,6 +192,31 @@ object GraphiteGrain {
     private const val TILT_SMOOTH_PX = 40f
 
     /**
+     * How far the *direction of travel* is averaged over, in px of arc, before a cross-section is
+     * laid perpendicular to it.
+     *
+     * This is the same lesson as [TILT_SMOOTH_PX] and it bites far harder, because the error is
+     * multiplied by the width of the mark. A cross-section is drawn across the pen's direction, and
+     * taking that direction from one adjacent pair of samples measures the *jitter* rather than the
+     * travel: at 2 px sample spacing, a third of a pixel of digitizer noise swings the computed
+     * angle with a standard deviation of ~14°, ranging past ±35°. Each comb of flecks is then
+     * rotated by that much, and on a lead laid over — half a width of 80-odd px — a 30° error throws
+     * its flecks tens of pixels out of line. The mark grows bristles radiating from a core, and it
+     * is unmistakably a pipe cleaner.
+     *
+     * It survives any amount of work on the grain itself, because the grain was never wrong: the
+     * *frame it is laid in* was. It hides at high magnification, where one pixel of a bristle looks
+     * like ordinary speckle, and is obvious at life size. Paintsprout's Wacom app builds its mesh
+     * normals the same way and has always looked the same.
+     *
+     * Causal, like the lean, so a prefix still renders like the whole stroke. Averaging the
+     * direction over ~10 px of arc cuts the angular noise to a couple of degrees; the price is that
+     * the cross-section trails the path slightly through a tight curve, which is a far smaller error
+     * than the one it removes.
+     */
+    private const val TANGENT_SMOOTH_PX = 10f
+
+    /**
      * Below this lean the mark does not widen at all. A pencil held "upright" is never at zero —
      * a hand deliberately holding one vertical measured a mean of 9° — and a mark that visibly
      * breathed with the last few degrees of an ordinary grip would read as instability rather than
@@ -303,6 +328,9 @@ object GraphiteGrain {
         // already covered and a prefix of the stroke renders identically to the whole of it.
         val smoothing = 1f - exp(-TOOTH_PITCH_PX / TILT_SMOOTH_PX)
         var leanTilt = points[0].tilt
+        val turning = 1f - exp(-TOOTH_PITCH_PX / TANGENT_SMOOTH_PX)
+        var travelX = 0f
+        var travelY = 0f
         for (i in 1 until points.size) {
             val a = points[i - 1]
             val b = points[i]
@@ -313,6 +341,23 @@ object GraphiteGrain {
             val tx = dx / segLen
             val ty = dy / segLen
             while (nextAt <= traveled + segLen) {
+                // The direction a cross-section is laid across is the *travelled* direction, not
+                // the one measured between the last two samples — see TANGENT_SMOOTH_PX.
+                if (travelX == 0f && travelY == 0f) {
+                    travelX = tx
+                    travelY = ty
+                } else {
+                    travelX += (tx - travelX) * turning
+                    travelY += (ty - travelY) * turning
+                    val len = sqrt(travelX * travelX + travelY * travelY)
+                    if (len > 1e-6f) {
+                        travelX /= len
+                        travelY /= len
+                    } else {
+                        travelX = tx
+                        travelY = ty
+                    }
+                }
                 val t = (nextAt - traveled) / segLen
                 // Both the lean and the press are read at this station, not at the stroke's
                 // start: a shading stroke is a hand rolling the pencil over as it travels, and
@@ -324,8 +369,8 @@ object GraphiteGrain {
                     out = out,
                     cx = a.x + t * dx,
                     cy = a.y + t * dy,
-                    tx = tx,
-                    ty = ty,
+                    tx = travelX,
+                    ty = travelY,
                     pressure = a.pressure + t * (b.pressure - a.pressure),
                     lean = coverageFactor(leanTilt),
                     arc = nextAt,

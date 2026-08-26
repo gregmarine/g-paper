@@ -81,6 +81,19 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   disagree on size, **match the firmware** rather than flattening the style: `TouchHelper` exposes
   only style/colour/width (verified by `javap`), so a textured live style cannot be had without
   whatever tilt response it comes with.
+- **A cross-section must be laid across the SMOOTHED direction of travel.** Taking the pen's
+  direction from one adjacent pair of raw samples measures jitter, not travel: at 2 px spacing,
+  0.35 px of digitizer noise swings it ~14° sd, past ±35°. Every cross-section of grain is rotated by
+  that much and **the error is multiplied by the half-width of the mark** — on a wide stroke it throws
+  grain tens of pixels out of line and the mark grows bristles ("pipe cleaner", 0.1.16). Smoothed over
+  ~10 px of arc, causally. Paintsprout's Wacom app builds its mesh normals the same way and has the
+  same fault.
+- **When a rendering fault survives redesigning the renderer, the renderer is not the problem** — the
+  input, or the frame the output is placed in, is. Three releases of grain work changed nothing the
+  artist could see, because the grain was never wrong.
+- **Inspect a texture at the size it will be looked at.** This defect is invisible at 10× pixel zoom,
+  where one bristle reads as ordinary speckle, and obvious at 1×. Every wrong diagnosis in that
+  sequence came from magnifying past the scale the defect lives at.
 - **Noise that becomes SHAPE must be smoothed; noise that becomes TONE need not be.** A digitizer's
   tilt jitters several degrees sample to sample and a hand cannot roll a pen that fast — fed raw into
   a width it fringes both edges of the mark with fine hairs ("pipe cleaner"). `GraphiteGrain` averages

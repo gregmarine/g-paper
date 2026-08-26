@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.15**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.16**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -179,7 +179,7 @@ migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. All live mappings above are confirmed on-device
 (BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status at v0.1.15 (`core/canvas/StrokeRenderer.kt`):
+Committed-renderer status at v0.1.16 (`core/canvas/StrokeRenderer.kt`):
 `PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path),
 `FOUNTAIN` (pressure-modulated width) and `PENCIL` (graphite grain — 0.1.7) render for
 real; `BRUSH` and `CALLIGRAPHY` still render as `PEN`.
@@ -198,6 +198,15 @@ getting finer. How much graphite lands inside that width was set by photographin
 live on a NoteAir5C's panel and again after the bake, and comparing ink per unit length — the
 two covered the same width and the bake was depositing about 30% less inside it (0.1.11). Hosts choosing distinguishable pencil sizes should space them by more
 than that.
+
+**The direction of travel is averaged before a cross-section is laid across it (0.1.16).** This is
+the one that matters most, because the error is multiplied by the width of the mark. Taking the pen's
+direction from one adjacent pair of samples measures jitter rather than travel — at 2 px spacing, a
+third of a pixel of digitizer noise swings the angle with ~14° of standard deviation — and every
+cross-section of grain is then rotated by that much. On a lead laid over it throws grain tens of
+pixels out of line and the stroke grows bristles: a pipe cleaner. Smoothed over ~10 px of arc,
+causally. **A texture cannot be fixed by working on the texture when the frame it is laid in is
+noisy.**
 
 **Tilt is averaged along the path before it sets a width (0.1.15).** A digitizer's tilt reading
 jitters by several degrees sample to sample and a hand cannot roll a pencil that fast; fed in raw
