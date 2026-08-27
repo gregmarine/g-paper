@@ -948,20 +948,45 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             val hitIds = EraseHitTest.hitStrokeIds(
                 strokeList, points, GestureRecognizer.SCRIBBLE_STROKE_TOUCH_RADIUS_DP * density,
             )
-            if (hitIds.isEmpty()) {
+            // Host content is crossed out too (0.1.23), on the stricter penetration rule —
+            // a scribble is a large gesture, so the eraser's touch-anything rule would take
+            // a heading every time the ink beside it was scribbled out.
+            val contentHits = if (contentRenderers.isEmpty()) emptyList() else {
+                EraseHitTest.scribbleContentIds(
+                    contentRenderers.flatMap { r -> r.hitTargets().map { it.contentId to it.bounds } },
+                    points,
+                    GestureRecognizer.SCRIBBLE_BBOX_PENETRATION_DP * density,
+                )
+            }
+            if (hitIds.isEmpty() && contentHits.isEmpty()) {
                 Log.i(TAG, "scribble candidate touched nothing — committed as ink")
                 return false
             }
             val idSet = hitIds.toHashSet()
-            // Parity with eraseAlong: a host-injected selection losing a stroke no
-            // longer describes reality.
-            if (selection?.strokeIds?.any { it in idSet } == true) clearSelection()
-            strokeList.removeAll { it.id in idSet }
-            modelChanged()
-            paperListener?.onStrokesErased(hitIds)
+            // Parity with eraseAlong: a host-injected selection losing a stroke or a
+            // content object no longer describes reality.
+            val sel = selection
+            if (sel != null &&
+                (sel.strokeIds.any { it in idSet } || sel.contentIds.any { it in contentHits })
+            ) {
+                clearSelection()
+            }
+            if (hitIds.isNotEmpty()) {
+                strokeList.removeAll { it.id in idSet }
+                modelChanged()
+            }
+            // One gesture, one callback — the host has to be able to record one undo entry
+            // even when the scribble took ink and content together. The content is still on
+            // the committed layer at this point; the host removes it and calls
+            // notifyContentChanged, exactly as it does for the eraser tool.
+            paperListener?.onScribbleErased(hitIds, contentHits)
             finalizeEraseRedraw()
             onGestureStrokeConsumed()
-            Log.i(TAG, "scribble erase consumed ${hitIds.size} strokes")
+            Log.i(
+                TAG,
+                "scribble erase consumed ${hitIds.size} strokes, " +
+                    "${contentHits.size} content objects",
+            )
             return true
         }
         if (smartLassoEnabled &&

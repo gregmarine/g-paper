@@ -111,16 +111,23 @@ interface PaperView {
 
     /**
      * Scribble erase: a dense zigzag pen stroke (bounding-box diagonal ≥ 40 dp,
-     * pathLength/diagonal ≥ 3.0, ≥ 2 direction reversals after jitter filtering) erases
-     * every stroke it touches (8 dp radius, whole-stroke — eraser-tool semantics).
-     * Default **false**; evaluated only while [tool] is [Tool.PEN]. Scribble shape is
-     * classified before the smart lasso and is exclusive (see [smartLassoEnabled]).
+     * pathLength/diagonal ≥ 3.0, ≥ 2 direction reversals after jitter filtering) crosses
+     * out everything it goes through — strokes it touches (8 dp radius, whole-stroke —
+     * eraser-tool semantics) and, since 0.1.23, host content objects it travels **through**
+     * (≥ 14 dp of path inside a [ContentRenderer.hitTargets]
+     * [com.symmetricalpalmtree.gpaper.core.render.ContentRenderer.hitTargets] rectangle,
+     * whole-object). Content uses that penetration rule rather than the eraser tool's
+     * touch rule because a scribble is a large gesture: touching-counts would take a
+     * heading every time the ink beside it was scribbled out. Default **false**; evaluated
+     * only while [tool] is [Tool.PEN]. Scribble shape is classified before the smart lasso
+     * and is exclusive (see [smartLassoEnabled]).
      *
-     * Erased ids are reported through the normal [PaperListener.onStrokesErased] (one
-     * batched call), so host persistence/undo paths work unchanged. The scribble stroke
-     * itself is never committed or reported; undo of a scribble is simply restoring the
-     * erased strokes. A scribble that touches nothing commits as ordinary ink — it
-     * never falls back to a smart lasso.
+     * Both lists arrive in **one** [PaperListener.onScribbleErased] call, because one
+     * gesture must be one host undo entry; that method's default forwards to
+     * [PaperListener.onStrokesErased] / [PaperListener.onContentErased], so a host that
+     * has not adopted it keeps working. The scribble stroke itself is never committed or
+     * reported; undo of a scribble is simply restoring what it erased. A scribble that
+     * touches nothing commits as ordinary ink — it never falls back to a smart lasso.
      */
     var scribbleEraseEnabled: Boolean
 

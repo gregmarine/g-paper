@@ -58,7 +58,7 @@ history. Keep an operation stack and replay:
 |---|---|---|---|
 | Drew a stroke | `onStrokeCommitted(s)` | `removeStrokes([s.id])` | `addStrokes([s])` |
 | Erased strokes | `onStrokesErased(ids)` (you still have the strokes) | `addStrokes(strokes)` | `removeStrokes(ids)` |
-| Scribble-erased strokes (`scribbleEraseEnabled`) | same `onStrokesErased(ids)` — the scribble itself was never committed | `addStrokes(strokes)` | `removeStrokes(ids)` |
+| Scribble-erased strokes + content (`scribbleEraseEnabled`) | `onScribbleErased(strokeIds, contentIds)` — one call per gesture; the scribble itself was never committed | `addStrokes(strokes)` + restore your content rows | `removeStrokes(ids)` + delete them again |
 | Moved a selection | `onSelectionMoved(m)` | `removeStrokes` + `addStrokes(translated back)` — or `loadStrokes` the page | re-apply the delta |
 | Cleared the page | your own clear action | `loadStrokes(saved)` | `clear()` |
 
@@ -104,9 +104,17 @@ come with enabling them:
   Both changes fire `onToolChanged(tool)` — re-style your toolbar there (the demo does
   exactly this). Don't rely on re-reading `paper.tool` inside the selection callbacks:
   the PEN restore can arrive after `onSelectionDismissed` fires.
-- **Scribble erases arrive through the normal `onStrokesErased`** — if your persistence and
-  undo already handle the eraser tool, they already handle scribbles. The gesture stroke
-  itself is never committed or reported.
+- **A scribble arrives as one `onScribbleErased(strokeIds, contentIds)`** — not as separate
+  stroke and content callbacks, because one gesture has to be one undo entry: a scribble
+  that takes ink and a heading together must not cost the user two undos. The default
+  implementation forwards to `onStrokesErased` / `onContentErased`, so an existing host
+  keeps working without changes; override it once your undo can record both kinds at once.
+  Content is handled almost as for `onContentErased` — the component owns none of it, so you
+  delete the rows — but **do not call `notifyContentChanged()` here**: a gesture ends at this
+  callback and the component re-records the moment it returns. Repainting as well costs a
+  second frame, and on an EPD engine that is a second visible refresh whose first half shows
+  the ink gone and the content still standing. The gesture stroke itself is never committed
+  or reported.
 
 ## Snap to guides (opt-in, 0.1.6)
 

@@ -188,4 +188,107 @@ class EraseHitTestTest {
         )
         assertEquals(listOf("a"), hits)
     }
+
+    // ── scribbleContentIds — the penetration rule ────────────────────────────
+
+    @Test
+    fun `scribble content - empty inputs hit nothing`() {
+        assertEquals(
+            emptyList<String>(),
+            EraseHitTest.scribbleContentIds(emptyList(), sweep(0f, 0f, 100f, 0f), 14f),
+        )
+        assertEquals(
+            emptyList<String>(),
+            EraseHitTest.scribbleContentIds(listOf(target("a", 0f, 0f, 100f, 100f)), emptyList(), 14f),
+        )
+        // A single sample has no segment to measure, so nothing can penetrate.
+        assertEquals(
+            emptyList<String>(),
+            EraseHitTest.scribbleContentIds(
+                listOf(target("a", 0f, 0f, 100f, 100f)), sweep(50f, 50f), 14f,
+            ),
+        )
+    }
+
+    @Test
+    fun `scribble content - a pass through the middle hits`() {
+        // 100 px of travel inside a 100-wide box, well over the 14 px threshold.
+        val hits = EraseHitTest.scribbleContentIds(
+            listOf(target("a", 0f, 0f, 100f, 100f)),
+            sweep(0f, 50f, 50f, 50f, 100f, 50f),
+            14f,
+        )
+        assertEquals(listOf("a"), hits)
+    }
+
+    @Test
+    fun `scribble content - a corner graze does not hit`() {
+        // Clips the bottom-right corner: one endpoint inside, ~4 px of segment.
+        val hits = EraseHitTest.scribbleContentIds(
+            listOf(target("a", 0f, 0f, 100f, 100f)),
+            sweep(96f, 96f, 98f, 98f, 104f, 104f),
+            14f,
+        )
+        assertEquals(emptyList<String>(), hits)
+    }
+
+    @Test
+    fun `scribble content - travel beside an object leaves it alone`() {
+        // The whole gesture is outside the box; the AABBs still overlap on one axis.
+        val hits = EraseHitTest.scribbleContentIds(
+            listOf(target("a", 0f, 0f, 100f, 100f)),
+            sweep(120f, 0f, 120f, 40f, 120f, 100f),
+            14f,
+        )
+        assertEquals(emptyList<String>(), hits)
+    }
+
+    @Test
+    fun `scribble content - the eraser touch rule would hit where penetration does not`() {
+        // The distinction this function exists for: a stroke of ink scribbled out just
+        // past a heading's edge. hitContentIds (inflated-rect touch) takes it; the
+        // penetration rule does not.
+        val targets = listOf(target("heading", 0f, 0f, 100f, 40f))
+        val beside = sweep(0f, 46f, 100f, 46f)
+        assertEquals(listOf("heading"), EraseHitTest.hitContentIds(targets, beside, 8f))
+        assertEquals(emptyList<String>(), EraseHitTest.scribbleContentIds(targets, beside, 14f))
+    }
+
+    @Test
+    fun `scribble content - penetration accumulates across separate passes`() {
+        // Three shallow dips, none of them 14 px on its own, together well past it —
+        // which is exactly what scribbling back and forth over a heading looks like.
+        val hits = EraseHitTest.scribbleContentIds(
+            listOf(target("a", 0f, 0f, 100f, 10f)),
+            sweep(10f, 14f, 10f, 6f, 20f, 14f, 30f, 6f, 40f, 14f, 50f, 6f, 60f, 14f),
+            14f,
+        )
+        assertEquals(listOf("a"), hits)
+    }
+
+    @Test
+    fun `scribble content - threshold is inclusive`() {
+        // Exactly 14 px inside a tall box: both endpoints contained, one segment.
+        val hits = EraseHitTest.scribbleContentIds(
+            listOf(target("a", 0f, 0f, 100f, 100f)),
+            sweep(50f, 40f, 50f, 54f),
+            14f,
+        )
+        assertEquals(listOf("a"), hits)
+    }
+
+    @Test
+    fun `scribble content - duplicate ids report once, order follows targets`() {
+        val hits = EraseHitTest.scribbleContentIds(
+            listOf(
+                target("b", 200f, 0f, 300f, 100f),
+                target("a", 0f, 0f, 100f, 100f),
+                target("a", 0f, 0f, 100f, 100f),
+                target("far", 900f, 900f, 950f, 950f),
+            ),
+            sweep(0f, 50f, 150f, 50f, 300f, 50f),
+            14f,
+        )
+        assertEquals(listOf("b", "a"), hits)
+    }
 }

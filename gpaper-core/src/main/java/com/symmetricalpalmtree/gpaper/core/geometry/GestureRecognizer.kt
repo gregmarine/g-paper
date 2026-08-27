@@ -48,6 +48,17 @@ object GestureRecognizer {
      *  touch — eraser-tool semantics). Callers feed this to [EraseHitTest]. */
     const val SCRIBBLE_STROKE_TOUCH_RADIUS_DP = 8f
 
+    /**
+     * Minimum scribble travel *inside* a host content object's bounds, in dp, before the
+     * object counts as scribbled out ([EraseHitTest.scribbleContentIds]).
+     *
+     * Content deliberately does **not** use the eraser tool's rule (touch any part of the
+     * inflated rect — [EraseHitTest.hitContentIds]). A scribble is a large gesture, and
+     * that rule would take a heading every time ink beside it was scribbled out. Requiring
+     * real penetration distinguishes a deliberate crossing-out from a corner-graze.
+     */
+    const val SCRIBBLE_BBOX_PENETRATION_DP = 14f
+
     /** Points closer than 2 px to the last kept point are collapsed before counting
      *  reversals — digitizer jitter would otherwise fake zigzags. */
     private const val NOISE_MIN_DISTANCE_SQ = 4f

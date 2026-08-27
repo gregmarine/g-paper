@@ -3,6 +3,7 @@ package com.symmetricalpalmtree.gpaper.core.geometry
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
+import kotlin.math.hypot
 
 /**
  * Pure-JVM eraser hit-testing shared by the engines: which strokes does one sweep of the
@@ -65,5 +66,56 @@ object EraseHitTest {
             }
         }
         return hits
+    }
+
+    /**
+     * Ids of the host content targets (id → hit rectangle, in target order) crossed out by
+     * a **scribble** — the erase-gesture twin of [hitContentIds], with a stricter rule.
+     *
+     * A scribble hits an object only when it travels at least [minPenetrationPx] *inside*
+     * that object's bounds: the summed length of every scribble segment with at least one
+     * endpoint in the rectangle. Deliberately not [hitContentIds]' touch-anything rule — a
+     * scribble is a large gesture, so "touched the inflated rect" would take a heading
+     * every time the ink beside it was scribbled out. Penetration distinguishes a
+     * deliberate crossing-out from a corner-graze.
+     *
+     * Broad phase mirrors the other two tests (the scribble's own AABB against each
+     * target's, no radius — the narrow phase is a containment test, not a distance one).
+     * Each id at most once; empty inputs hit nothing.
+     */
+    fun scribbleContentIds(
+        targets: List<Pair<String, Bounds>>,
+        scribblePoints: List<StrokePoint>,
+        minPenetrationPx: Float,
+    ): List<String> {
+        if (targets.isEmpty() || scribblePoints.size < 2) return emptyList()
+        val sweepBounds = Bounds.of(scribblePoints)
+        val hits = ArrayList<String>()
+        for ((id, bounds) in targets) {
+            if (id in hits) continue
+            if (!sweepBounds.intersects(bounds)) continue
+            if (penetration(scribblePoints, bounds) >= minPenetrationPx) hits.add(id)
+        }
+        return hits
+    }
+
+    /**
+     * Summed length of the [points] polyline's segments that have at least one endpoint
+     * inside [box] — how far the gesture travelled through the object. A segment straddling
+     * an edge counts whole, which is what makes a single deep stab register; a chord that
+     * passes clean through with both endpoints outside counts as nothing, which is the
+     * reference engine's behaviour and costs nothing in practice (stylus sampling is far
+     * finer than a 14 dp box).
+     */
+    private fun penetration(points: List<StrokePoint>, box: Bounds): Float {
+        var total = 0f
+        for (i in 1 until points.size) {
+            val a = points[i - 1]
+            val b = points[i]
+            if (box.contains(a.x, a.y) || box.contains(b.x, b.y)) {
+                total += hypot(b.x - a.x, b.y - a.y)
+            }
+        }
+        return total
     }
 }

@@ -39,10 +39,46 @@ interface PaperListener {
      * gesture. The component owns no content, so nothing disappears by itself: the host
      * deletes its rows, records undo, and calls [PaperView.notifyContentChanged] — until
      * then the object stays on the committed layer (and its hit target keeps it findable,
-     * which is why the per-gesture dedup matters). Scribble erase never touches content;
-     * only the eraser tool (and the stylus barrel/eraser end) reports here.
+     * which is why the per-gesture dedup matters). The eraser tool (and the stylus
+     * barrel/eraser end) is what reports here; a **scribble** reports through
+     * [onScribbleErased] instead, so one gesture stays one host undo entry.
      */
     fun onContentErased(contentIds: List<String>) {}
+
+    /**
+     * A scribble-erase gesture was consumed (0.1.23): a dense zigzag pen stroke crossed out
+     * [strokeIds] and [contentIds] in one act. Fires **once**, on pen lift; the scribble
+     * stroke itself is never committed and never reported.
+     *
+     * Semantics per kind are exactly the eraser tool's — whole strokes, whole content
+     * objects — but they arrive together **because they are one gesture**: a host that
+     * recorded [onStrokesErased] and [onContentErased] separately would leave the user two
+     * undo steps to reverse one scribble. Either list may be empty (never both). Content
+     * ids come from [ContentRenderer.hitTargets]
+     * [com.symmetricalpalmtree.gpaper.core.render.ContentRenderer.hitTargets] and are
+     * decided by a **penetration** rule, not the eraser's touch rule
+     * ([com.symmetricalpalmtree.gpaper.core.geometry.EraseHitTest.scribbleContentIds]).
+     *
+     * The strokes are already out of the component's model; the content is not — the
+     * component owns no content, so the host deletes its rows here, exactly as it does for
+     * [onContentErased].
+     *
+     * **Do not call [PaperView.notifyContentChanged] from this callback.** Unlike the
+     * eraser tool's mid-sweep reports, the component re-records the committed layer itself
+     * the moment this call returns — a gesture ends here. A host that repaints as well
+     * costs a second frame, and on an EPD engine that is a second visible refresh whose
+     * first half shows the ink gone and the content still standing: one gesture reading as
+     * two erases. Mutate your content and return.
+     *
+     * **The default preserves pre-0.1.23 behaviour**: it forwards to [onStrokesErased] and
+     * [onContentErased], so a host that has not adopted this method behaves exactly as
+     * before (two callbacks, and content that a scribble could not reach before now can).
+     * Override it to make one scribble one undo entry.
+     */
+    fun onScribbleErased(strokeIds: List<String>, contentIds: List<String>) {
+        if (strokeIds.isNotEmpty()) onStrokesErased(strokeIds)
+        if (contentIds.isNotEmpty()) onContentErased(contentIds)
+    }
 
     /**
      * The stylus lifted after writing. Fires after [onStrokeCommitted] for the same

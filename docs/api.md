@@ -86,7 +86,8 @@ override fun onDestroy() { paper.release(); super.onDestroy() }
 | In | `addStrokes(list)` / `removeStrokes(ids)` | Targeted undo/redo, paste |
 | Out | `getStrokes()` (any thread) | Save-all, export |
 | Out | `onStrokeCommitted` / `onStrokesErased` | Incremental persistence |
-| Out | `onContentErased` (0.1.4) | Eraser swept over host content: whole-object ids; the host deletes its rows + `notifyContentChanged()` (the component owns no content, so nothing disappears by itself). At most once per id per gesture; scribble erase never reports content |
+| Out | `onContentErased` (0.1.4) | Eraser swept over host content: whole-object ids; the host deletes its rows + `notifyContentChanged()` (the component owns no content, so nothing disappears by itself). At most once per id per gesture. The **eraser tool** reports here; a scribble reports through `onScribbleErased` |
+| Out | `onScribbleErased(strokeIds, contentIds)` (0.1.23) | One scribble-erase gesture, whole: the strokes it crossed and the content objects it went through, in **one** call so the host can record one undo entry. Defaults to forwarding to `onStrokesErased` + `onContentErased`, so a host that has not adopted it keeps working |
 | Out | `onPaperTapped` (0.1.5) | Stylus tap on bare paper in `Tool.LASSO` with nothing selected — the "paste here" hook. Stylus only; never the tap that dismissed a selection |
 | — | `clear()` | User-facing "erase page" (host updates its own data; no erase callbacks fire) |
 | — | `clearForContentSwap()` | Page turn: pixels hold until the next `loadStrokes` — single EPD refresh, no blank flash |
@@ -338,12 +339,24 @@ and `onPenLifted` does not fire for it.
   restores at pen-up).
 - **Scribble erase** (`scribbleEraseEnabled`): a dense zigzag — bounding-box diagonal
   ≥ 40 dp, pathLength/diagonal ≥ 3.0, ≥ 2 direction reversals after sub-2 px jitter is
-  filtered — erases every stroke it touches (8 dp radius, whole-stroke: eraser-tool
-  semantics), reported through the normal `onStrokesErased` in one batched call, so
-  host persistence/undo paths work unchanged. Undo of a scribble is simply restoring
-  the erased strokes. Host content objects are **not** scribble-erasable — a scribble is
-  an ink-level correction; deliberate whole-object erase belongs to the eraser tool,
-  which since 0.1.4 does report content (`onContentErased`).
+  filtered — crosses out everything it goes through. **Strokes** it touches (8 dp radius,
+  whole-stroke: eraser-tool semantics) and, **since 0.1.23, host content objects** it
+  travels through: ≥ 14 dp of scribble path *inside* a `hitTargets()` rectangle,
+  whole-object. Both arrive in **one** `onScribbleErased(strokeIds, contentIds)` call,
+  because one gesture must be one host undo entry; that method's default forwards to
+  `onStrokesErased` / `onContentErased`, so a host that has not adopted it keeps working.
+  Undo of a scribble is simply restoring what it erased. The host must **not** call
+  `notifyContentChanged()` from it — the component re-records the moment it returns, and a
+  second repaint is a second EPD refresh whose first half shows the ink gone and the content
+  still standing.
+
+  Content uses a **penetration** rule, not the eraser tool's touch rule
+  (`EraseHitTest.scribbleContentIds` vs `hitContentIds`), and this is the whole reason the
+  two are separate functions: a scribble is a large gesture, so "touched the inflated rect"
+  would take a heading every time the ink beside it was scribbled out. Penetration
+  accumulates across passes, so scribbling back and forth over an object registers while a
+  corner-graze does not. There is no per-object opt-out — anything a `ContentRenderer`
+  exposes as a `HitTarget` is scribble-erasable, exactly as it is eraser-erasable.
 
 ### Snap to guides (opt-in)
 
@@ -462,4 +475,6 @@ the main thread. `RawInputListener` runs at input rate — keep it allocation-fr
 - Listener interfaces with default no-ops (not nullable `var` lambdas à la Notesprout).
 - Eraser is whole-stroke with a radius. Host content is never *removed* by the component;
   since 0.1.4 the eraser tool *reports* swept content whole (`onContentErased`) and the
-  host removes it — before that, host content was entirely eraser-immune.
+  host removes it — before that, host content was entirely eraser-immune. Since 0.1.23 a
+  scribble reports content the same way (`onScribbleErased`), on a stricter penetration
+  rule; before that, content was scribble-immune.
