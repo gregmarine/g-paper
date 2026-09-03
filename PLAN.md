@@ -366,7 +366,7 @@ new standing rule: hosts present NO frames while `isPenActive` (demo defers stat
 Nomad, Manta — full gesture checklist incl. false-positive writing on all four.
 
 ### Phase 10 — Graphite: the textured PENCIL committed renderer (post-v0.1.0)
-**Status:** 🧪 Awaiting device verification
+**Status:** ✅ Complete (renderer approved on the panel 2026-09-03, as the upright hairline of Phase 12; the tilt half was withdrawn there)
 
 Requested by **Paintsprout Onyx** (`~/git/Paintsprout`, branch `onyx`, `apps/paintsprout_onyx/ONYX_PLAN.md`),
 whose entire arc 1 is a graphite pencil on white paper. Today `StrokeStyle.PENCIL` falls through to
@@ -473,7 +473,7 @@ MIP11 for the generic engine on LCD. Live ink is the user's eye; committed grain
   the most likely thing to want moving.
 
 ### Phase 11 — Tilt on Onyx: the pencil's other half (post-v0.1.0)
-**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.9 → 0.1.12 (all published)
+**Status:** ✅ Withdrawn in Phase 12 (0.1.24) · **Publishes:** 0.1.9 → 0.1.23 (all published) · The measurement stands; the policy of driving width from the lean was drawn with and rejected by the artist.
 
 Opened by Phase 10's own device pass. The pencil's grain was right and its *width* was not: laid
 over, the firmware's live ink drew several times wider than the bake, and the mark visibly collapsed
@@ -759,7 +759,7 @@ even enough to judge it. Both fits were anchored on an artist's estimate of
 *relative* widths at three angles, so 44° is the least constrained point on it.
 
 ### Phase 12 — Hairline: the pencil goes back to an upright, even line (post-v0.1.0)
-**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.24
+**Status:** ✅ Complete (commit 58e882f) · **Publishes:** 0.1.24 · Approved on the NoteAir5C 2026-09-03: the artist drew with the hairline in graphite grey (`#505050`, a host colour) and said "I like this" — the first pencil on that panel approved. All three device questions below answered yes by eye.
 
 Opened by the artist sitting down to sketch with the Phase 10/11 pencil for an evening and
 rejecting it whole. Neither the live `CHARCOAL_V2` ink nor the bake read as pencil, the marks were
