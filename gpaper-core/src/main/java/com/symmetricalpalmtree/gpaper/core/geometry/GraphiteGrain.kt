@@ -5,6 +5,8 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -106,6 +108,13 @@ object GraphiteGrain {
      *
      * It carries pressure as well as coverage, and that is deliberate: coverage saturates once the
      * tooth is full, so past that point a growing fleck is the only thing left to darken with.
+     *
+     * **A fleck is never wider than the lead that lays it** — see [fleckPx] with a width. On any
+     * lead of ordinary size this changes nothing: the darkest fleck is 1.6 px and a lead is several
+     * times that. It exists for the hairline. A 1.2 px lead whose darkest flecks are 1.6 px bakes
+     * at more than twice the width of the live line it was previewed as (0.1.24, rendered offline
+     * before it reached a panel), and a preview that lies about width is the one lie that matters.
+     * The floor stays at [FLECK_MIN_PX] so a lead below it still gets grain rather than dust.
      */
     const val FLECK_MIN_PX: Float = 0.75f
     const val FLECK_MAX_PX: Float = 1.6f
@@ -321,6 +330,14 @@ object GraphiteGrain {
         if (LEVELS <= 1) FLECK_MAX_PX
         else FLECK_MIN_PX + (FLECK_MAX_PX - FLECK_MIN_PX) *
             (level.coerceIn(0, LEVELS - 1).toFloat() / (LEVELS - 1))
+
+    /**
+     * Fleck diameter in px for darkness index [level] on a lead [width] px wide: [fleckPx], capped
+     * at the lead's own width so a hairline bakes as a hairline, and floored at [FLECK_MIN_PX] so
+     * it still bakes as graphite. Renderers should use this one; the cap only bites below 1.6 px.
+     */
+    fun fleckPx(level: Int, width: Float): Float =
+        min(fleckPx(level), max(width, FLECK_MIN_PX))
 
     /** Alpha multiplier for darkness index [level]; `LEVEL_FLOOR` at 0, 1 at the top. */
     fun levelAlpha(level: Int): Float =

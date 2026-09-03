@@ -469,6 +469,22 @@ class GraphiteGrainTest {
         )
     }
 
+    @Test
+    fun `a fleck is never wider than the lead that lays it`() {
+        // A 1.2 px hairline whose darkest flecks are 1.6 px bakes at more than twice the width it
+        // previewed as. The cap only bites below the largest fleck; a lead of any ordinary size
+        // gets exactly the flecks it always did.
+        val top = GraphiteGrain.LEVELS - 1
+        assertEquals(1.2f, GraphiteGrain.fleckPx(top, 1.2f), 0f)
+        assertEquals(GraphiteGrain.fleckPx(top), GraphiteGrain.fleckPx(top, 6f), 0f)
+        assertEquals(GraphiteGrain.fleckPx(0), GraphiteGrain.fleckPx(0, 6f), 0f)
+        // Below the palest fleck a lead still bakes as graphite rather than as dust.
+        assertEquals(GraphiteGrain.FLECK_MIN_PX, GraphiteGrain.fleckPx(top, 0.4f), 0f)
+        // And the hairline's darkest fleck still overlaps the tooth pitch, so a hard-pressed
+        // hairline floods solid instead of staying a dotted line.
+        assertTrue(GraphiteGrain.fleckPx(top, 1.2f) > GraphiteGrain.TOOTH_PITCH_PX)
+    }
+
     // ── Tilt widens the mark ─────────────────────────────────────────────────
 
     private fun deg(d: Float): Float = Math.toRadians(d.toDouble()).toFloat()

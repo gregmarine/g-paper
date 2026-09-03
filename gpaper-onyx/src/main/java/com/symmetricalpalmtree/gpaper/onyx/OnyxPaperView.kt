@@ -65,14 +65,24 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
          */
         val TILT_DEGREES_MODELS = setOf("NoteAir5C")
 
+        /**
+         * Whether a measured model's lean is passed on at all. **Off since 0.1.24, and not because
+         * the measurement was wrong.** The pencil that read it — width from the lean, on a curve
+         * fitted to the firmware's charcoal — was drawn with for an evening and rejected whole:
+         * too broad in any ordinary sketching grip, and not a pencil to look at. The artist asked
+         * for the lean taken out of the mark, and the live style that answered to it went with it
+         * (see [liveStyleCode]). The list above and the numbers in [tiltRadians] are kept because
+         * they are a measurement, and measuring the NoteAir5C again would only find them again.
+         * Whoever brings the lean back gets to decide what it should drive; it will not be the
+         * width of the mark on a curve borrowed from a charcoal stamp.
+         *
+         * A `val`, not a `const`: the compiler would otherwise fold the check and flag the
+         * measurement behind it as unreachable, which is the wrong message about it.
+         */
+        val REPORT_TILT = false
+
         /** A pen leans at most 90° from vertical; anything past this is not an angle. */
         const val MAX_PLAUSIBLE_TILT_DEGREES = 95f
-
-        /**
-         * How much wider `CHARCOAL_V2` draws than the width it is given — measured on a NoteAir5C,
-         * constant across pen angle. See [liveWidth].
-         */
-        const val CHARCOAL_V2_OVERDRAW = 1.30f
 
         /** Suppresses EPD hardware auto-GC16 refresh mid-session; quality refreshes are
          *  driven explicitly via `handwritingRepaint` at the handoff points. */
@@ -211,67 +221,60 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
      * KDoc / `docs/api.md`). CROSS has no firmware x-stream; CHARCOAL is the nearest
      * live texture — the bake corrects to true x-marks.
      *
-     * **PENCIL arms `CHARCOAL_V2`, and the width it draws is tilt, not a scale factor.**
-     * The route to that took two wrong turns worth recording, because both are easy to
-     * take again.
+     * **PENCIL arms the plain even line (style 0), and it got here by going round in a
+     * circle, so the circle is worth keeping.** 0.1.8 armed style 0. 0.1.9 through 0.1.22
+     * armed the textured `CHARCOAL_V2` (6) instead and spent fourteen releases fitting the
+     * bake to it — its overdraw (~1.3× the width it is given, at every angle), its width
+     * response to the pen's lean (about 1× / 4.9× / 10.9× at 9° / 44° / 75°, with
+     * `hypot(tiltX, tiltY)` measured to be degrees from vertical on the NoteAir5C), and its
+     * grain, which reads well on a Kaleido panel. Every one of those numbers was measured and
+     * every one of them still holds. Then the artist sat down and sketched with the result,
+     * and rejected it whole: too broad in any ordinary grip, and not a pencil to look at,
+     * live or baked. The lean was named as part of the cause. 0.1.24 goes back to style 0
+     * on purpose, and stops reading the lean ([REPORT_TILT]).
      *
-     * Style 4 (`CHARCOAL`) came first and drew far wider than the width it was given, so
-     * the mark collapsed at pen-up. That got blamed on
-     * `NoteConstant.CHARCOAL_STROKE_WIDTH_EXTRA_SCALE = 5.0` — which is wrong: that
-     * constant is one BOOX's *own Notes app* applies before calling in, nothing multiplies
-     * on our behalf, and the "texture needs width ≥ 20" finding behind it came from the
-     * NeoPen *software* renderers, a different path from this overlay entirely. Measuring
-     * on a NoteAir5C settled it: the extra width is **tilt**. Held upright the mark matches
-     * the width asked for; laid over it grows several times. There is nothing to divide out.
+     * Why the texture had to go with the lean: `TouchHelper`'s whole pen surface is
+     * `setStrokeStyle`, `setStrokeColor`, `setStrokeWidth` (verified by `javap`), and both
+     * charcoal styles broaden with the lean inside the firmware. A textured live style cannot
+     * be had without its tilt response, so taking the lean out of the mark means taking the
+     * texture out of the live ink. What remains is a line exactly as wide as the host asked
+     * for — the thing the hand aims with — and the bake adds grain and pressure → darkness at
+     * pen-up. The pen-up change is now tone and texture, never size, and of the two lies a
+     * preview can tell, size is the one that matters.
      *
-     * `TouchHelper` has no tilt control — `setStrokeStyle`, `setStrokeColor`,
-     * `setStrokeWidth` is its entire pen surface — so a textured style cannot be had
-     * without its tilt response. The answer is therefore not to fight it but to **match**
-     * it: [tiltRadians] supplies the angle and core's `GraphiteGrain` widens the bake on
-     * the same curve, fitted to what this firmware actually does. Live and baked then agree
-     * at every angle, and a stroke gains its tooth at pen-up rather than changing size.
-     *
-     * V2 over 4 on the artist's eye: same tilt behaviour, and its grain reads better on a
-     * Kaleido panel.
+     * The lesson under all fourteen releases: **a firmware style is a target only if the
+     * artist has approved the firmware style.** The bake was measured against `CHARCOAL_V2`
+     * round after round, and each round came out measurably right and the whole came out
+     * wrong, because nobody had asked whether the charcoal stamp itself looked like a pencil.
+     * It did not. Fit to a reference the artist has said yes to, never to a style because it
+     * happens to be textured. `PLAN.md` Phase 11 keeps the full record.
      */
     private fun liveStyleCode(style: StrokeStyle): Int = when (style) {
         StrokeStyle.PEN -> TouchHelper.STROKE_STYLE_PENCIL
         StrokeStyle.FOUNTAIN -> TouchHelper.STROKE_STYLE_FOUNTAIN
         StrokeStyle.MARKER -> TouchHelper.STROKE_STYLE_MARKER
         StrokeStyle.BRUSH -> TouchHelper.STROKE_STYLE_NEO_BRUSH
-        StrokeStyle.PENCIL -> TouchHelper.STROKE_STYLE_CHARCOAL_V2
+        StrokeStyle.PENCIL -> TouchHelper.STROKE_STYLE_PENCIL
         StrokeStyle.CALLIGRAPHY -> TouchHelper.STROKE_STYLE_SQUARE_PEN
         StrokeStyle.DASH -> TouchHelper.STROKE_STYLE_DASH
         StrokeStyle.CROSS -> TouchHelper.STROKE_STYLE_CHARCOAL
     }
 
     /**
-     * What to ask the firmware for so it draws the width the host actually asked for.
+     * Arm the firmware overlay with the pen's style/width/ink. `setStrokeStyle` needs
+     * no restart and takes effect on the very next stroke (device-proven).
      *
-     * `CHARCOAL_V2` **overdraws**: measured on a NoteAir5C by photographing three strokes live and
-     * again after the bake, its mark comes out about 1.3× the width handed to `setStrokeWidth`, at
-     * every pen angle alike (0.76 ± 0.03 across three angles and every sensible threshold). Its
-     * stamps simply overhang the nominal contact patch.
-     *
-     * Correcting it here rather than in the renderer keeps one thing true that is worth protecting:
-     * **`Stroke.width` is the width of the mark**, on every engine, in the bake, and in
-     * `StrokeRasterizer`. Widening the bake to meet the firmware instead would have made that
-     * property a per-device fiction, and any host compositing its own ink offline would have got a
-     * different answer from the one on screen.
-     *
-     * Note what this does *not* change: a host that scales its own pen widths up to compensate ends
-     * up handing the firmware exactly the number it got before, so the live ink looks precisely as
-     * it did — only the bake moves, to meet it.
+     * The width goes to the firmware as the host gave it. Between 0.1.12 and 0.1.23 the pencil's
+     * was divided by 1.3 first, because `CHARCOAL_V2` overdraws by that much and the rule is that
+     * **`Stroke.width` means the width of the mark** — on every engine, in the bake, and through
+     * `StrokeRasterizer` — so a firmware that draws wide is corrected here rather than by widening
+     * the renderer to meet it. The rule stands; the style it was correcting for is no longer armed
+     * (see [liveStyleCode]), and the plain line draws the width it is handed.
      */
-    private fun liveWidth(style: StrokeStyle, width: Float): Float =
-        if (style == StrokeStyle.PENCIL) width / CHARCOAL_V2_OVERDRAW else width
-
-    /** Arm the firmware overlay with the pen's style/width/ink. `setStrokeStyle` needs
-     *  no restart and takes effect on the very next stroke (device-proven). */
     private fun applyPenStyle() {
         if (!isSetup || penOwner !== this) return
         touchHelper.setStrokeStyle(liveStyleCode(penStyle))
-        touchHelper.setStrokeWidth(liveWidth(penStyle, penWidth))
+        touchHelper.setStrokeWidth(penWidth)
         // Explicit color always (NoteAir5C's color panel defaults to non-black).
         touchHelper.setStrokeColor(penColor)
     }
@@ -684,7 +687,9 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     )
 
     /**
-     * The pen's lean, in radians from vertical — or zero on a model nobody has measured.
+     * The pen's lean, in radians from vertical — or zero on a model nobody has measured, and
+     * zero everywhere while [REPORT_TILT] is off, which since 0.1.24 it is. The measurement below
+     * is kept for whoever turns it back on.
      *
      * BOOX puts `tiltX`/`tiltY` on every raw point and this engine threw them away for a long
      * time, for a good reason: a five-device survey found the numbers on wildly different scales
@@ -712,6 +717,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
      * digitizer says, and only then add the name.
      */
     private fun tiltRadians(tiltX: Int, tiltY: Int): Float {
+        if (!REPORT_TILT) return 0f
         if (Build.MODEL !in TILT_DEGREES_MODELS) return 0f
         val degrees = hypot(tiltX.toFloat(), tiltY.toFloat())
         if (degrees > MAX_PLAUSIBLE_TILT_DEGREES) return 0f

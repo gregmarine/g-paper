@@ -119,7 +119,8 @@ internal object StrokeRenderer {
             if (n == 0) continue
             // Darker flecks are bigger as well as darker — the pass per darkness is already
             // grouped, so this costs nothing and is what stops mid-tones chaining into bristle.
-            paint.strokeWidth = GraphiteGrain.fleckPx(level)
+            // Capped at the lead's width, so a hairline lead bakes as the hairline it previewed as.
+            paint.strokeWidth = GraphiteGrain.fleckPx(level, width)
             paint.color = withAlphaFactor(color, GraphiteGrain.levelAlpha(level))
             canvas.drawPoints(packed, 0, n, paint)
         }

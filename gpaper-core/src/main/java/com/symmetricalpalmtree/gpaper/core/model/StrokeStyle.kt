@@ -20,7 +20,7 @@ package com.symmetricalpalmtree.gpaper.core.model
  * | [PEN] | uniform width | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
  * | [FOUNTAIN] | pressure/velocity-modulated width | `STROKE_STYLE_FOUNTAIN` (1) | `INK` (16) |
  * | [MARKER] | uniform, semi-transparent, flat caps | `STROKE_STYLE_MARKER` (2) | `NEEDLE` (10) |
- * | [PENCIL] | graphite grain on tooth; pressure → darkness, tilt → width (and paler) | `STROKE_STYLE_CHARCOAL_V2` (6) | `NEEDLE` (10) |
+ * | [PENCIL] | graphite grain on tooth; pressure → darkness (tilt → width and paler, where an engine reports a lean) | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
  * | [BRUSH] | broad, strongly pressure-modulated | `STROKE_STYLE_NEO_BRUSH` (3) | `INK` (16) |
  * | [CALLIGRAPHY] | chisel nib (direction-dependent width) | `STROKE_STYLE_SQUARE_PEN` (7) | code 15 (14 as fallback) |
  * | [DASH] | uniform width, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
@@ -49,13 +49,17 @@ enum class StrokeStyle {
 
     /**
      * Graphite. Flecks of mineral caught on the paper's tooth with bare paper between them.
-     * **Pressure darkens; tilt broadens and lightens** — leaning on it fills in more of the
-     * tooth, while laying it over draws with the flank of the lead instead of its point: many
-     * times wider, and paler with it, because the same graphite spread over a broader band
-     * leaves less on any one peak. That is how anyone shades, and why shading comes out grey. The grain is seeded from the stroke's id, so a page re-renders fleck for fleck
-     * however many times it is reloaded. Engines that cannot honestly supply an angle report
-     * `tilt = 0`, which simply means a pencil held upright — a fixed-width mark, not a
-     * broken one.
+     * **Pressure darkens.** Leaning on it fills in more of the tooth and darkens what lands, and
+     * the width never moves. The grain is seeded from the stroke's id, so a page re-renders fleck
+     * for fleck however many times it is reloaded.
+     *
+     * The renderer also knows what a *lean* does — laying the pencil over draws with the flank
+     * of the lead, many times wider and paler with it — and will do it for any engine that
+     * reports a tilt. None does today. The Onyx engine measured one model, drove the pencil's
+     * width from it for fourteen releases, and turned it off again in 0.1.24 when the artist
+     * drew with the result and rejected it: `tilt = 0` means a pencil held upright, a
+     * fixed-width mark, and that is the pencil this style is now meant to be. Live ink on Onyx
+     * is the plain even line, so the width the hand aims with is the width that bakes.
      */
     PENCIL,
 

@@ -75,12 +75,24 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   **Adding a model to that list is a measurement, never an inference from a similar-looking one.**
   `tilt = 0` is not a degraded mode — it means a pencil held upright — so a renderer must still look
   right there, and an unmeasured device gets a fixed-width pencil rather than a broken one.
+  **Since 0.1.24 the Onyx engine reports zero on the measured model too** (`REPORT_TILT`): the
+  artist sketched with the tilt-driven pencil and rejected it. The measurement stays in the source
+  because it is a measurement; the policy of driving width from it is what was withdrawn.
 - **A live preview that lies about WIDTH is far worse than one that lies about texture**, because
   width is what the hand aims with — and the artist reads the collapse at pen-up as the *bake* being
-  broken, which sends the search to the wrong half of the system. When a firmware style and the bake
-  disagree on size, **match the firmware** rather than flattening the style: `TouchHelper` exposes
-  only style/colour/width (verified by `javap`), so a textured live style cannot be had without
-  whatever tilt response it comes with.
+  broken, which sends the search to the wrong half of the system. `TouchHelper` exposes only
+  style/colour/width (verified by `javap`), so a textured live style cannot be had without whatever
+  tilt response it comes with — which cuts both ways: to take the tilt out of a mark you must give
+  up the texture in the live ink, and 0.1.24 did exactly that (`PENCIL` arms style 0 again).
+- **A firmware style is a target only if the artist has approved the firmware style.** Phase 11
+  fitted fourteen releases to `CHARCOAL_V2` — width curve, overdraw, density, all measured — and the
+  artist rejected the result whole, because the charcoal stamp itself never looked like a pencil and
+  nobody had asked. Each round was measurably right and the whole was wrong. Fit to a reference the
+  artist has said yes to, never to a style because it happens to be textured. Phase 12 has the record.
+- **A fleck is never wider than the lead that lays it (0.1.24).** Rendered offline, a 1.2 px lead
+  under 1.6 px flecks baked at more than twice its live width. `fleckPx(level, width)` caps at the
+  lead; renderers use that form. Render a new lead size to a PNG before it reaches a panel — this is
+  the second flaw that habit has caught that no unit test would have.
 - **A cross-section must be laid across the SMOOTHED direction of travel.** Taking the pen's
   direction from one adjacent pair of raw samples measures jitter, not travel: at 2 px spacing,
   0.35 px of digitizer noise swings it ~14° sd, past ±35°. Every cross-section of grain is rotated by
@@ -172,7 +184,8 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   within 4%.
 - **`Stroke.width` means the width of the mark — protect that when a firmware disagrees.** BOOX's
   `CHARCOAL_V2` overdraws ~1.3× (measured NA5C, constant across pen angle; corrected in 0.1.12 by
-  dividing the width `gpaper-onyx` hands `setStrokeWidth`). The live style and the bake are coupled
+  dividing the width `gpaper-onyx` hands `setStrokeWidth`; the divide left with the style in 0.1.24,
+  the rule did not). The live style and the bake are coupled
   through one `penWidth`, so only one of them can be corrected — **correct the engine, never widen
   the renderer.** Widening the bake to meet a firmware would make `Stroke.width` a per-device
   fiction, and a host compositing its own ink through `StrokeRasterizer` would get a different

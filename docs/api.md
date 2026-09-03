@@ -162,7 +162,7 @@ verified on five BOOX devices; the Ratta 0…31 pen-code sweep on Nomad + Manta)
 | `PEN` | uniform width | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
 | `FOUNTAIN` | pressure/velocity width | `STROKE_STYLE_FOUNTAIN` (1) | `INK` (16) |
 | `MARKER` | uniform, semi-transparent | `STROKE_STYLE_MARKER` (2) | `NEEDLE` (10) |
-| `PENCIL` | graphite grain on tooth; pressure → darkness, tilt → width | `STROKE_STYLE_CHARCOAL_V2` (6) | `NEEDLE` (10) |
+| `PENCIL` | graphite grain on tooth; pressure → darkness (tilt → width where an engine reports a lean; none does today) | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
 | `BRUSH` | broad, pressure-modulated | `STROKE_STYLE_NEO_BRUSH` (3) | `INK` (16) |
 | `CALLIGRAPHY` | chisel nib, direction-dependent | `STROKE_STYLE_SQUARE_PEN` (7) | code 15 (14 fallback) |
 | `DASH` | uniform, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
@@ -180,22 +180,34 @@ migration for hosts), but engines may render richer styles as `PEN` until their
 committed renderer is implemented. All live mappings above are confirmed on-device
 (BOOX Tier-1 fleet; Supernote Nomad + Manta).
 
-Committed-renderer status at v0.1.22 (`core/canvas/StrokeRenderer.kt`):
+Committed-renderer status at v0.1.24 (`core/canvas/StrokeRenderer.kt`):
 `PEN`, `MARKER` (translucent flat-cap), `DASH`, `CROSS` (x-marks along the path),
 `FOUNTAIN` (pressure-modulated width) and `PENCIL` (graphite grain — 0.1.7) render for
 real; `BRUSH` and `CALLIGRAPHY` still render as `PEN`.
 The enum may grow; hosts should treat unknown persisted values as `PEN`.
 
-**`PENCIL` (0.1.7; tilt 0.1.9, refit 0.1.10, density 0.1.11, grain 0.1.13/0.1.14, tilt smoothing 0.1.15).** Graphite is laid down as a scatter of
+**`PENCIL` (0.1.7; tilt 0.1.9, refit 0.1.10, density 0.1.11, grain 0.1.13/0.1.14, tilt smoothing 0.1.15; upright again 0.1.24).** Graphite is laid down as a scatter of
 flecks on the paper's tooth with bare paper between them, not as a tinted line. **Pressure
-darkens; tilt broadens and lightens.** Leaning on the pencil fills in more of the tooth and darkens what lands, without
-moving the width; laying it over draws with the flank of the lead rather than its point, and
-the mark grows many times wider *and paler* — the same graphite spread over a broader band
-leaves less of itself on any one peak, which is why shading with the side of a pencil comes
-out grey however hard you lean. Measured against an artist's eye on a NoteAir5C: ≈1× wide at
-9°, ≈4.9× at 44°, ≈10.9× at 75°. A mark's apparent width comes
-out roughly `width + 1 px` at any one angle, the bleed of one fleck; below about 1 px a lead stops
-getting finer. How much graphite lands inside that width was set by photographing strokes
+darkens.** Leaning on the pencil fills in more of the tooth and darkens what lands, without
+moving the width. The renderer also knows what a *lean* does — laying the pencil over draws with
+the flank of the lead rather than its point, and the mark grows many times wider *and paler*, the
+same graphite spread over a broader band leaving less of itself on any one peak — and it will do
+that for any engine that reports a tilt. **No engine does today.** The Onyx engine measured one
+model (≈1× wide at 9°, ≈4.9× at 44°, ≈10.9× at 75°, against an artist's eye on a NoteAir5C), drove
+the width from it for fourteen releases, and turned it off in 0.1.24 when the artist sketched with
+the result and rejected it: too broad in an ordinary grip, and not a pencil to look at. `tilt = 0`
+is a pencil held upright, a fixed-width mark, and that is the pencil this style now is. A mark's
+apparent width comes out roughly `width + 1 px`, the bleed of one fleck — except that **a fleck is
+never wider than the lead that lays it** (0.1.24), so a hairline lead bakes as the hairline it
+previewed as rather than at twice its width.
+
+**Onyx live ink for `PENCIL` is the plain even line, style 0 (0.1.24).** It was `CHARCOAL_V2`
+from 0.1.9 to 0.1.23. That style broadens with the pen's lean inside the firmware and
+`TouchHelper` offers no way to switch that off, so a textured live preview cannot be had
+without a tilt response; taking the lean out of the mark meant taking the texture out of the
+live ink. The live line is now exactly the width the host asked for and the bake adds grain and
+pressure → darkness at pen-up — the pen-up change is tone and texture, never size. The 1.3×
+overdraw correction that `CHARCOAL_V2` needed went with it. How much graphite lands inside that width was set by photographing strokes
 live on a NoteAir5C's panel and again after the bake, and comparing ink per unit length — the
 two covered the same width and the bake was depositing about 30% less inside it (0.1.11). Hosts choosing distinguishable pencil sizes should space them by more
 than that.

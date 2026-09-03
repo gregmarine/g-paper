@@ -758,6 +758,57 @@ visible in both versions and should have been isolated before anything was resha
 even enough to judge it. Both fits were anchored on an artist's estimate of
 *relative* widths at three angles, so 44° is the least constrained point on it.
 
+### Phase 12 — Hairline: the pencil goes back to an upright, even line (post-v0.1.0)
+**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.24
+
+Opened by the artist sitting down to sketch with the Phase 10/11 pencil for an evening and
+rejecting it whole. Neither the live `CHARCOAL_V2` ink nor the bake read as pencil, the marks were
+far too broad in an ordinary sketching grip, and the tilt response was named as part of the cause.
+The request: take tilt out, make the stroke as thin as it will go, keep pressure.
+
+**Why fourteen measured releases converged on the wrong pencil.** Every one of them measured the
+bake against the firmware's charcoal stamp — width curve fitted to it, overdraw measured on it,
+density photographed against it — and each round came out measurably right while the whole came
+out wrong. Nobody had asked whether the charcoal stamp itself looked like a pencil. **A firmware
+style is a target only if the artist has approved the firmware style.** Fit to a reference the
+artist has said yes to, never to a style because it happens to be textured. The same lesson Phase
+11 already recorded about aggregate statistics, one level up.
+
+**Why the texture went with the tilt.** `TouchHelper`'s whole pen surface is style / colour /
+width, and both charcoal styles broaden with the lean inside the firmware. So the only live style
+with no tilt response is one with no texture, and `PENCIL` arms the plain even line (style 0) again
+— the same style 0.1.8 armed, and that 0.1.9 left for the wrong reason. The live line is exactly the
+width the host asked for; the bake adds grain and pressure → darkness at pen-up. The pen-up change
+is tone and texture, never size.
+
+**What landed:**
+- `gpaper-onyx`: `PENCIL` → `STROKE_STYLE_PENCIL` (0). `REPORT_TILT = false` gates `tiltRadians`
+  ahead of the measured-model list, so every model reports zero; the NoteAir5C measurement and the
+  allowlist stay in the source as a measurement, not a policy. The `CHARCOAL_V2_OVERDRAW` divide is
+  gone with the style it corrected for. Nothing in core's tilt path was removed — `widthFactor`,
+  `coverageFactor`, both lean filters — it simply sees zero.
+- `gpaper-core`: **a fleck is never wider than the lead that lays it.** Rendering a 1.2 px lead
+  offline before it reached a panel (the Phase 10 discipline) showed the darkest 1.6 px flecks
+  baking it at more than twice the live line's width — a width lie at exactly the scale the host
+  was about to draw at. `fleckPx(level, width)` caps at the lead's width, floored at
+  `FLECK_MIN_PX`; `StrokeRenderer.drawPencil` uses it. Above 1.6 px nothing changes. Pinned by a
+  test.
+- `StrokeStyle` KDoc, `docs/api.md`, `CLAUDE.md` updated; the tilt-fit numbers stay in the docs as
+  what was measured.
+
+**Kept, deliberately:** the tangent smoothing, the landing trim, the dome caps, the fleck sizing
+against the pitch and the lane phase — all of Phase 11's grain work that had nothing to do with the
+lean. And the measurement itself: `hypot(tiltX, tiltY)` is degrees from vertical on the NoteAir5C,
+and measuring it again would only find that again. Whoever brings the lean back gets to decide what
+it should drive; it will not be the width of the mark on a curve borrowed from a charcoal stamp.
+
+**Left for the device:** whether the firmware's plain line will draw as thin as 1.2 px or has a
+floor of its own; whether a pale, pressure-carried hairline reads as pencil on a Kaleido panel; and
+whether the pen-up change from a uniform black line to a grained, pressure-toned one is acceptable
+now that it never changes size. All three are the artist's eye.
+
+---
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

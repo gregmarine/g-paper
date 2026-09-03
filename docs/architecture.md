@@ -110,8 +110,10 @@ knowledge:
   the only safe feed: the host-facing callback is Handler-marshalled and a stale backlog can
   re-latch the gate after the real deactivate.
 - Live style mapping to the nine firmware styles is device-proven no-restart and
-  fast-mode-safe; tilt is deliberately captured as 0 (per-device firmware scales, no
-  normalizer).
+  fast-mode-safe; tilt is captured as 0 on every model (`REPORT_TILT`, 0.1.24). The NoteAir5C's
+  lean was measured to be degrees from vertical and drove the pencil's width for Phases 10–11;
+  the artist rejected that pencil, so the measurement stays and the policy does not. Unmeasured
+  models were always zero (per-device firmware scales, no normalizer).
 
 ## The Ratta engine (Supernote)
 
