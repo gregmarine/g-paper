@@ -810,7 +810,7 @@ now that it never changes size. All three are the artist's eye.
 ---
 
 ### Phase 13 — Raster pages: the page as an image (post-v0.1.0)
-**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.25 · Opened 2026-09-06 for
+**Status:** ✅ Complete (commit 5eb3731) · **Publishes:** 0.1.25 · Opened 2026-09-06 for
 Paintsprout Onyx's raster experiment (`apps/paintsprout_onyx/RASTER_PLAN.md`, phase R0), which
 owns the walk.
 
