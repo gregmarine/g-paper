@@ -801,6 +801,12 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
 
     override fun addStrokes(strokes: List<Stroke>) = epdRepaintHandoff { super.addStrokes(strokes) }
 
+    // A raster page's load is a content swap like any other on this panel (0.1.25): the
+    // image lands in the committed layer and needs the same render-off → repaint →
+    // re-arm handoff, or the new page stays invisible under the overlay. The pen-up
+    // composite needs nothing here — it runs through commitCapturedStroke like a stroke.
+    override fun loadPageRaster(bitmap: Bitmap?) = epdRepaintHandoff { super.loadPageRaster(bitmap) }
+
     override fun removeStrokes(ids: Collection<String>) = epdRepaintHandoff { super.removeStrokes(ids) }
 
     override fun clear() = epdRepaintHandoff { super.clear() }

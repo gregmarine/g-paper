@@ -1,5 +1,6 @@
 package com.symmetricalpalmtree.gpaper.core
 
+import android.graphics.Rect
 import com.symmetricalpalmtree.gpaper.core.model.Selection
 import com.symmetricalpalmtree.gpaper.core.model.SelectionMove
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
@@ -79,6 +80,29 @@ interface PaperListener {
         if (strokeIds.isNotEmpty()) onStrokesErased(strokeIds)
         if (contentIds.isNotEmpty()) onContentErased(contentIds)
     }
+
+    /**
+     * The page image is about to change inside [rect] (page space) — [PageMode.RASTER]
+     * only (0.1.25). Fires on the main thread immediately before the pixels are touched,
+     * for every change: a mark composited at pen-up, a load, a clear, and (from 0.1.26)
+     * each batch of an eraser sweep. This is the host's one chance at a before-image for
+     * undo — [PaperView.copyPageRaster] with this rect, now, holds exactly the pixels the
+     * change will overwrite. The engine keeps no history in either mode. The rect is
+     * generous by design (the mark's bounds pushed out by its width and a margin, clipped
+     * to the page), so a before-image taken from it always covers the change.
+     */
+    fun onRasterWillChange(rect: Rect) {}
+
+    /**
+     * The page image changed inside [rect] (page space) — the closing half of
+     * [onRasterWillChange], same rect, after the pixels were touched. The host's dirty
+     * flag: a raster page has no per-mark rows to write, so this is what schedules its
+     * save. In [PageMode.RASTER] a composited mark still reports through
+     * [onStrokeCommitted] as well (the host keeps its timestamps and edit counts from
+     * one place in both modes) — the stroke it carries is the one just composited, and
+     * a raster host must not store it as a row.
+     */
+    fun onRasterChanged(rect: Rect) {}
 
     /**
      * The stylus lifted after writing. Fires after [onStrokeCommitted] for the same

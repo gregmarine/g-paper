@@ -809,6 +809,90 @@ now that it never changes size. All three are the artist's eye.
 
 ---
 
+### Phase 13 — Raster pages: the page as an image (post-v0.1.0)
+**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.25 · Opened 2026-09-06 for
+Paintsprout Onyx's raster experiment (`apps/paintsprout_onyx/RASTER_PLAN.md`, phase R0), which
+owns the walk.
+
+Arc 1 of the Onyx app closed with the artist's verdict that graphite through g-paper feels like
+pencil — and two things that do not feel like paper, both because the page is a list of strokes:
+the eraser takes marks whole, and a mark can be given back whole. Paintsprout's rule is that the
+artist has what paper gives and nothing more. For a sketching pencil a page that *is* pixels is
+truer, and this phase gives g-paper such a page, beside the stroke page, chosen per view.
+
+**What landed:**
+- `PageMode { STROKE, RASTER }` and `PaperView.pageMode`, default `STROKE`. Setting it drops
+  content the way `clearForContentSwap` does (the call is open, so the Onyx overlay release comes
+  with it) — a mode belongs to an empty page and is never flipped under ink. Nothing in stroke
+  mode moves: every existing test is untouched and green.
+- `CanvasPaperView.pageRaster`: one page-sized `ARGB_8888` bitmap, transparent where nothing was
+  drawn, allocated on first need (page rect, else the laid-out view) and **dropped, not erased, at
+  a swap** — the committed display list holds its own reference to the bitmap it was recorded
+  with, so releasing ours keeps the old pixels on the panel until the next page lands, exactly the
+  contract strokes have. Erasing in place would blank the panel a frame early. It is a layer over
+  the paper, never the paper: white and the template still draw beneath it, so an eraser can
+  clear to transparent (Phase 14) and a textured sheet can one day sit under it.
+- `drawCommittedContent` blits the image where the stroke loop runs. `commitCapturedStroke` in
+  `RASTER` builds the same `Stroke` with the same id (the grain is seeded from it, as the preview
+  was), draws it once through `StrokeRenderer` into the image, calls `bakeAfterCommit()` as before
+  (one `drawBitmap` re-record now), fires `onStrokeCommitted` as before, and lets the object go.
+  `loadStrokes`/`addStrokes` composite instead of keeping — the one-way bake of a stroke page;
+  `removeStrokes` is a no-op; `getStrokes()` stays empty.
+- `PaperListener.onRasterWillChange(rect)` / `onRasterChanged(rect)`, default bodies, page space,
+  around every change. The rect comes from `geometry/RasterDirty` — bounds pushed out by the
+  *full* width plus 2 px, snapped outward, clipped to the page, null when off it. Generous on
+  purpose: the fleck is jittered off its lattice and drawn as a dot up to the lead's width and
+  the fountain nib swells, and a before-image that misses one fleck leaves a mark undo cannot
+  take back. Pure Kotlin, proved by `RasterDirtyTest` (9 tests).
+- `loadPageRaster(bitmap?)` (copied in at 1:1 from the origin, never stretched — a wrong-sized
+  image is a host bug worth seeing), `getPageRaster()` (a **copy**, never the live bitmap: the
+  host's save encodes it while the pen keeps going), `copyPageRaster(rect)` (a fresh bitmap even
+  for the whole page — `Bitmap.createBitmap(src, …)` hands back the *source* for a full subset).
+- `OnyxPaperView.loadPageRaster` goes through `epdRepaintHandoff` like every other content swap.
+  The pen path is untouched: the pen-up composite rides `commitCapturedStroke`. Ratta needs no
+  override — its deferred bake and `redrawCommitted` guard already cover a raster load.
+- `docs/api.md` (Raster pages), `docs/host-responsibilities.md` (persistence + undo patterns).
+
+**Decided at phase start (Paintsprout, 2026-09-06):** `ARGB_8888` over `ALPHA_8` (18 MB at the
+NA5C page; colour kept rather than tinted back, so a colour panel is not locked out by storage);
+`onStrokeCommitted` keeps firing in raster mode (the host's timestamps and counts come from one
+place in both modes).
+
+**What a JVM test cannot reach here, and the device walk must:** the composite landing the same
+pixels `StrokeRasterizer` lays, `getPageRaster` being a copy, the mode set clearing content. All
+three need a `Bitmap`, which the no-Robolectric rule keeps out of the JVM suite; they are
+`screencap`-verifiable on the panel because raster content is ordinary committed content.
+
+**Outcome (NoteAir5C walk, 2026-09-06):** ink accumulated across a minute of sketching, every
+committed mark `screencap`-visible, pen-up no slower in the hand, no engine log lines. The eraser
+did nothing on the page, as expected before Phase 14.
+
+**Finding — the software and hardware rasterisers do not lay the hairline pencil the same.** The
+same rows were `screencap`ed as a raster page and again reopened as a stroke page, and diffed.
+The grain is identical, fleck for fleck in the same places; the *tone* is not. The stroke page
+(the committed `RenderNode`, GPU) carried about 40 % more ink mass and twice the pixels at
+half-dark; the raster page (`Canvas(bitmap)`, CPU) is paler. Same renderer, same seed, same
+`Paint` — only the rasteriser differs, and a round dot under 1.2 px is exactly where GPU and CPU
+coverage part company. Not proven past the diff, but nothing else in the two paths differs and
+premultiplied rounding cannot reach that magnitude. So "the same renderer makes the same pixels"
+is true only on the same rasteriser: `StrokeRasterizer` (covers, thumbnails, the raster page)
+has always baked paler than the panel, unnoticed under the covers' ×3 shrink.
+
+**Decided (the artist, 2026-09-06): keep the software bake.** Side by side at 1× he preferred
+the raster page's tone to the stroke page's. Nothing tuned; the raster composite is what the
+CPU rasteriser makes of the approved grain, and a raster book's cover now matches its pages
+exactly. Recorded for whoever compares the two modes: they differ in tone as well as in what is
+kept, and the clean way to remove that confound — if it ever matters — is to bake the stroke
+page's committed layer through a software bitmap too, which is a separate decision.
+
+**Watch:** the bitmap is mutated per pen-up, so its generation changes and the hardware canvas
+re-uploads the whole 18 MB texture at each re-record. Not felt on the NA5C in this walk; if
+pen-up ever feels slower than a stroke page, that upload is the first suspect. The
+`gfxinfo` frame count was not taken cleanly (no reset before the sketching minute) and is owed
+by the next walk.
+
+---
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

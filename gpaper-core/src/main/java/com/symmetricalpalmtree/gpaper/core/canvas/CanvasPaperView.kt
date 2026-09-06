@@ -15,6 +15,7 @@ import android.util.Log
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
+import com.symmetricalpalmtree.gpaper.core.PageMode
 import com.symmetricalpalmtree.gpaper.core.PaperListener
 import com.symmetricalpalmtree.gpaper.core.PaperView
 import com.symmetricalpalmtree.gpaper.core.RawAction
@@ -26,6 +27,7 @@ import com.symmetricalpalmtree.gpaper.core.engine.GPaper
 import com.symmetricalpalmtree.gpaper.core.geometry.EraseHitTest
 import com.symmetricalpalmtree.gpaper.core.geometry.GestureRecognizer
 import com.symmetricalpalmtree.gpaper.core.geometry.LassoHitTest
+import com.symmetricalpalmtree.gpaper.core.geometry.RasterDirty
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapEngine
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapGuide
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
@@ -34,6 +36,7 @@ import com.symmetricalpalmtree.gpaper.core.model.SelectionMove
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
+import com.symmetricalpalmtree.gpaper.core.model.toRectOut
 import com.symmetricalpalmtree.gpaper.core.render.ContentLayer
 import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
 import com.symmetricalpalmtree.gpaper.core.render.HitTarget
@@ -56,6 +59,10 @@ import java.util.UUID
  * - **Live layer** — the in-progress stroke, drawn in [onDraw] at input rate through the
  *   same [StrokeRenderer] as the bake, so live and committed appearance always agree on
  *   this engine.
+ * - **Raster pages (0.1.25)** — in [PageMode.RASTER] the committed layer's stroke loop is
+ *   replaced by one blit of [pageRaster], a page-sized transparent bitmap the marks are
+ *   composited into at pen-up through the very same [StrokeRenderer]. Everything before
+ *   pen-up is shared with stroke mode; only what is *kept* differs. See [pageMode].
  *
  * Input is stylus-only: finger events are never consumed, so host gestures work above and
  * around the paper. The pen-activity gate ([isPenActive]) tracks every captured stylus
@@ -119,6 +126,28 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var templateBitmap: Bitmap? = null
     private var pageWidth = 0
     private var pageHeight = 0
+
+    /**
+     * The page image, raster mode only: page-sized, transparent where nothing has been
+     * drawn, allocated the first time raster content needs somewhere to land and
+     * dropped on every content swap.
+     *
+     * It is a layer *over* the paper and never the paper itself. White and the template
+     * still draw underneath it in [drawCommittedContent], so a mark is graphite on the
+     * sheet rather than a picture of a sheet with graphite on it — which is what lets an
+     * eraser clear pixels to transparent (0.1.26) instead of painting white holes, and
+     * lets a textured paper sit under a raster page one day without the image having to
+     * know. ARGB_8888 rather than ALPHA_8: about 18 MB at a 1860 × 2480 e-ink page, but
+     * the colour a stroke carries is kept rather than re-applied as a tint, so a colour
+     * panel is not locked out by the storage format.
+     *
+     * Dropped, not erased, at a swap: the committed display list holds its own reference
+     * to the bitmap it was recorded with, so releasing ours keeps the old pixels on the
+     * panel until the next content lands — the same "pixels hold" contract
+     * [clearForContentSwap] makes for strokes. Erasing it in place would blank the
+     * screen at the next frame, before the new page arrived.
+     */
+    private var pageRaster: Bitmap? = null
     private val contentRenderers = ArrayList<ContentRenderer>()
 
     // ── Input state ──────────────────────────────────────────────────────────
@@ -299,6 +328,17 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override var eraserRadius: Float = DEFAULT_ERASER_RADIUS_PX
 
+    override var pageMode: PageMode = PageMode.STROKE
+        set(value) {
+            if (field == value) return
+            // A mode is set on an empty page. Dropping the content through the swap call
+            // (open — device engines add their overlay release there) means the pixels on
+            // the panel hold until the host loads what the new mode understands, so a
+            // book opened in either mode turns its first page as quietly as any other.
+            clearForContentSwap()
+            field = value
+        }
+
     override var smartLassoEnabled: Boolean = false
 
     override var scribbleEraseEnabled: Boolean = false
@@ -319,6 +359,17 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun loadStrokes(strokes: List<Stroke>) {
         clearSelection()
+        if (pageMode == PageMode.RASTER) {
+            // The one-way bake: a stroke page's rows land as pixels, then the objects go.
+            // A load replaces, so the image starts blank — the whole page changes.
+            val dirty = RasterDirty.wholePage(pageWidth, pageHeight)?.toRectOut()
+            dirty?.let { paperListener?.onRasterWillChange(it) }
+            pageRaster = null
+            compositeIntoRaster(strokes)
+            redrawCommitted()
+            dirty?.let { paperListener?.onRasterChanged(it) }
+            return
+        }
         strokeList.clear()
         strokeList.addAll(strokes)
         modelChanged()
@@ -327,6 +378,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun addStrokes(strokes: List<Stroke>) {
         clearSelection()
+        if (pageMode == PageMode.RASTER) {
+            if (strokes.isEmpty()) return
+            val dirty = strokes.mapNotNull { rasterDirtyOf(it) }
+                .reduceOrNull { a, b -> a.union(b) }?.toRectOut()
+            dirty?.let { paperListener?.onRasterWillChange(it) }
+            compositeIntoRaster(strokes)
+            redrawCommitted()
+            dirty?.let { paperListener?.onRasterChanged(it) }
+            return
+        }
         strokeList.addAll(strokes)
         modelChanged()
         redrawCommitted()
@@ -334,6 +395,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun removeStrokes(ids: Collection<String>) {
         clearSelection()
+        // In raster mode there is nothing to remove by id — the objects were let go at
+        // commit. A host that undoes a raster mark does it with a before-image.
         val idSet = ids as? Set<String> ?: ids.toHashSet()
         if (strokeList.removeAll { it.id in idSet }) {
             modelChanged()
@@ -348,16 +411,102 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         activePoints.clear()
         strokeList.clear()
         modelChanged()
+        if (pageMode == PageMode.RASTER) {
+            val dirty = RasterDirty.wholePage(pageWidth, pageHeight)?.toRectOut()
+            dirty?.let { paperListener?.onRasterWillChange(it) }
+            pageRaster = null
+            redrawCommitted()
+            dirty?.let { paperListener?.onRasterChanged(it) }
+            return
+        }
         redrawCommitted()
     }
 
     override fun clearForContentSwap() {
         // Model drops now; pixels stay — no re-record, no invalidate. The next
         // loadStrokes() (or other content call) swaps the screen in one repaint.
+        // The page image goes the same way: dropped, not erased (see [pageRaster]).
         clearSelection()
         activePoints.clear()
         strokeList.clear()
         modelChanged()
+        pageRaster = null
+    }
+
+    // ── PaperView: the raster page (0.1.25) ──────────────────────────────────
+
+    override fun loadPageRaster(bitmap: Bitmap?) {
+        if (pageMode != PageMode.RASTER) return
+        clearSelection()
+        val dirty = RasterDirty.wholePage(pageWidth, pageHeight)?.toRectOut()
+        dirty?.let { paperListener?.onRasterWillChange(it) }
+        pageRaster = null
+        if (bitmap != null) {
+            // Copied in, at 1:1 from the origin. The host keeps the bitmap it handed us
+            // (it may be the decode it is about to recycle, or the undo image it is about
+            // to reuse), and we keep one that nothing but this view writes to.
+            ensurePageRaster()?.let { Canvas(it).drawBitmap(bitmap, 0f, 0f, null) }
+        }
+        redrawCommitted()
+        dirty?.let { paperListener?.onRasterChanged(it) }
+    }
+
+    override fun getPageRaster(): Bitmap? {
+        val src = pageRaster ?: return null
+        return src.copy(Bitmap.Config.ARGB_8888, false)
+    }
+
+    override fun copyPageRaster(rect: Rect): Bitmap? {
+        val src = pageRaster ?: return null
+        val clipped = Rect(rect)
+        if (!clipped.intersect(0, 0, src.width, src.height)) return null
+        if (clipped.isEmpty) return null
+        // Drawn into a fresh bitmap rather than Bitmap.createBitmap(src, x, y, w, h),
+        // which hands back the *source* when the subset is the whole of it — and a
+        // "copy" that is the live image would let a save encode pixels still being drawn.
+        val out = Bitmap.createBitmap(clipped.width(), clipped.height(), Bitmap.Config.ARGB_8888)
+        Canvas(out).drawBitmap(src, clipped, Rect(0, 0, clipped.width(), clipped.height()), null)
+        return out
+    }
+
+    /**
+     * The page image, allocated if it is not there yet, or null when there is no page
+     * to size it by: the page rect if the host set one, else the laid-out view. A view
+     * asked to keep raster content before either is known has nowhere to put it, and
+     * says so in the log rather than guessing a size the page will not turn out to be.
+     */
+    private fun ensurePageRaster(): Bitmap? {
+        pageRaster?.let { return it }
+        val w = if (pageWidth > 0) pageWidth else width
+        val h = if (pageHeight > 0) pageHeight else height
+        if (w <= 0 || h <= 0) {
+            Log.w(TAG, "raster page has no size yet (setPageSize or layout first); content dropped")
+            return null
+        }
+        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { pageRaster = it }
+    }
+
+    /**
+     * Lay [strokes] into the page image through the same renderer that bakes them in
+     * stroke mode, seeded by the same ids, so the pixels are the ones the artist approved
+     * on paper — fleck for fleck what [StrokeRasterizer] would make of the same rows.
+     */
+    private fun compositeIntoRaster(strokes: List<Stroke>) {
+        if (strokes.isEmpty()) return
+        val target = ensurePageRaster() ?: return
+        val canvas = Canvas(target)
+        for (s in strokes) {
+            StrokeRenderer.draw(
+                canvas, s.points, s.color, s.width, s.style, scratchPaint, s.id.hashCode(),
+            )
+        }
+    }
+
+    /** The page-space patch a stroke may touch when composited — see [RasterDirty]. */
+    private fun rasterDirtyOf(stroke: Stroke): Bounds? {
+        val w = if (pageWidth > 0) pageWidth else width
+        val h = if (pageHeight > 0) pageHeight else height
+        return RasterDirty.of(stroke.bounds, stroke.width, w, h)
     }
 
     // ── PaperView: template & page geometry ──────────────────────────────────
@@ -472,6 +621,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         modelChanged()
         contentRenderers.clear()
         templateBitmap = null
+        pageRaster = null
         committedNode.discardDisplayList()
     }
 
@@ -790,13 +940,20 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 renderer.draw(canvas, dragHiddenContentIds)
             }
         }
-        for (stroke in strokeList) {
-            // Mid-drag, the selected strokes live in the translated drag layer instead.
-            if (stroke.id in dragHiddenIds) continue
-            StrokeRenderer.draw(
-                canvas, stroke.points, stroke.color, stroke.width, stroke.style, scratchPaint,
-                stroke.id.hashCode(),
-            )
+        if (pageMode == PageMode.RASTER) {
+            // One blit where the stroke loop would run: the page image sits at the page
+            // origin, over the paper and under the host's above-strokes content, exactly
+            // where the baked strokes would have been.
+            pageRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+        } else {
+            for (stroke in strokeList) {
+                // Mid-drag, the selected strokes live in the translated drag layer instead.
+                if (stroke.id in dragHiddenIds) continue
+                StrokeRenderer.draw(
+                    canvas, stroke.points, stroke.color, stroke.width, stroke.style, scratchPaint,
+                    stroke.id.hashCode(),
+                )
+            }
         }
         for (renderer in contentRenderers) {
             if (renderer.layer == ContentLayer.ABOVE_STROKES) {
@@ -890,6 +1047,20 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             width = penWidth,
             style = penStyle,
         )
+        if (pageMode == PageMode.RASTER) {
+            // The mark lands as pixels and the object is let go. Same stroke, same id
+            // (the grain is seeded from it, exactly as the live preview was), same
+            // renderer — only what is kept differs. The host hears about it three times:
+            // will-change before the pixels move (its before-image moment), committed
+            // (its timestamps and counts, as in stroke mode), changed after.
+            val dirty = rasterDirtyOf(stroke)?.toRectOut()
+            dirty?.let { paperListener?.onRasterWillChange(it) }
+            compositeIntoRaster(listOf(stroke))
+            bakeAfterCommit()
+            paperListener?.onStrokeCommitted(stroke)
+            dirty?.let { paperListener?.onRasterChanged(it) }
+            return true
+        }
         strokeList.add(stroke)
         modelChanged()
         bakeAfterCommit()

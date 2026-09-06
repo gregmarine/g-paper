@@ -28,6 +28,7 @@ changes into its own storage, keyed by stroke id.
 | Contract | `PaperView` (interface every engine implements) |
 | Data model | `Stroke`, `StrokePoint`, `StrokeStyle`, `Bounds`, `Selection`, `SelectionMove` — pure Kotlin, zero Android deps |
 | Tools | `Tool` — `NONE` / `PEN` / `ERASER` / `LASSO` |
+| Page mode (0.1.25) | `PageMode` — `STROKE` (default) / `RASTER`; `pageMode`, `loadPageRaster`, `getPageRaster`, `copyPageRaster` |
 | Events | `PaperListener` (all default no-op), `RawInputListener` + `RawInputEvent` |
 | Host content | `ContentRenderer`, `ContentLayer`, `HitTarget` |
 | Engine selection | `GPaper` (registry + factory), `PaperEngineProvider` |
@@ -91,6 +92,28 @@ override fun onDestroy() { paper.release(); super.onDestroy() }
 | Out | `onPaperTapped` (0.1.5) | Stylus tap on bare paper in `Tool.LASSO` with nothing selected — the "paste here" hook. Stylus only; never the tap that dismissed a selection |
 | — | `clear()` | User-facing "erase page" (host updates its own data; no erase callbacks fire) |
 | — | `clearForContentSwap()` | Page turn: pixels hold until the next `loadStrokes` — single EPD refresh, no blank flash |
+
+### Raster pages (0.1.25)
+
+`pageMode = PageMode.RASTER` makes the page **one image** instead of a list of strokes.
+Everything up to pen-up is shared with stroke mode — live ink, palm gate, EPD handoffs, the
+committed renderer — and only what is *kept* differs: the mark is composited into a
+page-sized transparent bitmap through the same renderer and seed, and the object is dropped.
+Set the mode on an empty page (it drops content like `clearForContentSwap()`), before the
+content loads; it is never flipped under ink, and a host that never mentions it gets the
+engine it always had.
+
+| Direction | API | Notes |
+|---|---|---|
+| In | `loadPageRaster(bitmap?)` | Page load / undo replay; copied in at 1:1 from the page origin, null = blank. Handles the EPD handoff |
+| In | `loadStrokes` / `addStrokes` | Composite into the image — the **one-way bake** of a stroke page. `removeStrokes` does nothing; `getStrokes()` is empty |
+| Out | `onRasterWillChange(rect)` → change → `onRasterChanged(rect)` | Around every change, page space, rect generous and page-clipped. The first is the host's before-image moment (`copyPageRaster(rect)`), the second its dirty flag. `onStrokeCommitted` still fires for a composited mark (timestamps and counts from one place) — don't store that stroke as a row |
+| Out | `getPageRaster()` | A **copy**, or null when blank — encode it off the main thread for a save |
+| Out | `copyPageRaster(rect)` | A copy of a patch — the before-image for undo |
+
+The image is a layer *over* the paper (white + template still draw under it), so an eraser
+(0.1.26) clears to transparent rather than painting white. Format is ARGB_8888; about
+18 MB at a 1860 × 2480 page — one per view, for the life of the page.
 
 **Undo/redo is host-owned**: the host keeps its history and replays via
 the load/add/remove calls (patterns in [host-responsibilities.md](host-responsibilities.md)).

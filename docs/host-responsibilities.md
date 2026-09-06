@@ -49,6 +49,32 @@ fun turnPage(next: PageId) {
 `clearForContentSwap()` + `loadStrokes()` is a single EPD refresh; `clear()` +
 `loadStrokes()` would flash blank in between.
 
+### Raster pages (0.1.25)
+
+A raster page (`pageMode = PageMode.RASTER`) has no rows: the whole page is one image. Persist
+it as one blob per page, overwritten on save, never per stroke:
+
+```kotlin
+override fun onRasterChanged(rect: Rect) { dirty = true; scheduleSave() }   // debounce it
+
+fun save() {
+    val copy = paper.getPageRaster() ?: return   // main thread; a copy, so the pen can keep going
+    dirty = false
+    io.launch { db.putPageImage(pageId, encodePng(copy)) }
+}
+
+fun turnPage(next: PageId) {
+    if (dirty) save()
+    paper.clearForContentSwap()
+    paper.setPageSize(w, h)
+    paper.loadPageRaster(db.loadPageImage(next))   // decoded on IO first; null = blank
+}
+```
+
+Take the copy while the pen is idle (`isPenActive`): the live image is mutated at pen-up. And
+size-check a decoded image against the page before loading it — the engine copies at 1:1
+and will not stretch a wrong-sized one.
+
 ## Undo / redo
 
 Host-owned, by design — the component exposes deterministic load/add/remove instead of a
@@ -61,6 +87,12 @@ history. Keep an operation stack and replay:
 | Scribble-erased strokes + content (`scribbleEraseEnabled`) | `onScribbleErased(strokeIds, contentIds)` — one call per gesture; the scribble itself was never committed | `addStrokes(strokes)` + restore your content rows | `removeStrokes(ids)` + delete them again |
 | Moved a selection | `onSelectionMoved(m)` | `removeStrokes` + `addStrokes(translated back)` — or `loadStrokes` the page | re-apply the delta |
 | Cleared the page | your own clear action | `loadStrokes(saved)` | `clear()` |
+
+On a **raster page** the entries are before-images, not ids. `onRasterWillChange(rect)` fires
+before the pixels move — `copyPageRaster(rect)` there is exactly what the change overwrites.
+Undo swaps that patch back in (read the current patch first, so the same entry serves redo);
+`loadPageRaster` of a patched copy does it today. Bound such a stack by **bytes**, not count:
+a page-wide erase's before-image is the whole page.
 
 `loadStrokes(list)` is the blunt instrument (full page replay); `addStrokes`/`removeStrokes`
 are the targeted ones. Any data-in call dismisses an active selection first; re-select via

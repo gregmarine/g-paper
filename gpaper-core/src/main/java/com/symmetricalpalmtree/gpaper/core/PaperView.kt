@@ -27,6 +27,10 @@ import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
  * - **In:** [loadStrokes] (replace all — page load, undo/redo replay), [addStrokes] /
  *   [removeStrokes] (targeted undo/redo and paste), [ContentRenderer]s +
  *   [notifyContentChanged] for non-ink content.
+ * - **Raster pages (0.1.25):** with [pageMode] = [PageMode.RASTER] the page is one image
+ *   rather than a list of strokes. Out: [PaperListener.onRasterWillChange] /
+ *   [PaperListener.onRasterChanged] around every change, plus [getPageRaster] /
+ *   [copyPageRaster]. In: [loadPageRaster]. Stroke pages are unaffected.
  *
  * ### "Pages"
  * The component has no page concept. A page turn is:
@@ -206,6 +210,50 @@ interface PaperView {
      * turns/content swaps instead of [clear] (which would double-flash EPD panels).
      */
     fun clearForContentSwap()
+
+    // ── Page mode & the raster page (0.1.25) ─────────────────────────────────
+
+    /**
+     * What this page is once the pen lifts — see [PageMode]. Defaults to
+     * [PageMode.STROKE], which is the engine exactly as it was before 0.1.25.
+     *
+     * Setting it to a different mode drops the view's content without repainting, as
+     * [clearForContentSwap] does: a mode belongs to an empty page, set before its content
+     * is loaded, and is never flipped under ink. Setting the mode it already has does
+     * nothing. In [PageMode.RASTER]: [loadStrokes] and [addStrokes] composite the given
+     * strokes into the page image instead of keeping them (that *is* the one-way bake of a
+     * stroke page); [getStrokes] is always empty; [removeStrokes] does nothing; the eraser
+     * and the pen-gesture recognizers find no strokes to hit.
+     */
+    var pageMode: PageMode
+
+    /**
+     * Replace the page image with a copy of [bitmap] and re-render — the raster twin of
+     * [loadStrokes]. Null is a blank page. The image is page-space: its top-left is the
+     * page's, and it is expected to be the page's size ([setPageSize]); a different size
+     * is copied at 1:1 from the origin, never stretched, because a page image that no
+     * longer registers with the page it was drawn on is a host bug worth seeing rather
+     * than hiding. Brackets the change with [PaperListener.onRasterWillChange] /
+     * [PaperListener.onRasterChanged] over the whole page. A no-op in [PageMode.STROKE].
+     */
+    fun loadPageRaster(bitmap: Bitmap?)
+
+    /**
+     * A **copy** of the page image — never the live bitmap — or null when the page is
+     * blank or the mode is [PageMode.STROKE]. The raster twin of [getStrokes], and like it
+     * the host's save-all: a save encodes the copy off the main thread while the artist
+     * keeps drawing into the live one, which is only sound because this is a copy. Main
+     * thread only; the copy costs about as long as a `memcpy` of the page.
+     */
+    fun getPageRaster(): Bitmap?
+
+    /**
+     * A copy of the page image inside [rect] (page space, clipped to the page), or null
+     * when the rect misses the page, the page is blank, or the mode is [PageMode.STROKE].
+     * Sized for the host's undo: called from [PaperListener.onRasterWillChange] with the
+     * rect it was given, it is the before-image of exactly what is about to change.
+     */
+    fun copyPageRaster(rect: Rect): Bitmap?
 
     // ── Template & page geometry ─────────────────────────────────────────────
 

@@ -46,6 +46,22 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   Anything that walks the path must index by **arc length from the first point**, never by input-
   point index: a stroke still being drawn must agree with the same stroke committed, and pen
   samples arrive at whatever rate the hand and the digitizer agree on.
+- **A raster page is a layer over the paper, never the paper itself (Phase 13, `PageMode.RASTER`).**
+  The page image is transparent where nothing was drawn; white and the template draw beneath it.
+  That is what lets an eraser clear to transparent rather than paint white, and a textured sheet
+  sit under a raster page later. **Dropped, not erased, at a content swap:** the committed display
+  list keeps its own reference to the bitmap it was recorded with, so the old pixels hold until
+  the next page lands; erasing in place blanks the panel a frame early. Both modes share
+  everything up to pen-up — only what is *kept* differs, and a host that never sets `pageMode`
+  gets the stroke engine unchanged. `getPageRaster` is a **copy**, always: the host encodes it
+  off the main thread while the pen keeps going. The engine keeps no history in either mode.
+- **The same renderer does not make the same pixels on a different rasteriser (Phase 13).**
+  `StrokeRenderer` into a hardware `RenderNode` (the committed layer) and into a software
+  `Canvas(bitmap)` (`StrokeRasterizer`, covers, the raster page) lay the hairline pencil with the
+  same flecks in the same places and about 40 % apart in tone — a round dot under 1.2 px is where
+  GPU and CPU coverage part company. Measured on the NoteAir5C by diffing the same rows both ways.
+  The artist chose the software tone for raster pages, so this is a fact to carry, not a bug to
+  fix: never claim a software bake is pixel-identical to the panel, and diff it before saying so.
 - **The pure half of a texture belongs in `geometry/`.** `GraphiteGrain` decides *where the
   graphite lands*; `StrokeRenderer` only puts ink there. That split is what lets determinism be
   proved by a JVM test instead of asserted, and it is the pattern any later textured style follows.
