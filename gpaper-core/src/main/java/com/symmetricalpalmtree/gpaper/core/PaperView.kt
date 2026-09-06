@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.view.View
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
+import com.symmetricalpalmtree.gpaper.core.model.OrientedBox
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
@@ -344,6 +345,44 @@ interface PaperView {
      * selection box rect in paper coordinates.
      */
     fun setSelection(strokeIds: Set<String>, contentIds: Set<String>, bounds: Bounds)
+
+    // ── Transform mode (0.1.27) ──────────────────────────────────────────────
+
+    /**
+     * Enter transform mode on one host content object: an engine-drawn overlay — the
+     * oriented dashed box, eight resize handles, a rotate knob above the top edge — that
+     * the stylus (or a palm-gated single finger) drags to move, resize and rotate the
+     * geometry. The engine knows nothing about what the object is: it edits [box] and
+     * reports it ([PaperListener.onTransformChanged] live, [PaperListener.onTransformEnded]
+     * once at exit); the host's renderer draws the object at the reported box through
+     * [ContentRenderer.drawObject] while the mode lasts (the committed layer excludes it,
+     * as during a lasso drag).
+     *
+     * Host-initiated, so it dismisses an active selection **without**
+     * [PaperListener.onSelectionDismissed] (the [setSelection] rule) and ends a mode
+     * already running (with its [PaperListener.onTransformEnded]). Requires [Tool.LASSO]
+     * — the pen otherwise inks — and is a no-op in any other tool. A resize honours
+     * [aspectLocked] (the ratio of [box]) and clamps every side at [minSizePx]; a rotate
+     * snaps within [com.symmetricalpalmtree.gpaper.core.geometry.TransformGeometry.ROTATION_SNAP_DEG]
+     * of the cardinals. Exits: [endTransform], a contact outside the overlay (which then
+     * proceeds as an ordinary lasso contact — never an [PaperListener.onPaperTapped]),
+     * a tool change, any data-in call, [release].
+     */
+    fun beginTransform(contentId: String, box: OrientedBox, aspectLocked: Boolean, minSizePx: Float)
+
+    /** Leave transform mode (the host's Done): fires [PaperListener.onTransformEnded]
+     *  and restores the object to the committed layer. No-op when not transforming. */
+    fun endTransform()
+
+    /** Flip the aspect lock of the running mode (the host's toggle). Takes effect on the
+     *  next resize; no-op when not transforming. */
+    fun setTransformAspectLocked(locked: Boolean)
+
+    /** The content id under transform, or null. */
+    val transformingContentId: String?
+
+    /** The box as the mode currently has it (live during a drag), or null. */
+    val transformBox: OrientedBox?
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
 

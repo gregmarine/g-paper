@@ -33,7 +33,10 @@ import com.symmetricalpalmtree.gpaper.core.geometry.RasterDirty
 import com.symmetricalpalmtree.gpaper.core.geometry.RasterErase
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapEngine
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapGuide
+import com.symmetricalpalmtree.gpaper.core.geometry.TransformGeometry
+import com.symmetricalpalmtree.gpaper.core.geometry.TransformGrab
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
+import com.symmetricalpalmtree.gpaper.core.model.OrientedBox
 import com.symmetricalpalmtree.gpaper.core.model.Selection
 import com.symmetricalpalmtree.gpaper.core.model.SelectionMove
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
@@ -324,6 +327,36 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      *  the per-sample snap costs no renderer calls; empty outside a snapped drag. */
     private var snapTargets: List<Bounds> = emptyList()
 
+    // ── Transform mode state (0.1.27) ────────────────────────────────────────
+
+    /**
+     * One host object under transform. [box] is live (the gesture in flight has already
+     * moved it); [gestureStart] is the box the current contact began on — every sample
+     * is computed from it and the current point, never accumulated. [renderer] is the
+     * content renderer that owns [contentId] (found once at begin), drawn live through
+     * [ContentRenderer.drawObject]; null when no renderer claims the id, in which case
+     * the overlay's dashed box is the only visual.
+     */
+    private class TransformState(
+        val contentId: String,
+        val before: OrientedBox,
+        var box: OrientedBox,
+        var aspectLocked: Boolean,
+        val minSizePx: Float,
+        val renderer: ContentRenderer?,
+    ) {
+        var grab = TransformGrab.NONE
+        var gestureStart = box
+        var startX = 0f
+        var startY = 0f
+        /** The last box handed to [PaperListener.onTransformChanged]. */
+        var reported: OrientedBox = box
+    }
+
+    private var transform: TransformState? = null
+    private var lastTransformReportMs = 0L
+    private val transformOverlay by lazy { TransformOverlay(resources.displayMetrics.density) }
+
     // Pen-gate state. Volatile: device pipelines may report proximity from their raw
     // input thread (the Onyx SDK event bus), while hosts read [isPenActive] on main.
     @Volatile private var penDown = false
@@ -356,6 +389,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             // (the host, or the session's own PEN restore) now owns tool state.
             smartLassoSession = false
             cancelActiveGesture()
+            // A tool change is a transform exit (the mode requires LASSO).
+            endActiveTransform()
             if (leavingLasso) clearSelection()
         }
 
@@ -397,6 +432,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     // asking the host to re-select (paste flows call setSelection right after anyway).
 
     override fun loadStrokes(strokes: List<Stroke>) {
+        endActiveTransform()
         clearSelection()
         if (pageMode == PageMode.RASTER) {
             // The one-way bake: a stroke page's rows land as pixels, then the objects go.
@@ -416,6 +452,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     override fun addStrokes(strokes: List<Stroke>) {
+        endActiveTransform()
         clearSelection()
         if (pageMode == PageMode.RASTER) {
             if (strokes.isEmpty()) return
@@ -433,6 +470,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     override fun removeStrokes(ids: Collection<String>) {
+        endActiveTransform()
         clearSelection()
         // In raster mode there is nothing to remove by id — the objects were let go at
         // commit. A host that undoes a raster mark does it with a before-image.
@@ -446,6 +484,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     override fun getStrokes(): List<Stroke> = strokeSnapshot
 
     override fun clear() {
+        endActiveTransform()
         clearSelection()
         activePoints.clear()
         strokeList.clear()
@@ -465,6 +504,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         // Model drops now; pixels stay — no re-record, no invalidate. The next
         // loadStrokes() (or other content call) swaps the screen in one repaint.
         // The page image goes the same way: dropped, not erased (see [pageRaster]).
+        endActiveTransform()
         clearSelection()
         activePoints.clear()
         strokeList.clear()
@@ -476,6 +516,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun loadPageRaster(bitmap: Bitmap?) {
         if (pageMode != PageMode.RASTER) return
+        endActiveTransform()
         clearSelection()
         val dirty = RasterDirty.wholePage(pageWidth, pageHeight)?.toRectOut()
         dirty?.let { paperListener?.onRasterWillChange(it) }
@@ -623,6 +664,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun setSelection(strokeIds: Set<String>, contentIds: Set<String>, bounds: Bounds) {
         // Host-initiated (paste flow): no onSelectionCreated echo — the host already knows.
+        endActiveTransform()
         if (dragActive) clearSelection()
         selection = Selection(strokeIds, contentIds, bounds)
         invalidate()
@@ -642,6 +684,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         released = true
         // Drop selection state without callbacks — the host is tearing the view down.
         selection = null
+        transform = null
         smartLassoSession = false
         dragActive = false
         dragThresholdMet = false
@@ -931,6 +974,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             val dy = if (dragActive && dragThresholdMet) dragDy else 0f
             canvas.drawRect(box.left + dx, box.top + dy, box.right + dx, box.bottom + dy, selectionPaint)
         }
+        // Transform layer (0.1.27): the object live through its renderer (which reads the
+        // geometry the host set from onTransformChanged), then the overlay chrome.
+        transform?.let { t ->
+            val drawn = t.renderer?.drawObject(canvas, t.contentId) ?: false
+            if (!drawn) {
+                val b = t.box.aabb()
+                canvas.drawRect(b.left, b.top, b.right, b.bottom, selectionPaint)
+            }
+            transformOverlay.draw(canvas, t.box, selectionPaint)
+        }
     }
 
     /**
@@ -974,9 +1027,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         // Renderers get the drag exclusion set (empty outside a drag) so opted-in hosts
         // hide originals whose live copies ride the drag layer; the default overload
         // ignores it.
+        val hiddenContent = hiddenContentIds()
         for (renderer in contentRenderers) {
             if (renderer.layer == ContentLayer.BELOW_STROKES) {
-                renderer.draw(canvas, dragHiddenContentIds)
+                renderer.draw(canvas, hiddenContent)
             }
         }
         if (pageMode == PageMode.RASTER) {
@@ -996,9 +1050,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         }
         for (renderer in contentRenderers) {
             if (renderer.layer == ContentLayer.ABOVE_STROKES) {
-                renderer.draw(canvas, dragHiddenContentIds)
+                renderer.draw(canvas, hiddenContent)
             }
         }
+    }
+
+    /** Content ids the committed record leaves to a live layer: a drag's, plus the
+     *  object under transform (its whole mode is a live layer, not just its gestures). */
+    private fun hiddenContentIds(): Set<String> {
+        val t = transform ?: return dragHiddenContentIds
+        return if (dragHiddenContentIds.isEmpty()) setOf(t.contentId) else dragHiddenContentIds + t.contentId
     }
 
     /** The template stretches into the page rect when known, else the view (see [setPageSize]). */
@@ -1323,6 +1384,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * and [finalizeEraseRedraw] at gesture end.
      */
     protected fun eraseAlong(points: List<StrokePoint>) {
+        endActiveTransform()
         if (points.isEmpty()) return
         val prev = lastEraserPoint
         if (prev == null) reportedContentErases.clear() // fresh sweep = fresh gesture dedup
@@ -1444,16 +1506,20 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     /** True from a successful [lassoTryBeginDrag] until the drag finishes or cancels —
      *  for device subclasses whose firmware must stay suppressed for the whole drag
      *  contact (the Ratta full-screen disable). */
-    protected val isSelectionDragActive: Boolean get() = dragActive
+    protected val isSelectionDragActive: Boolean get() = dragActive || isTransformGestureActive
 
     /** Whether a selection is currently active — for device subclasses deciding whether
      *  a gesture's outcome changed the overlay chrome (e.g. a tap that dismissed). */
-    protected val hasActiveSelection: Boolean get() = selection != null
+    protected val hasActiveSelection: Boolean get() = selection != null || transform != null
 
     /** Whether ([x], [y]) falls inside the active selection's drawn box (the inflated
      *  [Selection.bounds]) — the pre-contact test device subclasses run from their hover
      *  stream (Ratta's law-3 drag suppress). False when nothing is selected. */
     protected fun selectionBoxContains(x: Float, y: Float): Boolean {
+        // In transform mode the grab region — box, handles, knob — is the "box": a
+        // contact there is a transform gesture and must get the drag treatment (the
+        // Ratta firmware trail suppress), a contact outside it ends the mode.
+        transform?.let { t -> return classifyTransformGrab(t, x, y) != TransformGrab.NONE }
         val sel = selection ?: return false
         if (sel.strokeIds.isEmpty() && sel.contentIds.isEmpty()) return false
         return sel.bounds.inflated(SELECTION_BOX_INFLATE_PX).contains(x, y)
@@ -1469,6 +1535,15 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         // A second contact (pen landing during a finger drag) must not re-enter: it
         // falls through to the outline path, whose selection-dismiss cancels the drag.
         if (dragActive) return false
+        transform?.let { t ->
+            // Transform mode owns every contact inside its grab region; a contact outside
+            // it falls through to the outline path, whose lassoOutlineStart ends the mode.
+            if (isTransformGestureActive) return false
+            val grab = classifyTransformGrab(t, x, y)
+            if (grab == TransformGrab.NONE) return false
+            beginTransformGesture(t, grab, x, y)
+            return true
+        }
         if (!selectionBoxContains(x, y)) return false
         val sel = selection ?: return false
         dragActive = true
@@ -1507,6 +1582,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * is still a potential tap.
      */
     protected fun lassoDragMove(x: Float, y: Float) {
+        if (isTransformGestureActive) {
+            transformGestureMove(x, y)
+            return
+        }
         if (!dragActive) return
         val dx = x - dragStartX
         val dy = y - dragStartY
@@ -1565,6 +1644,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * [PaperListener.onSelectionMoved] — the selection remains active at its new position.
      */
     protected fun lassoDragFinish(x: Float, y: Float, fromFinger: Boolean = false) {
+        if (isTransformGestureActive) {
+            transformGestureFinish(x, y)
+            return
+        }
         if (!dragActive) return
         dragActive = false
         if (!dragThresholdMet) {
@@ -1616,6 +1699,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      *  [PaperListener.onSelectionDragStarted] contract's cancel signal is
      *  [PaperListener.onSelectionDismissed]. */
     protected fun lassoDragCancel() {
+        if (isTransformGestureActive) transformGestureCancel()
         if (dragActive) clearSelection()
     }
 
@@ -1625,7 +1709,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected fun lassoOutlineStart() {
         // A contact that dismisses is spent on the dismissal — completeLassoOutline must
         // not also read it as an empty-handed tap (0.1.5).
-        outlineDismissedSelection = selection != null
+        // Likewise a contact that ends transform mode (0.1.27) — outside the grab region.
+        val endedTransform = endActiveTransform()
+        outlineDismissedSelection = selection != null || endedTransform
         // The dismissal belongs to a NEW outline — a smart-lasso session continues
         // into it; the outline's own exits decide whether to restore PEN.
         suppressSmartLassoRestore = true
@@ -1700,6 +1786,114 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      */
     protected open fun onSelectionDragVisual(active: Boolean) {}
 
+    // ── Transform mode (0.1.27) ──────────────────────────────────────────────
+
+    override fun beginTransform(contentId: String, box: OrientedBox, aspectLocked: Boolean, minSizePx: Float) {
+        if (released || tool != Tool.LASSO) return
+        endActiveTransform()
+        // Host-initiated: the selection goes without its dismissed callback (the
+        // setSelection rule) — a live drag, though, must still unwind through clearSelection.
+        if (dragActive) clearSelection()
+        selection = null
+        val renderer = contentRenderers.firstOrNull { r -> r.hitTargets().any { it.contentId == contentId } }
+        transform = TransformState(contentId, box, box, aspectLocked, minSizePx, renderer)
+        // The committed record drops the object; the transform layer draws it from here.
+        redrawCommitted()
+    }
+
+    override fun endTransform() {
+        endActiveTransform()
+    }
+
+    override fun setTransformAspectLocked(locked: Boolean) {
+        transform?.aspectLocked = locked
+    }
+
+    override val transformingContentId: String? get() = transform?.contentId
+
+    override val transformBox: OrientedBox? get() = transform?.box
+
+    /** Whether a transform contact (handle, knob or body) is in flight. */
+    private val isTransformGestureActive: Boolean get() = transform?.grab?.let { it != TransformGrab.NONE } ?: false
+
+    /**
+     * Leave transform mode from any exit. A gesture in flight is cancelled first (the
+     * contact's box is dropped, the one from before it stands). Restores the object to
+     * the committed record, then reports — the listener sees the page already right.
+     * Returns whether a mode was active.
+     */
+    private fun endActiveTransform(): Boolean {
+        val t = transform ?: return false
+        if (t.grab != TransformGrab.NONE) transformGestureCancel()
+        transform = null
+        redrawCommitted()
+        paperListener?.onTransformEnded(t.contentId, t.before, t.box)
+        return true
+    }
+
+    private fun classifyTransformGrab(t: TransformState, x: Float, y: Float): TransformGrab =
+        TransformGeometry.classify(
+            t.box, x, y,
+            transformOverlay.handleTouchRadius, transformOverlay.knobOffset, transformOverlay.knobTouchRadius,
+        )
+
+    private fun beginTransformGesture(t: TransformState, grab: TransformGrab, x: Float, y: Float) {
+        t.grab = grab
+        t.gestureStart = t.box
+        t.startX = x
+        t.startY = y
+        onSelectionDragVisual(true)
+    }
+
+    /** The box the gesture in flight puts at the page point — from the gesture's start
+     *  box and this point alone. */
+    private fun transformBoxAt(t: TransformState, x: Float, y: Float): OrientedBox = when (t.grab) {
+        TransformGrab.BODY -> TransformGeometry.move(t.gestureStart, x - t.startX, y - t.startY)
+        TransformGrab.ROTATE -> TransformGeometry.rotate(t.gestureStart, x, y)
+        TransformGrab.NONE -> t.box
+        else -> TransformGeometry.resize(t.gestureStart, t.grab, x, y, t.aspectLocked, t.minSizePx)
+    }
+
+    private fun transformGestureMove(x: Float, y: Float) {
+        val t = transform ?: return
+        val next = transformBoxAt(t, x, y)
+        if (next == t.box) return
+        t.box = next
+        val now = SystemClock.uptimeMillis()
+        if (now - lastTransformReportMs >= LASSO_REFRESH_INTERVAL_MS) {
+            lastTransformReportMs = now
+            reportTransformChanged(t)
+            invalidate()
+        }
+    }
+
+    private fun transformGestureFinish(x: Float, y: Float) {
+        val t = transform ?: return
+        t.box = transformBoxAt(t, x, y)
+        t.grab = TransformGrab.NONE
+        onSelectionDragVisual(false)
+        reportTransformChanged(t)
+        invalidate()
+    }
+
+    /** ACTION_CANCEL, barrel erase, a data-in call mid-contact: the contact never
+     *  happened — the box returns to where the gesture began. */
+    private fun transformGestureCancel() {
+        val t = transform ?: return
+        t.box = t.gestureStart
+        t.grab = TransformGrab.NONE
+        onSelectionDragVisual(false)
+        reportTransformChanged(t)
+        invalidate()
+    }
+
+    /** Hand the live box to the host once per change — never the same box twice. */
+    private fun reportTransformChanged(t: TransformState) {
+        if (t.box == t.reported) return
+        t.reported = t.box
+        paperListener?.onTransformChanged(t.contentId, t.box)
+    }
+
     // ── Finger interaction with the active selection ─────────────────────────
 
     /** What the current finger contact is doing (latched at ACTION_DOWN). DEAD = a
@@ -1726,7 +1920,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 fingerMode = FingerMode.NONE
-                if (tool != Tool.LASSO || selection == null || isPenActive) return false
+                if (tool != Tool.LASSO || (selection == null && transform == null) || isPenActive) return false
                 fingerDownX = event.x
                 fingerDownY = event.y
                 fingerMode = if (lassoTryBeginDrag(event.x, event.y)) {
@@ -1800,6 +1994,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     /** Commit a finger tap-to-dismiss after the pen-gate escrow; drop it if the pen
      *  became active meanwhile or the selection already changed. */
     private fun scheduleEscrowedDismiss() {
+        transform?.let { t ->
+            postDelayed({
+                if (!released && !isPenActive && transform === t) endActiveTransform()
+            }, PaperView.PEN_ACTIVE_TAIL_MS)
+            return
+        }
         val sel = selection ?: return
         postDelayed({
             if (!released && !isPenActive && selection === sel) clearSelection()

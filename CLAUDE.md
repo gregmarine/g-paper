@@ -62,6 +62,16 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   GPU and CPU coverage part company. Measured on the NoteAir5C by diffing the same rows both ways.
   The artist chose the software tone for raster pages, so this is a fact to carry, not a bug to
   fix: never claim a software bake is pixel-identical to the panel, and diff it before saying so.
+- **Transform mode rides the lasso entries (Phase 15, 0.1.27).** `beginTransform` puts one host
+  object under handles + a rotate knob, and the mode is carried entirely by the shared
+  selection entries device engines already call — `lassoTryBeginDrag` / `lassoDragMove` /
+  `lassoDragFinish` / `lassoDragCancel` / `lassoOutlineStart` / `selectionBoxContains` /
+  `isSelectionDragActive` / `hasActiveSelection`. That is deliberate: it is what gives the Onyx
+  raw path and the Ratta firmware suppress the mode with **no device-module change**, so a fix
+  to transform input goes in those entries, never in a device override. Every gesture sample is
+  computed from the box the contact began on (`TransformGeometry`, pure, JVM-tested) — nothing
+  accumulates. The host persists on `onTransformEnded` only; `onTransformChanged` is a live
+  working-copy update the engine repaints through `drawObject`.
 - **The pure half of a texture belongs in `geometry/`.** `GraphiteGrain` decides *where the
   graphite lands*; `StrokeRenderer` only puts ink there. That split is what lets determinism be
   proved by a JVM test instead of asserted, and it is the pattern any later textured style follows.

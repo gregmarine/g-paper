@@ -23,6 +23,7 @@ import com.symmetricalpalmtree.gpaper.core.RawAction
 import com.symmetricalpalmtree.gpaper.core.Tool
 import com.symmetricalpalmtree.gpaper.core.engine.GPaper
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
+import com.symmetricalpalmtree.gpaper.core.model.OrientedBox
 import com.symmetricalpalmtree.gpaper.core.model.Selection
 import com.symmetricalpalmtree.gpaper.core.model.SelectionMove
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
@@ -70,8 +71,10 @@ class MainActivity : Activity() {
      * [ContentRenderer.drawObject] — so a lasso drag moves the real box, not a ghost.
      */
     private val sampleObject = object : ContentRenderer {
-        var centerX = 260f
-        var centerY = 200f
+        /** The object's geometry — what the transform mode (0.1.27) edits. */
+        var box = OrientedBox(cx = 260f, cy = 200f, w = 480f, h = 120f, rotationDeg = 0f)
+        val centerX: Float get() = box.cx
+        val centerY: Float get() = box.cy
         private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             color = Color.BLACK
@@ -83,14 +86,18 @@ class MainActivity : Activity() {
             textAlign = Paint.Align.CENTER
         }
 
-        private fun bounds() = Bounds(centerX - 240f, centerY - 60f, centerX + 240f, centerY + 60f)
+        private fun bounds() = box.aabb()
 
         private fun drawBox(canvas: Canvas) {
-            val b = bounds()
+            val save = canvas.save()
+            canvas.rotate(box.rotationDeg, box.cx, box.cy)
+            val l = box.cx - box.w / 2f
+            val t = box.cy - box.h / 2f
             boxPaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 8f), 0f)
-            canvas.drawRoundRect(b.left, b.top, b.right, b.bottom, 16f, 16f, boxPaint)
+            canvas.drawRoundRect(l, t, l + box.w, t + box.h, 16f, 16f, boxPaint)
             canvas.drawText("host object — finger-tap to move", centerX, centerY - 6f, textPaint)
             canvas.drawText("(ContentRenderer, below strokes)", centerX, centerY + 30f, textPaint)
+            canvas.restoreToCount(save)
         }
 
         override fun draw(canvas: Canvas) = drawBox(canvas)
@@ -152,8 +159,9 @@ class MainActivity : Activity() {
                 // would apply the same delta to its persisted rows here. The sample
                 // object is ours to move: reposition it and re-render.
                 if ("sample-object" in move.contentIds) {
-                    sampleObject.centerX += move.dx
-                    sampleObject.centerY += move.dy
+                    sampleObject.box = sampleObject.box.copy(
+                        cx = sampleObject.box.cx + move.dx, cy = sampleObject.box.cy + move.dy,
+                    )
                     paper.notifyContentChanged()
                 }
                 lastEvent = "moved ${move.strokeIds.size} strokes" +
@@ -165,6 +173,22 @@ class MainActivity : Activity() {
             override fun onSelectionDismissed() {
                 selectionActive = false
                 lastEvent = "selection dismissed"
+                refreshStatus()
+            }
+
+            // ── Transform mode (0.1.27): the working copy follows the live box ──
+
+            override fun onTransformChanged(contentId: String, box: OrientedBox) {
+                if (contentId == "sample-object") sampleObject.box = box
+                // No notifyContentChanged: the engine repaints the transform layer itself.
+            }
+
+            /** A real host persists [after] and records before → after for undo here. */
+            override fun onTransformEnded(contentId: String, before: OrientedBox, after: OrientedBox) {
+                if (contentId == "sample-object") sampleObject.box = after
+                lastEvent = "transform ended: ${after.w.toInt()}×${after.h.toInt()} @ ${after.rotationDeg.toInt()}°" +
+                    " (was ${before.w.toInt()}×${before.h.toInt()} @ ${before.rotationDeg.toInt()}°)"
+                applyTransformButtons()
                 refreshStatus()
             }
 
@@ -225,7 +249,8 @@ class MainActivity : Activity() {
             if (!isFinger) return@setOnTouchListener false
             // While a selection is active the COMPONENT owns finger input (drag the
             // selection, tap to dismiss) — yield, or the engine never sees the events.
-            if (selectionActive) return@setOnTouchListener false
+            // Transform mode (0.1.27) owns it the same way (drag a handle, tap to end).
+            if (selectionActive || paper.transformingContentId != null) return@setOnTouchListener false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     tapCandidate = !paper.isPenActive && event.pointerCount == 1
@@ -256,8 +281,7 @@ class MainActivity : Activity() {
                         val y = event.y
                         paper.asView().postDelayed({
                             if (!paper.isPenActive) {
-                                sampleObject.centerX = x
-                                sampleObject.centerY = y
+                                sampleObject.box = sampleObject.box.copy(cx = x, cy = y)
                                 paper.notifyContentChanged()
                                 lastEvent = "host object moved to ${x.toInt()},${y.toInt()}"
                                 refreshStatus()
@@ -475,6 +499,16 @@ class MainActivity : Activity() {
     private lateinit var penButton: TextView
     private lateinit var eraserButton: TextView
     private lateinit var lassoButton: TextView
+    private lateinit var transformButton: TextView
+    private lateinit var lockButton: TextView
+    private var transformLocked = false
+
+    private fun applyTransformButtons() {
+        val active = paper.transformingContentId != null
+        transformButton.text = if (active) "Done" else "Xform"
+        styleButton(transformButton, selected = active)
+        styleButton(lockButton, selected = transformLocked)
+    }
 
     private fun buildToolbar(): View {
         val bar = LinearLayout(this).apply {
@@ -534,13 +568,34 @@ class MainActivity : Activity() {
 
         val notesButton = toolbarButton("Notes") { toggleNotes() }
 
-        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, smartLassoButton, scribbleButton, clearButton, notesButton)) {
+        // Transform mode (0.1.27) on the sample object: Xform enters (arming LASSO — the
+        // mode requires it) or, while active, is the host's Done; Lock flips the aspect
+        // lock of the running mode.
+        transformButton = toolbarButton("Xform") {
+            if (paper.transformingContentId != null) {
+                paper.endTransform()
+            } else {
+                selectTool(Tool.LASSO)
+                paper.beginTransform("sample-object", sampleObject.box, transformLocked, minSizePx = dp(24).toFloat())
+                lastEvent = "transform began on sample-object"
+                refreshStatus()
+            }
+            applyTransformButtons()
+        }
+        lockButton = toolbarButton("Lock") {
+            transformLocked = !transformLocked
+            paper.setTransformAspectLocked(transformLocked)
+            applyTransformButtons()
+        }
+
+        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, smartLassoButton, scribbleButton, clearButton, transformButton, lockButton, notesButton)) {
             bar.addView(b, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginEnd = dp(6) })
         }
 
         applyToolSelection()
+        applyTransformButtons()
         return HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             addView(bar)

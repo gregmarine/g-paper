@@ -961,6 +961,66 @@ for a stroke page, the difference being the per-batch erase frames, by design.
 
 ---
 
+### Phase 15 — Transform mode: handles and a rotate knob on one host object (post-v0.1.0)
+**Status:** ✅ Complete (walked on the Supernote Nomad 2026-09-06, every item passed) · **Publishes:** 0.1.27 · Opened
+2026-09-06 for Notesprout SN's shape objects (`apps/notesprout_ratta/OBJECTS_PLAN.md`, decision 8 /
+D9 / phase H3), which owns the walk.
+
+The lasso can move a host object and nothing more. SN's six hand-placed shapes need resize and
+rotate, and both belong in the engine: the live handles must be drawn where the EPD sees them,
+under the same pen-gate and firmware suppression as the selection drag, and a host that draws
+its own handles over the paper would fight the pen for every contact. So the engine gains a
+second selection-like mode that edits geometry it does not understand — an `OrientedBox` — and
+hands it back.
+
+**What landed:**
+- `model/OrientedBox(cx, cy, w, h, rotationDeg)` — pure: local/page frames, corners, AABB,
+  contains, angle normalisation. Rotation clockwise on screen in `[0, 360)`, `Canvas.rotate`'s
+  sense.
+- `geometry/TransformGeometry` + `TransformGrab` — pure: `classify` (nearest handle within
+  radius, else the knob, else the body), `resize` (anchor the opposite handle, clamp at the
+  minimum, aspect lock by the dominant axis on a corner / derived side about the centre on an
+  edge), `rotate` (bearing + 90°, snap within 5° of the cardinals), `move`. Every result is a
+  function of the box the contact **began** on and the current point — nothing accumulates.
+  `TransformGeometryTest` (19 tests): every handle found at 0° and 37°, the knob on the box's
+  own up axis, anchors held through a rotated resize, lock + minimum, snap edges.
+- `PaperView.beginTransform / endTransform / setTransformAspectLocked / transformingContentId /
+  transformBox`; `PaperListener.onTransformChanged` (live, throttled to the lasso cadence, once
+  more at the lift, never the same box twice) and `onTransformEnded(before, after)` (exactly once
+  per mode, on every exit including the host's own).
+- `CanvasPaperView`: one `TransformState`; the committed record excludes the object (the drag's
+  exclusion set, widened) and the transform layer draws it live through `drawObject`, then the
+  overlay (`canvas/TransformOverlay`: oriented dashed box in the lasso paint, eight axis-aligned
+  10 dp handles, a 14 dp knob on a stem 36 dp above the top edge; `round(density)` px outlines
+  on integer edges). **The shared lasso entries carry the mode**: `lassoTryBeginDrag` starts a
+  transform gesture when the grab region is hit, `lassoDragMove` / `lassoDragFinish` /
+  `lassoDragCancel` route to it, `lassoOutlineStart` ends the mode (and marks the contact spent,
+  so a tap-sized one never reports `onPaperTapped`), `selectionBoxContains` answers for the grab
+  region, `isSelectionDragActive` / `hasActiveSelection` include it — so **the Onyx raw path and
+  the Ratta firmware suppress get the mode for free**, neither device module changed. Finger
+  contacts go through the same palm-gated entries (a finger tap outside ends the mode after the
+  escrow). Exits: `endTransform`, outside contact, tool change, every data-in call
+  (`loadPageRaster` included), `setSelection`, an erase contact (`eraseAlong`), `release`
+  (silent). `onSelectionDragVisual` brackets a transform gesture like a drag.
+- Demo: **Xform** (arms LASSO, begins on the sample object; reads **Done** while active) and
+  **Lock**; the sample object is now an `OrientedBox` drawn rotated.
+- `docs/api.md` (Transform mode), `docs/host-responsibilities.md` (the persist-on-end pattern).
+
+**Decided at phase start (Notesprout, 2026-09-06):** 0.1.27 (0.1.25/26 went to Paintsprout's
+raster pages the same day); the knob is offered for every object — the engine has no notion of a
+type to gate it on.
+
+**Outcome (Nomad walk, 2026-09-06, by hand):** handles and knob legible on the panel; a pen
+handle-drag with no firmware trail; corner drag free and locked; the knob's snap felt at the
+cardinals; body move; pen tap-outside exit; finger handle-drag and finger tap-outside exit; a
+tool change exits. One finding, host-side: the demo's own finger handler kept consuming finger
+events in transform mode (it yielded only while a *selection* was active), so a finger tap
+outside moved the sample object instead of ending the mode. Fixed in the demo and written into
+`docs/host-responsibilities.md` as the rule — **yield finger input while
+`transformingContentId != null`, exactly as while a selection is active.**
+
+---
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

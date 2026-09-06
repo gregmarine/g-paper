@@ -26,9 +26,10 @@ changes into its own storage, keyed by stroke id.
 | Area | Types |
 |---|---|
 | Contract | `PaperView` (interface every engine implements) |
-| Data model | `Stroke`, `StrokePoint`, `StrokeStyle`, `Bounds`, `Selection`, `SelectionMove` — pure Kotlin, zero Android deps |
+| Data model | `Stroke`, `StrokePoint`, `StrokeStyle`, `Bounds`, `Selection`, `SelectionMove`, `OrientedBox` — pure Kotlin, zero Android deps |
 | Tools | `Tool` — `NONE` / `PEN` / `ERASER` / `LASSO` |
 | Page mode (0.1.25) | `PageMode` — `STROKE` (default) / `RASTER`; `pageMode`, `loadPageRaster`, `getPageRaster`, `copyPageRaster` |
+| Transform mode (0.1.27) | `beginTransform` / `endTransform` / `setTransformAspectLocked`, `transformingContentId`, `transformBox`; `OrientedBox`; `TransformGeometry` + `TransformGrab` (pure) |
 | Events | `PaperListener` (all default no-op), `RawInputListener` + `RawInputEvent` |
 | Host content | `ContentRenderer`, `ContentLayer`, `HitTarget` |
 | Engine selection | `GPaper` (registry + factory), `PaperEngineProvider` |
@@ -427,6 +428,50 @@ of the toolbar.
 - Toggle it between drags (a selection toolbar is the natural home). A change mid-drag
   takes effect on the next sample, but without the object guides the drag did not start
   with.
+
+### Transform mode (0.1.27)
+
+`beginTransform(contentId, box, aspectLocked, minSizePx)` puts **one host content object**
+under an engine-drawn overlay — the oriented dashed box, eight square resize handles
+(corners + edge midpoints), and a rotate knob on a stem above the top edge — that the
+stylus, or a palm-gated single finger, drags to move, resize and rotate it. The engine
+knows nothing about what the object *is*: it edits an `OrientedBox(cx, cy, w, h,
+rotationDeg)` and reports it. Requires `Tool.LASSO` (the pen otherwise inks; a no-op in
+any other tool).
+
+| Direction | API | Notes |
+|---|---|---|
+| In | `beginTransform(id, box, aspectLocked, minSizePx)` | Host-initiated: dismisses an active selection **without** `onSelectionDismissed` (the `setSelection` rule) and ends a running mode (with its `onTransformEnded`). The committed layer drops the object from here; the transform layer draws it |
+| In | `endTransform()` | The host's **Done**. `setTransformAspectLocked(locked)` flips the lock mid-mode (a toolbar toggle) |
+| Out | `onTransformChanged(id, box)` | **Live** — throttled to the lasso cadence during a drag, once more unthrottled at the lift. Update your working copy of the geometry and nothing else: the engine repaints straight after, drawing the object through `drawObject` (the live-drag pair). Never twice with the same box; never for a contact that changed nothing |
+| Out | `onTransformEnded(id, before, after)` | Exactly once per mode, on **every** exit including `endTransform`. The overlay is gone and the committed layer draws the object again. Persist `after`, record `before → after` for undo, tear down your chrome. Nothing is selected afterwards — `setSelection` if it should stay under the lasso |
+| — | `transformingContentId`, `transformBox` | The id under transform and the box as the mode currently has it (live), or null |
+
+- **Grabs** (`TransformGrab`): a handle within 22 dp, else the knob within 22 dp, else the
+  body (inside the rotated box), else nothing. Handles are drawn axis-aligned whatever
+  the rotation (a square that turns with the box reads as part of the shape).
+- **Resize** anchors the opposite handle — an edge keeps the far edge and the
+  perpendicular axis centred, a corner keeps the far corner — and clamps every side at
+  `minSizePx`. With the aspect lock a corner follows the dominant axis and an edge
+  derives the other side about the centre; the lock keeps the ratio of the box the mode
+  *began* on.
+- **Rotate** follows the knob's bearing from the centre and snaps within
+  `TransformGeometry.ROTATION_SNAP_DEG` (5°) of 0 / 90 / 180 / 270. Rotation is
+  clockwise on screen, `[0, 360)`, the same sense as `Canvas.rotate`.
+- **Every sample is computed from the box the contact began on plus the current point**
+  — nothing accumulates, so a gesture is stable under any sample rate.
+- **Exits:** `endTransform`; a contact **outside** the grab region, which then proceeds as
+  an ordinary lasso contact (an outline may select something; a tap-sized one never
+  reports `onPaperTapped` — that contact is spent on the exit); a tool change; any
+  data-in call (`loadStrokes`, `addStrokes`, `removeStrokes`, `clear`,
+  `clearForContentSwap`, `loadPageRaster`, `setSelection`); an erase contact; `release`
+  (silent). A contact cancelled mid-gesture (`ACTION_CANCEL`, a second finger) returns
+  the box to where that gesture began and stays in the mode.
+- **The overlay lives on the selection layer**, black on white, the same weight as the
+  lasso box; handle outlines are `round(density)` px on integer edges (a 1 dp hairline at
+  a fractional density is a coin flip on e-paper). Device engines need nothing new: the
+  grab region *is* the selection box for their hover/contact tests, and a transform
+  contact counts as a selection drag for their firmware suppression.
 
 **Raw input passthrough**: `setRawInputListener { event -> … }` observes the stylus
 stream (`RawInputEvent`: action, tool end, x/y/pressure/tilt/time) regardless of active

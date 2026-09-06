@@ -1,6 +1,7 @@
 package com.symmetricalpalmtree.gpaper.core
 
 import android.graphics.Rect
+import com.symmetricalpalmtree.gpaper.core.model.OrientedBox
 import com.symmetricalpalmtree.gpaper.core.model.Selection
 import com.symmetricalpalmtree.gpaper.core.model.SelectionMove
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
@@ -172,6 +173,33 @@ interface PaperListener {
      * selection box", not "no content".
      */
     fun onPaperTapped(x: Float, y: Float) {}
+
+    // ── Transform mode (0.1.27) ──────────────────────────────────────────────
+
+    /**
+     * The box under transform moved — **live**, throttled to the lasso refresh cadence
+     * while a handle, the knob or the body is being dragged, and once more, unthrottled,
+     * when the contact lifts. The host updates its working copy of the object's
+     * geometry and nothing else: the engine repaints straight after this returns, drawing
+     * the object through [com.symmetricalpalmtree.gpaper.core.render.ContentRenderer.drawObject]
+     * (the live-drag pair), so a renderer that reads the working copy shows the object
+     * at [box]. Persisting here would write once per sample; persist on
+     * [onTransformEnded]. Never fires for a contact that changed nothing (a tap on the
+     * body).
+     */
+    fun onTransformChanged(contentId: String, box: OrientedBox) {}
+
+    /**
+     * Transform mode ended — by [PaperView.endTransform], a contact outside the overlay,
+     * a tool change, any data-in call, or a new [PaperView.beginTransform]. Fires exactly
+     * once per mode, on every exit including the host's own, with the box the mode began
+     * on and the box it ends on (equal when nothing moved). The overlay is already gone
+     * and the committed layer draws the object again; the host persists [after], records
+     * `before → after` for undo, and tears down its transform chrome. Nothing is
+     * selected afterwards — re-select with [PaperView.setSelection] if the object should
+     * stay under the lasso.
+     */
+    fun onTransformEnded(contentId: String, before: OrientedBox, after: OrientedBox) {}
 
     /**
      * The component changed [PaperView.tool] **itself** — sync toolbar/tool UI here.

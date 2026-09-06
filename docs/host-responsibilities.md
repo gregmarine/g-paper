@@ -201,6 +201,35 @@ Two host-side traps come with it:
 - **Show the user that a tap will place something.** Nothing about the surface changes when a
   clipboard is loaded; the affordance is the host's to draw (an icon state, a chrome hint).
 
+**Transform mode** (0.1.27): for an object that must resize and rotate, not only move, enter
+`beginTransform(id, box, aspectLocked, minSizePx)` from your selection chrome (a *Transform*
+button on a lone-object selection is the natural home) and let the engine's overlay do the
+handling. Two obligations: draw the object at the box the working copy holds — the engine
+repaints the transform layer through `drawObject` after every `onTransformChanged`, so a
+renderer that reads the working copy shows it live; and persist **only** on
+`onTransformEnded`:
+
+```kotlin
+override fun onTransformChanged(id: String, box: OrientedBox) { objects[id]?.box = box }
+
+override fun onTransformEnded(id: String, before: OrientedBox, after: OrientedBox) {
+    objects[id]?.box = after
+    db.setGeometry(id, after)                       // one write per mode, not per sample
+    if (before != after) undo.push(Transformed(id, before, after))
+    hideTransformBar()
+    paper.setSelection(emptySet(), setOf(id), after.aabb())   // if it should stay selected
+}
+```
+
+Enter it under `Tool.LASSO` (arm the lasso first if a pen tool is armed — the mode is a no-op
+otherwise), **yield finger input to the paper while `transformingContentId != null`** exactly as
+you do while a selection is active (a host finger handler that keeps consuming will swallow the
+handle drags and the tap-to-end — the demo's first walk found this), and treat
+`onTransformEnded` as the *one* teardown: it fires on your own
+`endTransform` and on every other exit alike (tap outside, tool change, data-in call, erase),
+so chrome torn down there is never left standing. Hit-testing a rotated object for the lasso
+stays the host's call — `OrientedBox.aabb()` is the accepted answer.
+
 ## Chrome cooperation
 
 The paper view sits in a `FrameLayout` with your chrome on top. Three obligations:
