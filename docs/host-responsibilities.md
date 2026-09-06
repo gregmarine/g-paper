@@ -92,7 +92,9 @@ On a **raster page** the entries are before-images, not ids. `onRasterWillChange
 before the pixels move — `copyPageRaster(rect)` there is exactly what the change overwrites.
 Undo swaps that patch back in (read the current patch first, so the same entry serves redo);
 `loadPageRaster` of a patched copy does it today. Bound such a stack by **bytes**, not count:
-a page-wide erase's before-image is the whole page.
+a page-wide erase's before-image is the whole page. An eraser sweep (0.1.26) fires the pair
+**once per batch** — many times per contact — so accumulate the tiles into one entry while a
+pen-down is open and close it at `onPenLifted`; `onStrokesErased` does not fire on a raster page.
 
 `loadStrokes(list)` is the blunt instrument (full page replay); `addStrokes`/`removeStrokes`
 are the targeted ones. Any data-in call dismisses an active selection first; re-select via

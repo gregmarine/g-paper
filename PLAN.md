@@ -893,6 +893,74 @@ by the next walk.
 
 ---
 
+### Phase 14 — The pixel eraser: rubbing graphite off a raster page (post-v0.1.0)
+**Status:** ✅ Complete (closed 2026-09-06 on the NoteAir5C) · **Publishes:** 0.1.26 · Opened
+2026-09-06 for Paintsprout Onyx's raster experiment (`RASTER_PLAN.md`, phase R1), which owns the walk.
+
+Phase 13 gave g-paper a page that is pixels; the eraser still hit-tested a stroke list that, on
+such a page, is empty. This phase is the reason the raster page exists: a rubber that takes
+graphite off the tooth along the sweep, rather than an object out of a list.
+
+**What landed:**
+- `eraseAlong` in `RASTER` strokes the same chained sweep polyline onto the page image with a
+  round-capped, round-joined `Paint` at `2 · eraserRadius` in `PorterDuff.Mode.CLEAR`,
+  antialiased. Clear, not white: the image is a layer over the paper, and a rubber that painted
+  white would leave opaque holes in any sheet that one day sits under it. A one-sample batch
+  gets a zero-length line so its round caps leave a disc where the rubber touched. Per batch:
+  `onRasterWillChange(rect)` → clear → `onRasterChanged(rect)`; `onStrokesErased` never fires
+  (no ids), and host content renderers are not consulted (a rubber, not an object remover).
+  Unread page (no bitmap yet) — nothing to rub, nothing announced.
+- `geometry/RasterErase`, pure: `batchRect` (the sweep's bounds pushed out by radius + 2 px,
+  snapped, clipped — the same generosity as a mark's dirty rect, because the host's undo tile is
+  cut from it) and `covers` (distance-to-polyline ≤ radius: the disc swept along the path, which
+  is exactly the round-cap/round-join stroke). `RasterEraseTest` (7 tests): the disc, the round
+  ends, the un-filled elbow, every covered pixel inside the batch rect, chained batches gapless
+  on a flick and gapped without the chain, clipping, off-page null.
+- **Live rubbing.** Stroke mode already redraws every 60 ms mid-sweep, but with the raw pipeline
+  armed the Onyx panel withholds ordinary frames until pen-up, so the corridor vanished all at
+  once. New open hook `presentRasterEraseProgress(rect)` fires after each throttled redraw with
+  the union of batch rects since the panel last saw one; the base does nothing (an ordinary
+  display just presents the frame), `OnyxPaperView` posts one coalesced
+  `EpdController.handwritingRepaint(view, rect)` for the region. Regional rather than full-view
+  because the full-view repaint is the per-move flash the class doc forbids. Dropped at sweep
+  end; the existing full repaint on `onEndRawDrawing` / `onEndRawErasing` closes the sweep. The
+  class-doc line that said erase repaints only at gesture end now records the exception.
+- The hardware eraser end needs nothing: `onBeginRawErasing` already runs `beginEraseSweep` →
+  `eraseAlong` → `finalizeEraseRedraw`, and the raster branch sits inside `eraseAlong`.
+- Stroke mode untouched (348 tests green, the 341 prior ones unchanged). Ratta: the raster
+  branch never reaches its hardware; its deferred bake is unaffected.
+- `docs/api.md`, `docs/host-responsibilities.md` (accumulate the per-batch tiles into one entry).
+
+**Decided at phase start (the artist, 2026-09-06):** rubbing is shown *live*, as far as the
+panel allows — not once at pen-up as the plan's default had it. The eraser radius is stroke
+mode's (`DEFAULT_ERASER_RADIUS_PX`, the firmware cursor already at `2 · radius`).
+
+**Outcome (NoteAir5C walk, 2026-09-06):** the rubber lifts graphite along the sweep and leaves
+the rest; the pen's eraser end does the same through the existing `onBeginRawErasing` route;
+the regional mid-contact `handwritingRepaint` lands with **no full-panel flash**. Two things the
+walk found and this phase fixed before closing:
+
+- **A second corridor beside a fast curved sweep.** The SDK reports an erase contact twice —
+  every sample streamed, then the whole contact again as one list at pen-up — and the list
+  arrived chained to the last streamed sample, so the replay opened with a chord from the lift
+  point back to the start. A probe logged both callbacks: identical coordinates, the list one
+  sample longer (1256 against 1255; 298 against 297). The Onyx engine now drops the list when
+  the contact streamed (`eraseSweepStreamed`) and keeps it only for a contact that did not. This
+  is the one change that reaches stroke mode, where the same chord silently took any mark it
+  crossed; tests unchanged and green.
+- **The artist felt the rubbing as slightly delayed.** Measured before touching anything:
+  re-record < 1 ms; frame 14 ms, of which the 18 MB bitmap upload is 4 ms; the panel call
+  returns in 2 ms; input arrives 23 ms (median, p90 31) after the SDK's own sample time. The
+  60 ms stroke-mode throttle was the only engine-side lever, so the raster eraser got its own
+  one-frame cadence (`RASTER_ERASE_REDRAW_INTERVAL_MS = 16`). The hand called the result "a
+  little better… I think it might be acceptable"; what remains is the panel's own update, which
+  the engine cannot shorten. Stroke mode keeps 60 ms.
+
+`gfxinfo` for the walk's sketching-and-erasing minute: 169 frames, 6 janky — against G6's 26
+for a stroke page, the difference being the per-batch erase frames, by design.
+
+---
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

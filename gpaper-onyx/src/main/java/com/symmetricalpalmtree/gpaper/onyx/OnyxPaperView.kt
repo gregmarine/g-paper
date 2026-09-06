@@ -42,7 +42,9 @@ import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
  * - **Overlay handoffs**: `setRawDrawingRenderEnabled(false)` is a lightweight toggle
  *   that does NOT clear the hardware buffer — every content swap needs the
  *   render-off → repaint → `handwritingRepaint` → re-arm dance ([epdRepaintHandoff]),
- *   and erase gestures repaint only at gesture end (never per move — full-panel flash).
+ *   and stroke-mode erase gestures repaint only at gesture end (never per move — the
+ *   full-panel repaint flashes). A raster erase (0.1.26) asks for the changed *region*
+ *   per throttled batch instead ([presentRasterEraseProgress]), so rubbing reads live.
  * - **updList sizing**: [EPD_UPDATE_LIST_SIZE] suppresses mid-session auto-GC16.
  * - **Barrel button / stylus eraser end**: surfaces as the SDK's raw *erasing*
  *   callbacks while the raw path is enabled — erase works regardless of the armed tool.
@@ -542,6 +544,26 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
 
     // ── Raw input callback — the ink path (SDK ink never reaches onTouchEvent) ──
 
+    /**
+     * Whether the current erase contact has delivered any per-sample move callback.
+     *
+     * The SDK reports an erase sweep twice: every sample as it happens
+     * (`onRaw…TouchPointMoveReceived`) and then, at pen-up, the whole contact again as
+     * one list (`onRaw…TouchPointListReceived`). Feeding both into the engine's chained
+     * sweep was harmless-looking in stroke mode, but the list arrives *chained to the
+     * last streamed sample*: the engine prepends that sample, so the replay begins with
+     * a straight segment from where the pen lifted back to where the contact started,
+     * and then retraces the sweep. On a raster page (0.1.26) that chord is a second
+     * cleared corridor the artist never rubbed — found on the NoteAir5C on a fast curved
+     * sweep, where the chord runs beside the path rather than inside it. On a stroke
+     * page the same chord silently takes any mark it crosses. So when the samples were
+     * streamed the list is a replay and is dropped; it is used only for a contact that
+     * streamed nothing, which is the case it was kept for. Measured, not assumed: a
+     * probe build logged both callbacks with identical coordinates and the list one
+     * sample longer than the stream.
+     */
+    private var eraseSweepStreamed = false
+
     private val rawInputCallback = object : RawInputCallback() {
 
         override fun onBeginRawDrawing(shortcutDrawing: Boolean, touchPoint: TouchPoint) {
@@ -553,6 +575,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 return
             }
             if (tool == Tool.ERASER) {
+                eraseSweepStreamed = false
                 beginEraseSweep()
             } else if (isSetup) {
                 touchHelper.setRawDrawingRenderEnabled(true)
@@ -598,6 +621,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 return
             }
             if (tool == Tool.ERASER) {
+                eraseSweepStreamed = true
                 eraseAlong(listOf(touchPoint.toStrokePoint()))
             }
         }
@@ -610,7 +634,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 return
             }
             if (tool == Tool.ERASER) {
-                eraseAlong(points)
+                if (!eraseSweepStreamed) eraseAlong(points)
             } else {
                 // Bake the batch into the committed node so the Android canvas stays
                 // current with the overlay's live ink. The SDK may deliver several
@@ -628,6 +652,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
             // Mid-lasso barrel press: drop the capture/drag so the erase contact is not
             // also interpreted as a lasso gesture; the SDK's hardware erase proceeds.
             cancelRawLasso("onBeginRawErasing")
+            eraseSweepStreamed = false
             beginEraseSweep()
             if (isSetup) {
                 // Release the overlay render first, or erased strokes stay visible.
@@ -649,12 +674,13 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
 
         override fun onRawErasingTouchPointMoveReceived(touchPoint: TouchPoint) {
             emitRaw(RawAction.MOVE, RawTool.STYLUS_ERASER, touchPoint)
+            eraseSweepStreamed = true
             eraseAlong(listOf(touchPoint.toStrokePoint()))
         }
 
         override fun onRawErasingTouchPointListReceived(pointList: TouchPointList) {
             val points = pointList.points?.map { it.toStrokePoint() } ?: return
-            if (points.isNotEmpty()) eraseAlong(points)
+            if (points.isNotEmpty() && !eraseSweepStreamed) eraseAlong(points)
         }
 
         /**
@@ -806,6 +832,45 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     // re-arm handoff, or the new page stays invisible under the overlay. The pen-up
     // composite needs nothing here — it runs through commitCapturedStroke like a stroke.
     override fun loadPageRaster(bitmap: Bitmap?) = epdRepaintHandoff { super.loadPageRaster(bitmap) }
+
+    /** The union of raster-erase patches waiting for the panel, so several throttled
+     *  redraws in one main-loop turn ask for one regional repaint, not one each. */
+    private var rasterEraseRepaintPending: Rect? = null
+
+    /**
+     * Show graphite lifting under the rubber *while* the pen is down (0.1.26).
+     *
+     * With the raw pipeline armed the panel withholds ordinary app frames until the
+     * contact ends, so the throttled mid-sweep `invalidate` the base engine issues for
+     * an erase reaches the glass only at pen-up: the whole corridor vanishes at once,
+     * which is not what rubbing feels like. `handwritingRepaint` is the SDK's call for
+     * pushing app pixels through while handwriting mode is on, and the end-of-sweep
+     * repaint already uses it for the full view. Here it is asked for just the patch
+     * that changed, posted so the frame the invalidate scheduled has been drawn first,
+     * and coalesced so a burst of batches costs one panel update. A regional update
+     * rather than the full-view one because the full-view repaint is the flash the
+     * class doc warns against doing per move; whether the panel takes a small region
+     * quietly enough mid-contact is the thing the device walk judges, and the artist
+     * asked for live rubbing as far as the panel allows. Stroke mode is untouched:
+     * the base engine only calls this for a raster page.
+     */
+    override fun presentRasterEraseProgress(rect: Rect) {
+        if (!isSetup) return
+        val pending = rasterEraseRepaintPending
+        if (pending != null) {
+            pending.union(rect)
+            return
+        }
+        rasterEraseRepaintPending = Rect(rect)
+        post {
+            val r = rasterEraseRepaintPending ?: return@post
+            rasterEraseRepaintPending = null
+            // The sweep may have ended, or the screen gone away, between the post and
+            // now; the end-of-sweep repaint covers the former and the latter must not
+            // touch the panel at all.
+            if (isSetup && isAttachedToWindow) EpdController.handwritingRepaint(this, r)
+        }
+    }
 
     override fun removeStrokes(ids: Collection<String>) = epdRepaintHandoff { super.removeStrokes(ids) }
 

@@ -7,6 +7,8 @@ import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.RenderNode
@@ -28,6 +30,7 @@ import com.symmetricalpalmtree.gpaper.core.geometry.EraseHitTest
 import com.symmetricalpalmtree.gpaper.core.geometry.GestureRecognizer
 import com.symmetricalpalmtree.gpaper.core.geometry.LassoHitTest
 import com.symmetricalpalmtree.gpaper.core.geometry.RasterDirty
+import com.symmetricalpalmtree.gpaper.core.geometry.RasterErase
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapEngine
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapGuide
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
@@ -80,6 +83,17 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
         /** Redraw at most this often while the eraser sweeps (erase-path performance rule). */
         const val ERASE_REDRAW_INTERVAL_MS = 60L
+
+        /**
+         * The raster eraser's own cadence (0.1.26): one frame, not 60 ms. Rubbing is
+         * judged by the hand as it happens, and the artist felt the stroke-mode
+         * interval as lag. Measured on the NoteAir5C before it was changed: the
+         * re-record is under a millisecond (one `drawBitmap`), the frame about 14 ms
+         * with the page bitmap's upload 4 ms of it, and the regional panel repaint
+         * returns in 2 ms — so the 60 ms was most of what the software added on top of
+         * the panel's own update, and the only lever left in the engine.
+         */
+        const val RASTER_ERASE_REDRAW_INTERVAL_MS = 16L
 
         /** Default eraser hit radius in px, mirrored from the reference engines. */
         const val DEFAULT_ERASER_RADIUS_PX = 15f
@@ -173,6 +187,31 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var gestureMode = GestureMode.NONE
     private var lastEraserPoint: StrokePoint? = null
     private var lastEraseRedrawMs = 0L
+
+    /**
+     * The page-space patch a raster erase has cleared since the panel last saw it —
+     * the union of the batch rects behind the throttle, handed to
+     * [presentRasterEraseProgress] when the throttle lets a redraw through, and
+     * dropped at sweep end because the end-of-sweep repaint covers the whole view.
+     */
+    private var rasterErasePending: Rect? = null
+
+    /**
+     * The eraser's own paint for a raster page: a round-capped, round-joined stroke
+     * at twice the radius that *clears* what it crosses. CLEAR rather than white
+     * because the page image is a layer over the paper, not the paper — white and the
+     * template still draw beneath it — so a rubber that painted white would leave
+     * opaque holes in any sheet that one day sits under it. Antialiased, so the edge of
+     * the corridor is a soft edge and not a staircase; the batch rect's margin covers
+     * the half-cleared pixels.
+     */
+    private val rasterErasePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+    }
+    private val rasterErasePath = Path()
 
     /** Content ids already reported to [PaperListener.onContentErased] this erase gesture —
      *  the host removes content asynchronously, so its hit target can outlive the report by
@@ -1263,6 +1302,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     /** Start a fresh eraser sweep: the next [eraseAlong] batch won't chain to the last. */
     protected fun beginEraseSweep() {
         lastEraserPoint = null
+        rasterErasePending = null
     }
 
     /** Fire [PaperListener.onPenLifted] — for device subclasses' own gesture ends. */
@@ -1291,6 +1331,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             addAll(points)
         } } ?: points
         lastEraserPoint = points.last()
+        if (pageMode == PageMode.RASTER) {
+            eraseRasterAlong(sweep)
+            return
+        }
         val hitIds = EraseHitTest.hitStrokeIds(strokeList, sweep, eraserRadius)
         // Host content is erased whole (0.1.4): report ids, the host removes and repaints.
         val contentHits = if (contentRenderers.isEmpty()) emptyList() else {
@@ -1322,17 +1366,72 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         }
     }
 
+    /**
+     * Rub one batch of the sweep off a raster page (0.1.26). There is nothing to hit-test:
+     * the sweep is stroked onto the page image with [rasterErasePaint], and every pixel
+     * within the radius of the polyline goes transparent — the corridor [RasterErase]
+     * describes. The host hears about it exactly as it hears about a mark — will-change
+     * with the batch rect before the pixels go (its before-image moment, one tile per
+     * batch accumulating into one undo entry), changed after — and nothing else fires:
+     * there are no ids for `onStrokesErased` to carry. Host content renderers are not
+     * consulted either; on a raster page the eraser is a rubber, not a tool that removes
+     * objects, and the reference engines' content erase stays a stroke-mode feature.
+     *
+     * A page that has never been drawn on has no image, and rubbing it is nothing.
+     */
+    private fun eraseRasterAlong(sweep: List<StrokePoint>) {
+        val target = pageRaster ?: return
+        val dirty = RasterErase.batchRect(sweep, eraserRadius, target.width, target.height)
+            ?.toRectOut() ?: return
+        paperListener?.onRasterWillChange(dirty)
+        rasterErasePath.rewind()
+        rasterErasePath.moveTo(sweep[0].x, sweep[0].y)
+        if (sweep.size == 1) {
+            // A stationary dab: a zero-length line still gets its round caps, so the
+            // rubber leaves a disc where it touched rather than nothing.
+            rasterErasePath.lineTo(sweep[0].x, sweep[0].y)
+        } else {
+            for (i in 1 until sweep.size) rasterErasePath.lineTo(sweep[i].x, sweep[i].y)
+        }
+        rasterErasePaint.strokeWidth = eraserRadius * 2f
+        Canvas(target).drawPath(rasterErasePath, rasterErasePaint)
+        paperListener?.onRasterChanged(dirty)
+        rasterErasePending = rasterErasePending?.apply { union(dirty) } ?: Rect(dirty)
+        throttledEraseRedraw()
+    }
+
     private fun throttledEraseRedraw() {
         val now = SystemClock.uptimeMillis()
-        if (now - lastEraseRedrawMs >= ERASE_REDRAW_INTERVAL_MS) {
+        val interval = if (pageMode == PageMode.RASTER) RASTER_ERASE_REDRAW_INTERVAL_MS
+                       else ERASE_REDRAW_INTERVAL_MS
+        if (now - lastEraseRedrawMs >= interval) {
             lastEraseRedrawMs = now
             redrawCommitted()
+            rasterErasePending?.let {
+                rasterErasePending = null
+                presentRasterEraseProgress(it)
+            }
         }
     }
+
+    /**
+     * A raster erase has just been redrawn into the committed layer mid-sweep, and
+     * [rect] (view space — the page image sits at the view origin) is what changed
+     * since the panel last saw it. The base engine does nothing beyond the
+     * `invalidate` already issued: on an ordinary display that frame simply presents.
+     * An e-ink engine whose panel withholds ordinary frames while the pen is in
+     * contact overrides this to ask the panel for the region itself, so the artist
+     * sees graphite lifting under the rubber rather than all at once at pen-up —
+     * which is what rubbing feels like, and the whole reason the raster page exists.
+     * Never called at sweep end; [finalizeEraseRedraw] and the engine's own end-of-sweep
+     * repaint cover that.
+     */
+    protected open fun presentRasterEraseProgress(rect: Rect) {}
 
     /** Flush any throttled removals at gesture end so the screen is exact on pen lift. */
     protected fun finalizeEraseRedraw() {
         lastEraseRedrawMs = SystemClock.uptimeMillis()
+        rasterErasePending = null
         redrawCommitted()
     }
 
