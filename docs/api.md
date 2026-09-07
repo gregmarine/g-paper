@@ -27,7 +27,7 @@ changes into its own storage, keyed by stroke id.
 |---|---|
 | Contract | `PaperView` (interface every engine implements) |
 | Data model | `Stroke`, `StrokePoint`, `StrokeStyle`, `Bounds`, `Selection`, `SelectionMove`, `OrientedBox` — pure Kotlin, zero Android deps |
-| Tools | `Tool` — `NONE` / `PEN` / `ERASER` / `LASSO` |
+| Tools | `Tool` — `NONE` / `PEN` / `ERASER` / `LASSO` / `LASSO_ERASER` (0.1.28) |
 | Page mode (0.1.25) | `PageMode` — `STROKE` (default) / `RASTER`; `pageMode`, `loadPageRaster`, `getPageRaster`, `copyPageRaster` |
 | Transform mode (0.1.27) | `beginTransform` / `endTransform` / `setTransformAspectLocked`, `transformingContentId`, `transformBox`; `OrientedBox`; `TransformGeometry` + `TransformGrab` (pure) |
 | Events | `PaperListener` (all default no-op), `RawInputListener` + `RawInputEvent` |
@@ -90,6 +90,7 @@ override fun onDestroy() { paper.release(); super.onDestroy() }
 | Out | `onStrokeCommitted` / `onStrokesErased` | Incremental persistence |
 | Out | `onContentErased` (0.1.4) | Eraser swept over host content: whole-object ids; the host deletes its rows + `notifyContentChanged()` (the component owns no content, so nothing disappears by itself). At most once per id per gesture. The **eraser tool** reports here; a scribble reports through `onScribbleErased` |
 | Out | `onScribbleErased(strokeIds, contentIds)` (0.1.23) | One scribble-erase gesture, whole: the strokes it crossed and the content objects it went through, in **one** call so the host can record one undo entry. Defaults to forwarding to `onStrokesErased` + `onContentErased`, so a host that has not adopted it keeps working |
+| Out | `onLassoErased(strokeIds, contentIds)` (0.1.28) | One `Tool.LASSO_ERASER` outline, whole: the strokes with any point inside the loop and the host content whose hit-target box the loop touches — the lasso's own selection rule — in **one** call. Never fires for a loop that took nothing or for a tap-sized contact. Same forwarding default as `onScribbleErased` |
 | Out | `onPaperTapped` (0.1.5) | Stylus tap on bare paper in `Tool.LASSO` with nothing selected — the "paste here" hook. Stylus only; never the tap that dismissed a selection |
 | — | `clear()` | User-facing "erase page" (host updates its own data; no erase callbacks fire) |
 | — | `clearForContentSwap()` | Page turn: pixels hold until the next `loadStrokes` — single EPD refresh, no blank flash |
@@ -428,6 +429,22 @@ of the toolbar.
 - Toggle it between drags (a selection toolbar is the natural home). A change mid-drag
   takes effect on the next sample, but without the object guides the drag did not start
   with.
+
+### Lasso eraser (0.1.28)
+
+`Tool.LASSO_ERASER` is the lasso pointed at the eraser: the same freehand outline, decided on the
+same hit rule (`LassoHitTest` — a stroke goes if **any** of its points lies inside the loop, host
+content goes **whole** if the loop touches its `hitTargets()` rect), but nothing is ever selected.
+No box, no drag, no `onSelection*`, no `onPaperTapped` (that hook is the lasso's paste-here). At
+pen-up the hit strokes leave the model, the gesture is reported once through
+`onLassoErased(strokeIds, contentIds)`, and the component re-records the committed layer itself —
+**do not call `notifyContentChanged()` from that callback** (the scribble rule); delete your content
+rows and return. A loop that takes nothing, a tap-sized contact, or a degenerate outline reports
+nothing at all. The barrel button / eraser end still point-erases under this tool, as under `LASSO`.
+Arming the tool drops any standing selection (there is none in this tool); the recognizers stay
+`Tool.PEN`-only. Trail chrome: the Supernote firmware's x-stream on Ratta (the native lasso-eraser
+look, `LASSO_TRAIL_EMR`), the lasso's own trail on Onyx and generic. The Onyx path is a mechanical
+widening of the raw lasso capture and was **not** hardware-tested at 0.1.28.
 
 ### Transform mode (0.1.27)
 

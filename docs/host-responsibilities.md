@@ -85,6 +85,7 @@ history. Keep an operation stack and replay:
 | Drew a stroke | `onStrokeCommitted(s)` | `removeStrokes([s.id])` | `addStrokes([s])` |
 | Erased strokes | `onStrokesErased(ids)` (you still have the strokes) | `addStrokes(strokes)` | `removeStrokes(ids)` |
 | Scribble-erased strokes + content (`scribbleEraseEnabled`) | `onScribbleErased(strokeIds, contentIds)` — one call per gesture; the scribble itself was never committed | `addStrokes(strokes)` + restore your content rows | `removeStrokes(ids)` + delete them again |
+| Lasso-erased strokes + content (`Tool.LASSO_ERASER`, 0.1.28) | `onLassoErased(strokeIds, contentIds)` — one call per loop; nothing was selected | `addStrokes(strokes)` + restore your content rows | `removeStrokes(ids)` + delete them again |
 | Moved a selection | `onSelectionMoved(m)` | `removeStrokes` + `addStrokes(translated back)` — or `loadStrokes` the page | re-apply the delta |
 | Cleared the page | your own clear action | `loadStrokes(saved)` | `clear()` |
 
@@ -178,7 +179,7 @@ For selected objects to visibly follow a drag, implement the optional live-drag 
 `draw(canvas, excludedContentIds)` plus `drawObject(canvas, contentId)` — **both or neither**.
 Without it, dragged objects ghost as a translated dashed outline until you apply the move.
 When `onSelectionMoved` arrives, reposition your objects and call `notifyContentChanged()`.
-The component never erases host content; the eraser reports stroke ids only.
+The component never erases host content: the eraser tool reports swept content whole through `onContentErased`, a scribble through `onScribbleErased`, and (0.1.28) a lasso-eraser loop through `onLassoErased` — you delete the rows.
 
 **Tap-to-edit** (0.1.1): a sub-threshold stylus or single-finger tap *inside* the active
 selection box reports `onSelectionTapped(x, y)` (paper coordinates) and leaves the selection in

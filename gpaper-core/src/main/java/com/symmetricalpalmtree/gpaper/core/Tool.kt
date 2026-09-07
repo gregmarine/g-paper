@@ -35,4 +35,20 @@ enum class Tool {
      * on generic) and never enters the stroke model.
      */
     LASSO,
+
+    /**
+     * Lasso eraser (0.1.28): a freehand outline **erases** instead of selecting. The
+     * outline is captured exactly as [LASSO]'s and decided on the lasso's own hit rule —
+     * a stroke goes if any of its points lies inside the loop, host content (a
+     * [com.symmetricalpalmtree.gpaper.core.render.ContentRenderer.hitTargets] rect) goes
+     * whole if the loop touches its box — so what a lasso would have selected is exactly
+     * what the lasso eraser takes. Nothing is ever selected: no box, no drag, no
+     * selection callbacks, no [PaperListener.onPaperTapped]. The hit strokes leave the
+     * model and the whole gesture is reported once through
+     * [PaperListener.onLassoErased]; host content is reported, never removed, by the
+     * component. A loop that takes nothing reports nothing. The barrel button / eraser
+     * end still point-erases, as under [LASSO]. Live trail: engine chrome (the Supernote
+     * lasso-eraser x-stream on Ratta, the lasso's trail elsewhere).
+     */
+    LASSO_ERASER,
 }

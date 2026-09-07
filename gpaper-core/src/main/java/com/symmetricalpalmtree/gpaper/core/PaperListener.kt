@@ -83,6 +83,31 @@ interface PaperListener {
     }
 
     /**
+     * One [Tool.LASSO_ERASER] outline, whole (0.1.28): the strokes the loop took (any point
+     * inside — [com.symmetricalpalmtree.gpaper.core.geometry.LassoHitTest.hitStrokeIds]) and
+     * the host content objects it touched
+     * ([com.symmetricalpalmtree.gpaper.core.geometry.LassoHitTest.polygonIntersectsBounds]
+     * over [com.symmetricalpalmtree.gpaper.core.render.ContentRenderer.hitTargets]) — the
+     * lasso's own selection rule, so a loop erases exactly what it would have selected. In
+     * **one** call so the host can record one undo entry. Never fires for a loop that took
+     * nothing, and never for a tap-sized contact.
+     *
+     * The strokes are already out of the component's model; the content is not — the host
+     * deletes its rows here, exactly as for [onScribbleErased]. **Do not call
+     * [PaperView.notifyContentChanged] from this callback** — the component re-records the
+     * committed layer itself the moment this call returns (the scribble rule: a second
+     * repaint is a second EPD refresh showing one erase as two).
+     *
+     * **The default forwards** to [onStrokesErased] and [onContentErased], so a host that has
+     * not adopted this method keeps working (two callbacks, two undo entries). Override it to
+     * make one loop one undo entry.
+     */
+    fun onLassoErased(strokeIds: List<String>, contentIds: List<String>) {
+        if (strokeIds.isNotEmpty()) onStrokesErased(strokeIds)
+        if (contentIds.isNotEmpty()) onContentErased(contentIds)
+    }
+
+    /**
      * The page image is about to change inside [rect] (page space) — [PageMode.RASTER]
      * only (0.1.25). Fires on the main thread immediately before the pixels are touched,
      * for every change: a mark composited at pen-up, a load, a clear, and (from 0.1.26)

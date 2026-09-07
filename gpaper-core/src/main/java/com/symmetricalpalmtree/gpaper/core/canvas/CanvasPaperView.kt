@@ -391,7 +391,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             cancelActiveGesture()
             // A tool change is a transform exit (the mode requires LASSO).
             endActiveTransform()
-            if (leavingLasso) clearSelection()
+            // Leaving LASSO drops its selection; arming the lasso eraser drops any
+            // host-injected one too — there is no selection in that tool (0.1.28).
+            if (leavingLasso || value == Tool.LASSO_ERASER) clearSelection()
         }
 
     override var penColor: Int = Stroke.BLACK
@@ -770,6 +772,15 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                             lassoPoints.add(event.strokePointAt(-1))
                             GestureMode.LASSO
                         }
+                    // The lasso eraser captures the same outline and never drags: there is
+                    // no box to grab (0.1.28). completeLassoOutline tells the two apart.
+                    tool == Tool.LASSO_ERASER -> {
+                        lassoOutlineStart()
+                        lassoCapturing = true
+                        lassoPoints.clear()
+                        lassoPoints.add(event.strokePointAt(-1))
+                        GestureMode.LASSO
+                    }
                     else -> GestureMode.DRAW
                 }
                 dispatchRaw(event, toolType)
@@ -1732,6 +1743,11 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected fun completeLassoOutline(outline: List<StrokePoint>) {
         // Repaint regardless of outcome — the base-drawn trail must leave the screen.
         invalidate()
+        if (tool == Tool.LASSO_ERASER) {
+            outlineDismissedSelection = false
+            completeLassoErase(outline)
+            return
+        }
         val dismissed = outlineDismissedSelection
         outlineDismissedSelection = false
         val threshold = dragThresholdPx()
@@ -1757,13 +1773,59 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         maybeEndSmartLassoSession()
     }
 
+    /**
+     * A completed [Tool.LASSO_ERASER] outline (0.1.28): the lasso's own hit test, then the
+     * scribble-erase consume recipe — the hit strokes leave the model, the whole gesture is
+     * reported once through [PaperListener.onLassoErased], and the committed layer is
+     * re-recorded here (the host must not repaint). A tap-sized contact, a degenerate
+     * outline, or a loop that takes nothing reports nothing at all — there is no
+     * paste-here tap in this tool, that hook is the lasso's.
+     */
+    private fun completeLassoErase(outline: List<StrokePoint>) {
+        val threshold = dragThresholdPx()
+        val extent = Bounds.of(outline)
+        if (extent.width < threshold && extent.height < threshold) return
+        if (outline.size < 3) return
+        val (hitIds, contentTargets) = outlineHits(outline)
+        if (hitIds.isEmpty() && contentTargets.isEmpty()) return
+        val idSet = hitIds.toHashSet()
+        val contentHits = contentTargets.map { it.contentId }
+        // Parity with eraseAlong: a host-injected selection losing a member no longer
+        // describes reality. (The tool setter already dropped any selection — kept so a
+        // setSelection issued while armed still pairs its callbacks up.)
+        val sel = selection
+        if (sel != null &&
+            (sel.strokeIds.any { it in idSet } || sel.contentIds.any { it in contentHits })
+        ) {
+            clearSelection()
+        }
+        if (hitIds.isNotEmpty()) {
+            strokeList.removeAll { it.id in idSet }
+            modelChanged()
+        }
+        // One gesture, one callback. The content is still on the committed layer at this
+        // point; the host removes it and calls notifyContentChanged, as for the eraser tool.
+        paperListener?.onLassoErased(hitIds, contentHits)
+        finalizeEraseRedraw()
+        onGestureStrokeConsumed()
+        Log.i(TAG, "lasso erase took ${hitIds.size} strokes, ${contentHits.size} content objects")
+    }
+
+    /** The lasso's hit rule over a closed outline: strokes with any point inside, host
+     *  hit targets the outline touches. Shared by the selection builder and the lasso
+     *  eraser so the two can never disagree. */
+    private fun outlineHits(outline: List<StrokePoint>): Pair<List<String>, List<HitTarget>> {
+        val strokeIds = LassoHitTest.hitStrokeIds(strokeList, outline)
+        val contentTargets = contentRenderers.flatMap { it.hitTargets() }
+            .filter { LassoHitTest.polygonIntersectsBounds(outline, it.bounds) }
+        return strokeIds to contentTargets
+    }
+
     /** Hit-test a closed outline against the strokes and the host-content hit targets
      *  and build the [Selection] — shared by [completeLassoOutline] and the smart-lasso
      *  recognizer. Null when the outline encloses nothing. */
     private fun buildSelectionFromOutline(outline: List<StrokePoint>): Selection? {
-        val strokeIds = LassoHitTest.hitStrokeIds(strokeList, outline)
-        val contentTargets = contentRenderers.flatMap { it.hitTargets() }
-            .filter { LassoHitTest.polygonIntersectsBounds(outline, it.bounds) }
+        val (strokeIds, contentTargets) = outlineHits(outline)
         if (strokeIds.isEmpty() && contentTargets.isEmpty()) return null
         val idSet = strokeIds.toHashSet()
         var bounds: Bounds? = null

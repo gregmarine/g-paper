@@ -1021,6 +1021,30 @@ outside moved the sample object instead of ending the mode. Fixed in the demo an
 
 ---
 
+### Phase 16 — Lasso eraser: the lasso pointed at the eraser (post-v0.1.0)
+**Status:** 🧪 Built, awaiting the Nomad walk (2026-09-06) · **Publishes:** 0.1.28 · Opened
+2026-09-06 for Notesprout SN's lasso eraser (`apps/notesprout_ratta/LOOP_PLAN.md`, decision 1 /
+D1–D2 / phase LE1), which owns the walk.
+
+SN wanted og Notesprout's third erase path — a drawn loop that deletes what it takes — and the
+host cannot build it: the outline never leaves the engine, and a host that armed `LASSO` and
+deleted in `onSelectionCreated` would show the selection box for a frame, paint the wrong trail,
+and have to gate the paste-here tap. So the engine gains `Tool.LASSO_ERASER`: the lasso's capture
+(`GestureMode.LASSO`, never the drag branch — there is no box) and the lasso's hit rule
+(`outlineHits`, now shared with the selection builder so the two can never disagree), completed
+as an erase on the scribble-consume recipe (`completeLassoErase`: model removal → one
+`onLassoErased(strokeIds, contentIds)` with the `onScribbleErased` forwarding default →
+`finalizeEraseRedraw` → `onGestureStrokeConsumed`). Nothing selects, nothing reports
+`onPaperTapped`, a loop that takes nothing reports nothing; arming the tool drops any standing
+selection. Ratta arms the firmware's `CROSS` pen (the native lasso-eraser x-trail, already
+catalogued in `SupernoteInk.Pen`) at `LASSO_TRAIL_EMR` and marks the contact as an outline so the
+lift runs the proven `releaseGestureTrace` ladder. Onyx's raw lasso path is widened to both
+capturing tools (`capturesOutline`) with the lasso's trail style — mechanical, compiles,
+**not hardware-tested at 0.1.28** (no BOOX on the SN arc). No new geometry, no new test surface:
+`LassoHitTest` is already covered; the consume path is walked.
+
+---
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

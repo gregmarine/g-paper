@@ -284,6 +284,12 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     /** Arm the firmware's dashed style as the live lasso trail (black, chrome width) —
      *  the BOOX half of the hardware-trail design; device-proven no-restart and
      *  fast-mode-safe like every firmware style. */
+    /** The two outline-capturing tools (0.1.28): the raw lasso path serves both — the
+     *  lasso eraser never has a selection, so its drag half is simply unreachable. The
+     *  trail style is the lasso's on this engine (untested on hardware at 0.1.28). */
+    private val capturesOutline: Boolean
+        get() = tool == Tool.LASSO || tool == Tool.LASSO_ERASER
+
     private fun applyLassoTrailStyle() {
         if (!isSetup || penOwner !== this) return
         touchHelper.setStrokeStyle(TouchHelper.STROKE_STYLE_DASH)
@@ -327,7 +333,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 touchHelper.setRawDrawingRenderEnabled(false)
                 invalidate()
             }
-            Tool.LASSO -> {
+            Tool.LASSO, Tool.LASSO_ERASER -> {
                 touchHelper.setEraserRawDrawingEnabled(false, 0)
                 applyLassoTrailStyle()
                 touchHelper.setRawDrawingEnabled(true)
@@ -569,7 +575,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         override fun onBeginRawDrawing(shortcutDrawing: Boolean, touchPoint: TouchPoint) {
             // Before anything else: the pen is on the glass — close the palm gate.
             markPenDown()
-            if (tool == Tool.LASSO) {
+            if (capturesOutline) {
                 beginRawLasso(touchPoint)
                 emitRaw(RawAction.DOWN, RawTool.STYLUS, touchPoint)
                 return
@@ -594,7 +600,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 retractGestureInk()
                 return
             }
-            if (tool == Tool.LASSO) {
+            if (capturesOutline) {
                 // Selection gestures are chrome, not writing — no onPenLifted.
                 endRawLasso(touchPoint)
                 return
@@ -611,7 +617,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
 
         override fun onRawDrawingTouchPointMoveReceived(touchPoint: TouchPoint) {
             emitRaw(RawAction.MOVE, RawTool.STYLUS, touchPoint)
-            if (tool == Tool.LASSO) {
+            if (capturesOutline) {
                 if (rawDragActive) {
                     lassoDragMove(touchPoint.x, touchPoint.y)
                 } else if (rawLassoCapture) {
@@ -629,7 +635,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         override fun onRawDrawingTouchPointListReceived(pointList: TouchPointList) {
             val points = pointList.points?.map { it.toStrokePoint() } ?: return
             if (points.isEmpty()) return
-            if (tool == Tool.LASSO) {
+            if (capturesOutline) {
                 if (rawLassoCapture && !rawDragActive) rawLassoListPoints.addAll(points)
                 return
             }
@@ -780,7 +786,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         // the same route only as the no-pipeline fallback (raw dead → software trail);
         // with the pipeline live the raw callbacks drive the gesture and this path must
         // not double-drive it.
-        if (tool == Tool.NONE || (tool == Tool.LASSO && !isSetup)) return super.onTouchEvent(event)
+        if (tool == Tool.NONE || (capturesOutline && !isSetup)) return super.onTouchEvent(event)
 
         // PEN/ERASER/LASSO: the SDK owns the stylus. Keep the palm gate correct even if a
         // stylus event slips through (e.g. raw drawing momentarily disabled on focus

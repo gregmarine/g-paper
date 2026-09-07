@@ -252,6 +252,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             Tool.LASSO ->
                 // Live lasso trail = the firmware's own dash stream, black, chrome size.
                 SupernoteInk.setPen(SupernoteInk.Pen.DASH, LASSO_TRAIL_EMR, SupernoteInk.Color.BLACK)
+            Tool.LASSO_ERASER ->
+                // The lasso eraser's trail = the firmware's x-stream (the Supernote
+                // lasso-eraser look), same chrome size (0.1.28).
+                SupernoteInk.setPen(SupernoteInk.Pen.CROSS, LASSO_TRAIL_EMR, SupernoteInk.Color.BLACK)
             else -> applyPenToFirmware()
         }
     }
@@ -631,6 +635,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     contactLassoOutline = false
                     contactLassoDrag = false
                     contactInking = !contactErasing && tool == Tool.PEN && !firmwareInkSuppressed
+                    // The lasso eraser (0.1.28) is always an outline contact — no box, no
+                    // drag; its x-trail rides the same gesture-trace ladder at lift.
+                    if (!contactErasing && tool == Tool.LASSO_ERASER) contactLassoOutline = true
                     if (!contactErasing && tool == Tool.LASSO) {
                         if (selectionBoxContains(event.x, event.y)) {
                             contactLassoDrag = true
