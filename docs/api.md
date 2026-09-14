@@ -28,7 +28,7 @@ changes into its own storage, keyed by stroke id.
 | Contract | `PaperView` (interface every engine implements) |
 | Data model | `Stroke`, `StrokePoint`, `StrokeStyle`, `Bounds`, `Selection`, `SelectionMove`, `OrientedBox` — pure Kotlin, zero Android deps |
 | Tools | `Tool` — `NONE` / `PEN` / `ERASER` / `LASSO` / `LASSO_ERASER` (0.1.28) |
-| Page mode (0.1.25) | `PageMode` — `STROKE` (default) / `RASTER`; `pageMode`, `loadPageRaster`, `getPageRaster`, `copyPageRaster` |
+| Page mode (0.1.25) | `PageMode` — `STROKE` (default) / `RASTER`; `pageMode`, `loadPageRaster`, `getPageRaster`, `copyPageRaster`; `RasterPatch`, `readPageRaster`, `swapPageRaster` (0.1.29) |
 | Transform mode (0.1.27) | `beginTransform` / `endTransform` / `setTransformAspectLocked`, `transformingContentId`, `transformBox`; `OrientedBox`; `TransformGeometry` + `TransformGrab` (pure) |
 | Events | `PaperListener` (all default no-op), `RawInputListener` + `RawInputEvent` |
 | Host content | `ContentRenderer`, `ContentLayer`, `HitTarget` |
@@ -111,7 +111,9 @@ engine it always had.
 | In | `loadStrokes` / `addStrokes` | Composite into the image — the **one-way bake** of a stroke page. `removeStrokes` does nothing; `getStrokes()` is empty |
 | Out | `onRasterWillChange(rect)` → change → `onRasterChanged(rect)` | Around every change, page space, rect generous and page-clipped. The first is the host's before-image moment (`copyPageRaster(rect)`), the second its dirty flag. `onStrokeCommitted` still fires for a composited mark (timestamps and counts from one place) — don't store that stroke as a row |
 | Out | `getPageRaster()` | A **copy**, or null when blank — encode it off the main thread for a save |
-| Out | `copyPageRaster(rect)` | A copy of a patch — the before-image for undo |
+| Out | `copyPageRaster(rect)` | A copy of a patch as a bitmap |
+| Out | `readPageRaster(rect)` (0.1.29) | The pixels inside a rect as a `RasterPatch` (page-space rect + row-major ARGB `IntArray`) — **the before-image for undo**, in the shape `swapPageRaster` takes back. A page with no image yet reads as transparent, so the first mark's before-image is nothing, read for free |
+| In | `swapPageRaster(patches)` (0.1.29) | Each patch's pixels go onto the page and **its array is left holding what was there** — one entry serves undo and redo, no second copy. Overlapping patches: reverse read order to undo, read order to redo. One repaint; on Onyx only the region covered. Fires nothing on the listener. A rect not wholly on the page is skipped and logged, never clipped |
 | — | Eraser (0.1.26) | The same sweep as stroke mode, but it **rubs pixels**: every pixel within `eraserRadius` of the sweep goes transparent. Each batch fires `onRasterWillChange(rect)` → clear → `onRasterChanged(rect)` (accumulate the tiles into one undo entry, closed at `onPenLifted`); `onStrokesErased` never fires. The Onyx engine repaints the changed region per throttled batch so rubbing reads live on the panel |
 
 The image is a layer *over* the paper (white + template still draw under it), so the eraser

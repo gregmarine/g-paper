@@ -256,6 +256,31 @@ interface PaperView {
      */
     fun copyPageRaster(rect: Rect): Bitmap?
 
+    /**
+     * The pixels inside [rect] (page space, clipped to the page) as a [RasterPatch], or
+     * null when the rect misses the page or the mode is [PageMode.STROKE] (0.1.29). The
+     * before-image for a host's undo, in the form the undo will hand back: call it from
+     * [PaperListener.onRasterWillChange] with the rect it was given. A page that has no
+     * image yet reads as transparent — the honest before-image of a first mark, which an
+     * undo must be able to take back to nothing. Main thread only.
+     */
+    fun readPageRaster(rect: Rect): RasterPatch?
+
+    /**
+     * Swap [patches] into the page image and repaint what they cover (0.1.29). Each
+     * patch's pixels replace the page's inside its rect, and **the patch's array is left
+     * holding what the page held there** — so an undo that swaps a before-image in
+     * turns that same patch into the redo, with no second copy and no second call
+     * shape. Patches whose rects overlap must be swapped in the reverse of the order
+     * they were read to undo, and in reading order to redo; disjoint patches can go in
+     * any order. A rect that is not wholly on the page is skipped with a log line
+     * rather than clipped, because a patch that no longer registers with the page it was
+     * read from is a host bug worth seeing. Fires nothing on the listener: the host made
+     * this change and already holds its history. Repaints once for all the patches — on
+     * e-ink, only the region they cover. A no-op in [PageMode.STROKE]. Main thread only.
+     */
+    fun swapPageRaster(patches: List<RasterPatch>)
+
     // ── Template & page geometry ─────────────────────────────────────────────
 
     /**

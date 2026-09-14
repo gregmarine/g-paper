@@ -19,6 +19,7 @@ import android.view.MotionEvent
 import android.view.View
 import com.symmetricalpalmtree.gpaper.core.PageMode
 import com.symmetricalpalmtree.gpaper.core.PaperListener
+import com.symmetricalpalmtree.gpaper.core.RasterPatch
 import com.symmetricalpalmtree.gpaper.core.PaperView
 import com.symmetricalpalmtree.gpaper.core.RawAction
 import com.symmetricalpalmtree.gpaper.core.RawInputEvent
@@ -549,6 +550,61 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         val out = Bitmap.createBitmap(clipped.width(), clipped.height(), Bitmap.Config.ARGB_8888)
         Canvas(out).drawBitmap(src, clipped, Rect(0, 0, clipped.width(), clipped.height()), null)
         return out
+    }
+
+    override fun readPageRaster(rect: Rect): RasterPatch? {
+        if (pageMode != PageMode.RASTER) return null
+        val w = if (pageWidth > 0) pageWidth else width
+        val h = if (pageHeight > 0) pageHeight else height
+        val clipped = Rect(rect)
+        if (!clipped.intersect(0, 0, w, h) || clipped.isEmpty) return null
+        val pixels = IntArray(clipped.width() * clipped.height())
+        // A page with no image yet is transparent everywhere, and a fresh IntArray is
+        // exactly that: the before-image of the first mark is nothing, read for free.
+        pageRaster?.getPixels(
+            pixels, 0, clipped.width(), clipped.left, clipped.top, clipped.width(), clipped.height(),
+        )
+        return RasterPatch(clipped, pixels)
+    }
+
+    /**
+     * One row of page pixels, reused across every swap so a page-wide undo allocates
+     * nothing but the log line it does not print. Sized to the widest row asked for.
+     */
+    private var swapRow = IntArray(0)
+
+    override fun swapPageRaster(patches: List<RasterPatch>) {
+        if (pageMode != PageMode.RASTER || patches.isEmpty()) return
+        endActiveTransform()
+        clearSelection()
+        // The page is allocated if it is not there: swapping a before-image onto a blank
+        // page is the redo of a first mark that was undone back to nothing, and the
+        // pixels have to land somewhere.
+        val target = ensurePageRaster() ?: return
+        var swapped = false
+        for (patch in patches) {
+            val r = patch.rect
+            if (r.left < 0 || r.top < 0 || r.right > target.width || r.bottom > target.height) {
+                Log.w(TAG, "raster patch $r is not on the ${target.width}×${target.height} page; skipped")
+                continue
+            }
+            val w = r.width()
+            if (swapRow.size < w) swapRow = IntArray(w)
+            val row = swapRow
+            val px = patch.pixels
+            // Row by row through one buffer, rather than the whole patch through a second
+            // array: the patch a page-wide erase leaves behind is the page, and a copy of
+            // the page made in the middle of undoing it is the allocation that gets the
+            // process killed on a device already holding two of them.
+            for (y in 0 until r.height()) {
+                val offset = y * w
+                target.getPixels(row, 0, w, r.left, r.top + y, w, 1)
+                target.setPixels(px, offset, w, r.left, r.top + y, w, 1)
+                System.arraycopy(row, 0, px, offset, w)
+            }
+            swapped = true
+        }
+        if (swapped) redrawCommitted()
     }
 
     /**

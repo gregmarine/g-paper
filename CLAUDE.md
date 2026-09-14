@@ -55,6 +55,10 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   everything up to pen-up — only what is *kept* differs, and a host that never sets `pageMode`
   gets the stroke engine unchanged. `getPageRaster` is a **copy**, always: the host encodes it
   off the main thread while the pen keeps going. The engine keeps no history in either mode.
+  **A raster undo is a swap, not a load (Phase 17, 0.1.29):** `readPageRaster(rect)` is the
+  before-image as a `RasterPatch`, and `swapPageRaster` puts it back and leaves the array holding
+  what was there — one entry serves redo, no second copy of an 18 MB page mid-undo, and on Onyx
+  only the patched region is refreshed. The swap runs row by row through one reused buffer.
 - **The same renderer does not make the same pixels on a different rasteriser (Phase 13).**
   `StrokeRenderer` into a hardware `RenderNode` (the committed layer) and into a software
   `Canvas(bitmap)` (`StrokeRasterizer`, covers, the raster page) lay the hairline pencil with the

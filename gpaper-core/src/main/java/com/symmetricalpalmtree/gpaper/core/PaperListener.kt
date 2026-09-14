@@ -112,8 +112,10 @@ interface PaperListener {
      * only (0.1.25). Fires on the main thread immediately before the pixels are touched,
      * for every change: a mark composited at pen-up, a load, a clear, and (from 0.1.26)
      * each batch of an eraser sweep. This is the host's one chance at a before-image for
-     * undo — [PaperView.copyPageRaster] with this rect, now, holds exactly the pixels the
-     * change will overwrite. The engine keeps no history in either mode. The rect is
+     * undo — [PaperView.readPageRaster] with this rect, now, holds exactly the pixels the
+     * change will overwrite, in the shape [PaperView.swapPageRaster] takes back (0.1.29;
+     * [PaperView.copyPageRaster] is the bitmap form). The engine keeps no history in
+     * either mode. The rect is
      * generous by design (the mark's bounds pushed out by its width and a margin, clipped
      * to the page), so a before-image taken from it always covers the change.
      */

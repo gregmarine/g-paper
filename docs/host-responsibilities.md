@@ -90,12 +90,17 @@ history. Keep an operation stack and replay:
 | Cleared the page | your own clear action | `loadStrokes(saved)` | `clear()` |
 
 On a **raster page** the entries are before-images, not ids. `onRasterWillChange(rect)` fires
-before the pixels move — `copyPageRaster(rect)` there is exactly what the change overwrites.
-Undo swaps that patch back in (read the current patch first, so the same entry serves redo);
-`loadPageRaster` of a patched copy does it today. Bound such a stack by **bytes**, not count:
-a page-wide erase's before-image is the whole page. An eraser sweep (0.1.26) fires the pair
-**once per batch** — many times per contact — so accumulate the tiles into one entry while a
-pen-down is open and close it at `onPenLifted`; `onStrokesErased` does not fire on a raster page.
+before the pixels move — `readPageRaster(rect)` there (0.1.29) is exactly what the change
+overwrites, as a `RasterPatch`. Undo is `swapPageRaster(patches)`: the patch goes onto the page
+and comes back holding what was there, so the **same entry serves redo** with no second copy
+and no second call shape. Bound such a stack by **bytes** (`RasterPatch.bytes`), not count: a
+page-wide erase's before-image is the whole page. An eraser sweep (0.1.26) fires the pair
+**once per batch** — many times per contact, and the batch rects overlap heavily along the
+sweep — so accumulate into one entry while a pen-down is open, close it at `onPenLifted`, and
+do not store a rect you already hold the pixels of (a fixed grid of cells, each read once per
+contact, bounds an entry by the page and makes the patches disjoint, so swap order stops
+mattering); `onStrokesErased` does not fire on a raster page. Before 0.1.29 the route was
+`copyPageRaster` + `loadPageRaster` of a patched copy — a whole-page repaint per undo.
 
 `loadStrokes(list)` is the blunt instrument (full page replay); `addStrokes`/`removeStrokes`
 are the targeted ones. Any data-in call dismisses an active selection first; re-select via

@@ -14,6 +14,7 @@ import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
+import com.symmetricalpalmtree.gpaper.core.RasterPatch
 import com.symmetricalpalmtree.gpaper.core.RawAction
 import com.symmetricalpalmtree.gpaper.core.RawInputEvent
 import com.symmetricalpalmtree.gpaper.core.RawTool
@@ -801,31 +802,46 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
 
     // ── EPD content handoffs ─────────────────────────────────────────────────
 
-    /** True while a posted `handwritingRepaint` is pending, so several content calls in
-     *  one main-loop turn (setTemplate + setPageSize + loadStrokes on a page turn)
-     *  coalesce into a single full-panel refresh instead of flashing once each. */
-    private var epdRepaintPending = false
+    /** The region a posted `handwritingRepaint` will cover, while one is pending — so
+     *  several content calls in one main-loop turn (setTemplate + setPageSize +
+     *  loadStrokes on a page turn) coalesce into a single panel refresh instead of
+     *  flashing once each. Null when nothing is posted. A full-view call and a regional
+     *  one landing together union to the full view, which is the right answer. */
+    private var epdRepaintRegion: Rect? = null
 
     /**
      * The overlay handoff every committed-content swap needs on this hardware:
      * render off → repaint the view ([block] must leave the committed layer current) →
      * `handwritingRepaint` (commits the pixels; without it the change is invisible or
      * leaves gray residue) → re-arm the raw path for the current tool.
+     *
+     * [region] is what the panel is asked to refresh, in view space; null is the whole
+     * view, which every content swap wants. A raster undo (0.1.29) passes the patch it
+     * changed instead, because the full-view repaint is the flash the class doc warns
+     * against, and an undo of one mark that flashed the whole page would make taking a
+     * mark back cost more than making it. Whether a regional refresh at pen-idle lands
+     * as cleanly as the mid-contact one the eraser uses is a device fact, judged on the
+     * panel — the full view is one argument away if it does not.
      */
-    private inline fun epdRepaintHandoff(block: () -> Unit) {
+    private inline fun epdRepaintHandoff(region: Rect? = null, block: () -> Unit) {
         if (!isSetup) {
             block()
             return
         }
         touchHelper.setRawDrawingRenderEnabled(false)
         block()
-        if (!epdRepaintPending) {
-            epdRepaintPending = true
-            post {
-                epdRepaintPending = false
-                EpdController.handwritingRepaint(this, Rect(0, 0, width, height))
-                post { armRawForCurrentTool() }
-            }
+        val wanted = region ?: Rect(0, 0, width, height)
+        val pending = epdRepaintRegion
+        if (pending != null) {
+            pending.union(wanted)
+            return
+        }
+        epdRepaintRegion = Rect(wanted)
+        post {
+            val r = epdRepaintRegion ?: Rect(0, 0, width, height)
+            epdRepaintRegion = null
+            EpdController.handwritingRepaint(this, r)
+            post { armRawForCurrentTool() }
         }
     }
 
@@ -838,6 +854,16 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     // re-arm handoff, or the new page stays invisible under the overlay. The pen-up
     // composite needs nothing here — it runs through commitCapturedStroke like a stroke.
     override fun loadPageRaster(bitmap: Bitmap?) = epdRepaintHandoff { super.loadPageRaster(bitmap) }
+
+    // A raster undo (0.1.29) is a content change like a load, so it needs the same
+    // render-off → repaint → re-arm handoff — but only over the patches it touched. The
+    // page image sits at the view origin, so a page-space rect is a view-space rect.
+    override fun swapPageRaster(patches: List<RasterPatch>) {
+        if (patches.isEmpty()) return
+        val region = Rect(patches[0].rect)
+        for (i in 1 until patches.size) region.union(patches[i].rect)
+        epdRepaintHandoff(region) { super.swapPageRaster(patches) }
+    }
 
     /** The union of raster-erase patches waiting for the panel, so several throttled
      *  redraws in one main-loop turn ask for one regional repaint, not one each. */

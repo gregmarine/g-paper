@@ -1045,6 +1045,47 @@ capturing tools (`capturesOutline`) with the lasso's trail style — mechanical,
 
 ---
 
+### Phase 17 — The raster undo: a patch swapped in, not a page loaded (post-v0.1.0)
+**Status:** ✅ Complete (closed 2026-09-14 on the NoteAir5C) · **Publishes:** 0.1.29 · Opened
+2026-09-14 for Paintsprout Onyx's raster experiment (`RASTER_PLAN.md`, phase R3), which owns the
+walk.
+
+Phases 13 and 14 left a raster host one route to an undo: `copyPageRaster` for the before-image
+and `loadPageRaster` of a patched whole-page copy to put it back — an 18 MB copy, a whole-page
+re-record and a full-panel refresh to take one hairline back. The host chose the engine route
+the plan had offered instead.
+
+**What landed:**
+- `RasterPatch(rect, pixels)` in the core package: a page-space rect and row-major ARGB pixels,
+  exactly `getPixels`' shape, with `bytes` for the host's budget. An `IntArray` rather than a
+  bitmap because a host keeps hundreds of these and bounds them by bytes, and an array is an
+  honest number with no native allocation beside it.
+- `readPageRaster(rect)`: the before-image in that shape, clipped to the page; a page with no
+  image yet reads as transparent — the first mark's before-image is nothing, read for free.
+- `swapPageRaster(patches)`: each patch's pixels go onto the page and **the array is left holding
+  what was there**, so one entry is both the undo and the redo. Row by row through one reused row
+  buffer — never a second copy of the page in the middle of undoing a page-wide erase. A rect not
+  wholly on the page is skipped with a log line, never clipped (a patch that no longer registers
+  with its page is a host bug worth seeing). Allocates the page if it is gone (the redo of a first
+  mark undone to nothing). Fires nothing on the listener; one `redrawCommitted`.
+- `OnyxPaperView.epdRepaintHandoff` takes a region: the pending full-view flag became a pending
+  union rect, so a swap refreshes only the patches it touched and a swap landing in the same turn
+  as a content swap unions to the full view. Every existing caller passes nothing and gets the
+  full view as before.
+- `docs/api.md`, `docs/host-responsibilities.md` (the swap route, and the cell-grid advice for
+  sweeps whose batch rects overlap), `CLAUDE.md`, `PaperListener.onRasterWillChange`'s KDoc.
+- No new pure geometry, so no new JVM test: the swap is `getPixels`/`setPixels` over a `Bitmap`.
+  Its involution is proved on the device by `screencap` — a raster page's committed content is
+  capturable, so undo-then-redo diffing pixel-exact against the page before either is the test.
+  Stroke mode untouched; the Onyx change is a parameter with a default.
+
+**Outcome (NoteAir5C walk, 2026-09-14):** the regional `handwritingRepaint` at pen-idle takes —
+a mark undone and redone, a sweep undone as one step, an undo across a page turn, a page-wide
+stroke undone, by arrow and by finger gesture; the artist's verdict on the whole list: *"All
+pass."* An adb walk diffed a leaf add/undo/redo pixel-exact beforehand.
+
+---
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
