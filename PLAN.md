@@ -1022,7 +1022,7 @@ outside moved the sample object instead of ending the mode. Fixed in the demo an
 ---
 
 ### Phase 16 — Lasso eraser: the lasso pointed at the eraser (post-v0.1.0)
-**Status:** 🧪 Built, awaiting the Nomad walk (2026-09-06) · **Publishes:** 0.1.28 · Opened
+**Status:** ✅ Complete (walked and frozen 2026-09-07) · **Publishes:** 0.1.28 · Opened
 2026-09-06 for Notesprout SN's lasso eraser (`apps/notesprout_ratta/LOOP_PLAN.md`, decision 1 /
 D1–D2 / phase LE1), which owns the walk.
 
@@ -1042,6 +1042,11 @@ lift runs the proven `releaseGestureTrace` ladder. Onyx's raw lasso path is wide
 capturing tools (`capturesOutline`) with the lasso's trail style — mechanical, compiles,
 **not hardware-tested at 0.1.28** (no BOOX on the SN arc). No new geometry, no new test surface:
 `LassoHitTest` is already covered; the consume path is walked.
+
+**Outcome:** walked and frozen by Notesprout SN's arc 29 "Loop" (LE1–LE4, 2026-09-06/07, on the
+Nomad — `apps/notesprout_sn/LOOP_PLAN.md`), armed from a second tap on the armed eraser via a
+Point · Lasso sub-bar on all four paper surfaces; the host never repaints from `onLassoErased`.
+The Onyx half of this phase remains hardware-untested — no BOOX device carried it through a walk.
 
 ---
 
@@ -1139,6 +1144,13 @@ by the hand and remains unmeasured; the unreported-pressure guard makes it safe 
 line rubbed out by eye kept an alpha of one or two for twenty light passes and the host's blank
 test called the leaf drawn on. `rubBatch` now lets a pixel go entirely below `GONE_BELOW_ALPHA`
 (3); one test added (14).
+
+---
+
+**Next: Phase 19 → 0.1.32 (arc 43 "Sketch", Notesprout SN — Ratta and the raster page)** ⬜ —
+not yet opened. Note: Paintsprout's `ONYX_PLAN.md` had reserved 0.1.32–0.1.34 for its own
+abandoned arcs 3/4, on paper only (0.1.34 was built and then dropped) — those numbers are free
+again for whoever asks for them next.
 
 ---
 
