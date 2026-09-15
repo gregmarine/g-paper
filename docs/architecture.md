@@ -54,6 +54,11 @@ selection lifecycle ends.
 
 Device engines override protected seams only — where the ink pixels come from and how the EPD
 panel is handed off. They contribute trail chrome and firmware plumbing, never model logic.
+A seam may also be a *number* rather than a behaviour: `rasterEraseRedrawIntervalMs`
+(0.1.32) is how often the raster eraser may redraw mid-sweep, which costs a different thing
+on every panel — one frame where the engine can repaint a region, far less often where every
+redraw is a whole frame handed to a firmware ink daemon — so the cadence is measured per
+engine rather than fixed in the base.
 `StrokeRenderer` is the single source of truth for committed stroke appearance: live ink is a
 per-engine best-effort preview; the baked stroke is the truth, identical on every engine.
 

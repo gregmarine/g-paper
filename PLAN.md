@@ -1147,10 +1147,154 @@ test called the leaf drawn on. `rubBatch` now lets a pixel go entirely below `GO
 
 ---
 
-**Next: Phase 19 → 0.1.32 (arc 43 "Sketch", Notesprout SN — Ratta and the raster page)** ⬜ —
-not yet opened. Note: Paintsprout's `ONYX_PLAN.md` had reserved 0.1.32–0.1.34 for its own
-abandoned arcs 3/4, on paper only (0.1.34 was built and then dropped) — those numbers are free
-again for whoever asks for them next.
+### Phase 19 — Ratta and the raster page (post-v0.1.0)
+**Status:** ✅ Complete (closed 2026-09-15 on the Supernote Nomad, the artist's hand) ·
+**Publishes:** 0.1.32 · Opened
+2026-09-15 for Notesprout SN's arc 43 "Sketch"
+(`~/git/Notesprout/extensions/sketch/SKETCH_PLAN.md`, phase K1), which owns the walk.
+Note: Paintsprout's `ONYX_PLAN.md` had reserved 0.1.32–0.1.34 for its own abandoned arcs 3/4,
+on paper only (0.1.34 was built and then dropped); 0.1.33 and 0.1.34 remain free.
+
+Phases 13–18 built the raster page, the pixel eraser, the patch undo and the rubbing eraser,
+and every one of them was walked on a NoteAir5C. **Nothing on Supernote has ever run raster
+mode.** The two engines are not the same shape at the point where it matters: Onyx can ask its
+panel to refresh a region, and Ratta cannot ask its firmware for anything of the sort — the
+daemon owns the panel and an app only presents frames, which is why the frame-silence rule
+exists. So this phase is not a port; it is the two places where a number that was right on
+BOOX is a *measurement* on Supernote, plus the vehicle to take those measurements with.
+
+**What landed:**
+- **The cadence seam.** `CanvasPaperView.rasterEraseRedrawIntervalMs`, a `protected open val`
+  read by `throttledEraseRedraw` in place of the constant, which stays 16 — Onyx and generic
+  behaviour is byte-for-byte what it was. `RASTER_ERASE_REDRAW_END_ONLY` (`Long.MAX_VALUE`)
+  means no mid-sweep redraw at all; the throttle returns early on it and `finalizeEraseRedraw`
+  presents the final state exactly once, which it already did for a sweep whose last batches
+  fell inside the throttle window (it re-records unconditionally and drops the pending union —
+  verified, nothing to fix).
+- **`RattaPaperView.rasterEraseRedrawIntervalMs` = 16 ms**, the walk's answer — the same
+  number Onyx uses, reached for a different reason (see the Outcome). It opened at 100 ms on
+  the reasoning that every mid-sweep redraw here is a whole app frame presented while the pen
+  is down; the hand chose one frame anyway, and was right.
+- **`RattaEmr.penSize(style, widthPx, floor)`** — pure Kotlin, replacing the private `emrSize`:
+  `px * 100` clamped to `[floor, 1200]`, the floor being `EMR_MIN_HAIRLINE` (120) for `PENCIL`
+  and `EMR_MIN` (200) for everything else. The sketching pencil is a 1.2 px lead; at 200 the
+  firmware previews it as a 2 px needle and the mark narrows at pen-up, and a preview that lies
+  about width is the failure the artist reads as the bake being broken. **120 reads right on the
+  Nomad**: the preview is the width the bake turns out to be.
+- **A tone ladder for `PENCIL`'s live preview** — `RattaTuning.pencilPreviewGrey`, one of the
+  four firmware greys (`RattaTuning.Grey`), default `DARK` — taken straight by
+  `firmwarePenColor()` instead of the grey `RattaInkMap` picks for the ink's true colour
+  (`#505050` → BLACK, which is what it exists to escape). Graphite bakes as flecks with bare
+  paper between them and reads far paler than any solid line, and pressure widens that gap: a
+  lightly drawn mark bakes to almost nothing while the firmware previews it at full strength.
+  So the preview tone is not a boolean but a ladder. `RattaInkMap` is untouched — a
+  `PENCIL`-only exception to the mapping, not a shift in it. **Measured: `DARK`**, paired with
+  the constant bake below; no rung could carry it alone.
+- **`CanvasPaperView.bakePressure(style, pressure)`**, a `protected open fun` returning the
+  pressure unchanged, applied in `compositeIntoRaster` — the one place a raster page is
+  written, so it covers a fresh mark, a `loadStrokes` bake and an `addStrokes` bake alike.
+  `bakePoints` probes before it copies, so an engine that doesn't override the seam allocates
+  nothing (raw-bit comparison, so an unreported NaN pressure doesn't fake a change). **Stroke
+  mode is untouched**: the `Stroke` handed to `onStrokeCommitted` keeps the measured pressures,
+  because that object is the host's data.
+- **`RattaPaperView.bakePressure` bakes `PENCIL` at `RattaTuning.pencilBakePressure`**
+  (**measured 0.5**; `null` = the real pressure), gated on `firmware` — a
+  binder-less Ratta renders its own live ink through the bake's own renderer, which *can* carry
+  tone, so there the real pressure is what keeps the two identical. This is the user's decision
+  of 2026-09-15 revising Notesprout's pencil decision **for Ratta only**; BOOX and Paintsprout
+  keep the pressure pencil.
+- **`RattaTuning`** — the measurement door: `rasterEraseRedrawIntervalMs`, `pencilEmrMin`,
+  `pencilPreviewGrey` (+ the `Grey` levels and `greyName`) and `pencilBakePressure`, each
+  default now being the Nomad's measured answer. Documented in `docs/api.md` as **not host
+  API**: hosts leave it alone, it stays only for arc 43's later walks on a real page, and it is
+  removed at the arc's close (K8) with each value freezing into a constant. A rebuild per
+  candidate is how a judgement of feel gets made against a stale memory of the previous one.
+  Two doors were opened during the walk and **removed once answered** —
+  `pencilPreviewPressure` (arming the firmware's pressure pen code for `PENCIL`: no visible
+  difference, and those codes vary width, the one thing a preview must never lie about) and
+  `logEraserPressure` with the `CanvasPaperView.onRasterEraseBatch` seam it was the only user
+  of (the eraser end reports real pressure; there is nothing left to watch).
+- **A note at Ratta's "needs no override" list** naming `loadPageRaster` and `swapPageRaster`,
+  and why each is covered — `clearForContentSwap`'s release under the swap law for the load,
+  `redrawCommitted`'s own `pendingBake` guard (record → `clearAll` → invalidate → ladder) for
+  the undo swap, which arrives with no swap in front of it and with the undone mark very likely
+  still live on the overlay. Read both paths to confirm it rather than inheriting the claim.
+- **The demo gains a Raster toggle** and becomes the measurement vehicle: `PageMode.RASTER` on
+  a cleared page, `PENCIL` 1.2 px `#505050`, the rubbing eraser at 12 px on the 0.1.30 defaults,
+  Pen and Eraser only, no gestures (a hatch is not a scribble), a host-owned undo built the way
+  the API document says — before-images on a 64 px grid read once per cell per contact, one
+  entry per contact, `swapPageRaster` in both directions — the wall time of every swap at
+  `Log.i`, a "Swap pg" door that reads and swaps the whole page, and the four tuning properties
+  applied at startup and shown in the (gate-deferred) status line.
+- `RattaEmrTest` (5). **207 core tests green, unchanged**; `gpaper-ratta` 12 (7 + 5).
+- `docs/api.md` (the per-engine cadence, the `PENCIL` EMR floor, the constant pencil bake, the
+  `RattaTuning` paragraph), `docs/architecture.md` (a seam may be a number), `CLAUDE.md`.
+
+**Outcome (Supernote Nomad, the artist's hand, 2026-09-15): every question answered, and one
+of them not the way the plan expected.** The walk ran as four rounds on the demo, each
+candidate set with `adb shell setprop <name> <value>`, the demo force-stopped and relaunched
+(the properties are read in `onCreate`), `dumpsys gfxinfo <pkg> reset`, then a minute of
+sketching and rubbing with the hand's verdict taken beside the counter — the verdict being the
+one that decides.
+
+| Round | Question | Answer |
+|---|---|---|
+| 1 | `raster_erase_ms` — the rubbing cadence | 100 ms good · 60 ms better · **16 ms best** |
+| 1 | `pencil_emr_min` — the hairline's firmware floor | **120**: the preview is the width the bake turns out to be |
+| 1 | Eraser-end pressure — real, or a constant? | **Real**: 2852 batches, 0.06–0.49, median 0.24 |
+| 2 | `pencil_grey` — which rung of the tone ladder | BLACK too dark, DARK_GRAY an improvement, GRAY tried — **none of them can work alone** |
+| 3 | The pressure pen code (`INK`) for the preview | **No visible difference** — the codes vary width, not tone |
+| 4 | `pencil_bake_pressure` — the constant the bake gives up to | **0.5**, with the DARK_GRAY preview: *"spot on"* / *"really good"* |
+
+**The cadence result is the one worth keeping.** The phase opened at 100 ms on the reasoning
+that Supernote has no regional-refresh transaction, so every mid-sweep redraw is a whole app
+frame presented while the pen is down — the frame-silence rule's forbidden case. The hand went
+the other way: *"I really like the 16 ms… this eraser works better on Ratta hardware than it
+does on Onyx."* And the counters agree that it *should* be worse — 100 ms: 113 frames, 20 %
+janky, p50 13 ms / p99 30; 60 ms: 162 frames, 22 %, the same percentiles; 16 ms: **756 frames,
+82 % janky**, p50 20 / p90 28 / p99 40, over ~2800 erase batches in the minute. The frame count
+is six times worse and the hand is right, because **the frame-silence rule's cost is the
+masking an overlay imposes on frames presented under it — and an erase contact releases the
+overlay at `ACTION_DOWN`.** Nothing accumulates during a sweep, so what is left is the panel's
+own update, which the Nomad keeps up with. 250 ms and end-only were never walked: there was no
+reason to go slower once 16 had won. So both engines sit at one frame, for entirely different
+reasons — which is exactly why the seam stays rather than folding back into a constant.
+
+**The pencil took three rounds to ask the right question.** Rounds 2 and 3 were spent trying to
+make a pressure-toned bake agree with its preview *from the preview's side*, and could not: the
+firmware paints one tone per armed pen, so a soft touch cannot preview softer at any rung of
+the grey ladder, and the pressure-sensitive codes vary width rather than tone. **The user's
+decision, revising Notesprout's pencil decision 3 for Ratta only:** on Supernote the `PENCIL`
+bake ignores pressure, so live and baked agree. The bake was never wrong — it was right about a
+tone the panel cannot show while the pen is down, which is a different fault and takes a
+different fix. BOOX and Paintsprout keep the pressure pencil; their preview can carry tone, so
+they have nothing to give up. At 0.5 against DARK_GRAY the artist judged the pair *"spot on"*
+on the panel and again in a Mac screencap at 3×.
+
+**The rest of the numbers.** Undo swaps **14–20 ms** per entry; whole-page swap **79–126 ms**
+(read 1–53 ms) on the 1404×1685 page — 9.46 MB; demo PSS **78 MB**. The bake-handoff flash on
+an undo was noticed and **accepted** (M4). `RasterRub`'s pressure-weighted lift is doing real
+work on this hardware, and the unreported-pressure guard is not carrying it.
+
+**Frozen, and the doors that closed.** The four measured values are now `RattaTuning`'s
+defaults — cadence 16 ms, EMR floor 120, preview `Grey.DARK`, bake pressure 0.5 — and the two
+doors answered with a "no" are **gone**: `pencilPreviewPressure` (with its `livePenCode`
+branch; `PENCIL` arms `NEEDLE` unconditionally again) and `logEraserPressure`, along with the
+`CanvasPaperView.onRasterEraseBatch` seam it was the only user of, and both demo properties.
+`RattaTuning` itself stays, holding the four measured numbers as a door for arc 43's later
+walks on a real page (K5/K6), and **is removed at the arc's close (K8)**, each value freezing
+into a constant.
+
+**No JVM test for the end-only sentinel or the bake seam.** `throttledEraseRedraw` and
+`bakePoints` are private and live inside an Android `View`; extracting a one-line comparison
+and a two-branch expression into pure modules to test them would be inventing the modules to
+justify the tests. Both are covered by the walk. `RattaEmrTest` (5) pins the part that *is*
+pure.
+
+**Held for the publish step.** Paintsprout Onyx consumes the **published** 0.1.31 artifacts, so
+its 203 JVM tests are not a gate here — the core change is additive (two `protected open`
+members and one private constant) and the compile check belongs to the publish step, with
+`publishToMavenLocal` and the SN re-pin held until Fable has read this diff and these numbers.
 
 ---
 

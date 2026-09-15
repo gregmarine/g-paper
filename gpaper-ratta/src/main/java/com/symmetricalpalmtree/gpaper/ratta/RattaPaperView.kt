@@ -62,12 +62,6 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private companion object {
         const val TAG = "GPaperRatta"
 
-        /** Floor/ceiling for the firmware EMR pen size (`px * 100`) — the Needle
-         *  penSizeArray runs ~200…2400, and an EMR near 0 paints an invisible
-         *  sub-pixel line that reads exactly like a dead firmware path. */
-        const val EMR_MIN = 200
-        const val EMR_MAX = 1200
-
         /** Floor for the firmware eraser EMR size (`radius * 50`, min 400 — PoC-validated). */
         const val ERASER_EMR_MIN = 400
 
@@ -197,6 +191,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * committed PEN baseline; the pressure-sensitive INK code carries FOUNTAIN/BRUSH;
      * DASH/CROSS are the firmware's native dash/x streams. CALLIGRAPHY arms 15 (14 is
      * the fallback if 15 disappoints on-device). Code 12 is broken — never armed.
+     *
+     * `PENCIL` stays on NEEDLE: arming the pressure-sensitive INK for it was tried on the
+     * Nomad (2026-09-15) and made no visible difference, while the pressure codes vary
+     * *width* — the one thing a preview must never lie about. The pencil's tone problem
+     * was answered at the bake instead ([RattaTuning.pencilBakePressure]).
      */
     private fun livePenCode(style: StrokeStyle): Int = when (style) {
         StrokeStyle.PEN, StrokeStyle.MARKER, StrokeStyle.PENCIL -> SupernoteInk.Pen.NEEDLE
@@ -206,19 +205,27 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         StrokeStyle.CALLIGRAPHY -> SupernoteInk.Pen.CALLIGRAPHY
     }
 
-    /** px → firmware EMR size (PoC formula: `width * 100`, clamped visible). */
-    private fun emrSize(widthPx: Float): Int = (widthPx * 100f).toInt().coerceIn(EMR_MIN, EMR_MAX)
-
     /** Eraser EMR size (PoC formula: `radius * 50` with a working floor). */
     private fun eraserEmr(): Int = (eraserRadius * 50f).toInt().coerceAtLeast(ERASER_EMR_MIN)
 
-    /** Arm the firmware pen with the current style/width and the armed colour mapped to
-     *  the nearest firmware grey — the baked stroke keeps its true ARGB value. */
+    /**
+     * The firmware colour for the armed pen: the nearest firmware grey to the ink's own
+     * colour, so the pen-lift handoff is invisible — except for `PENCIL`, which takes
+     * [RattaTuning.pencilPreviewGrey] straight. Graphite bakes as a scatter of flecks
+     * with bare paper between them and reads far paler than the solid line any firmware
+     * code paints, so the tone that matches pen-up is a rung on a ladder, not the nearest
+     * grey to `#505050` (which is BLACK). The baked stroke keeps its true ARGB value.
+     */
+    private fun firmwarePenColor(): Int =
+        if (penStyle == StrokeStyle.PENCIL) RattaTuning.pencilPreviewGrey
+        else RattaInkMap.firmwareColorFor(penColor)
+
+    /** Arm the firmware pen with the current style/width and its live colour. */
     private fun applyPenToFirmware() {
         SupernoteInk.setPen(
             livePenCode(penStyle),
-            emrSize(penWidth),
-            RattaInkMap.firmwareColorFor(penColor),
+            RattaEmr.penSize(penStyle, penWidth, RattaTuning.pencilEmrMin),
+            firmwarePenColor(),
         )
     }
 
@@ -345,6 +352,52 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // frames mid-writing.
         if (baked) armOverlayClearLadder()
     }
+
+    // ── The raster page (0.1.32) ─────────────────────────────────────────────
+
+    /**
+     * The raster eraser's redraw cadence on Supernote — **16 ms, measured on the Nomad
+     * 2026-09-15**, which is the same number Onyx uses and arrived at for a different
+     * reason. That is exactly why the seam stays: the two engines agree on the value and
+     * not on why, and the next panel will have its own answer.
+     *
+     * Onyx can afford a frame's cadence because its engine answers
+     * `presentRasterEraseProgress` with a regional `handwritingRepaint` of exactly the
+     * rubbed corridor. No such transaction exists here — the firmware owns the panel and
+     * the app can only present frames — so the phase opened at 100 ms expecting the
+     * frame-silence rule to bite. It does not bite on an erase sweep: that rule's cost is
+     * the *masking* an overlay imposes on frames presented under it, and an erase contact
+     * releases the overlay at ACTION_DOWN, so nothing accumulates. What is left is the
+     * panel's own update, and the Nomad keeps up with it. 100 ms was good (113 frames /
+     * 20 % janky over a minute), 60 ms better (162 / 22 %), 16 ms the artist's clear
+     * choice at 756 / 82 % — *"this eraser works better on Ratta hardware than it does on
+     * Onyx"*. The frame count is worse and the hand is right; the hand is what the
+     * cadence is for.
+     */
+    override val rasterEraseRedrawIntervalMs: Long
+        get() = RattaTuning.rasterEraseRedrawIntervalMs
+
+    /**
+     * `PENCIL` bakes at a constant pressure on this engine
+     * ([RattaTuning.pencilBakePressure]), so the live ink and the baked ink agree.
+     *
+     * The firmware paints **one tone per armed pen**: no rung of the grey ladder tracked
+     * a soft touch on the Nomad, and the pressure-sensitive pen codes vary width rather
+     * than tone, so a pressure-toned bake could only ever disagree with its own preview —
+     * a lightly drawn line previewing dark and then baking pale. Nothing on the preview's
+     * side can be fixed, so the bake gives up the tonal range instead. The panel was
+     * never going to show it while the pen was down.
+     *
+     * Gated on [firmware]: with the binder absent this view renders its own live ink
+     * through the same renderer as the bake, which *can* carry pressure — so there the
+     * real pressure is what keeps the two identical.
+     */
+    override fun bakePressure(style: StrokeStyle, pressure: Float): Float =
+        if (style == StrokeStyle.PENCIL && firmware) {
+            RattaTuning.pencilBakePressure ?: pressure
+        } else {
+            pressure
+        }
 
     /**
      * The handoff: bake any overlay-shown strokes into the committed layer, then clear
@@ -750,6 +803,21 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     // addStrokes / removeStrokes / setPageSize / notifyContentChanged need no override:
     // they re-record through redrawCommitted, whose pendingBake guard performs the
     // overlay handoff whenever the overlay was still showing unbaked ink.
+    //
+    // loadPageRaster and swapPageRaster (0.1.25 / 0.1.29) need no override either, and
+    // for two different reasons worth keeping straight — this is verified, not a gap:
+    //
+    //  - loadPageRaster is a content swap, and a host turning a page calls
+    //    clearForContentSwap first: the overlay is baked and released above, under the
+    //    swap law, before any pixel moves. Called on its own it still lands correctly,
+    //    because it ends in redrawCommitted.
+    //  - swapPageRaster is an undo, which arrives with no swap in front of it — the
+    //    artist draws a mark and takes it back, so the firmware overlay is very likely
+    //    still showing that mark's live ink. redrawCommitted's own pendingBake guard is
+    //    what covers it, in the order the law requires: the page image (already without
+    //    the undone mark, the swap having run) is re-recorded, THEN clearAll drops the
+    //    overlay, THEN the frame presents and the ladder arms. The overlay ink of the
+    //    undone mark goes with it and nothing of it survives on the panel.
 
     override fun releaseRender() {
         // Host chrome touch — the Ratta analogue of releasing the EPD overlay: bake

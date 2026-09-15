@@ -59,6 +59,57 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   before-image as a `RasterPatch`, and `swapPageRaster` puts it back and leaves the array holding
   what was there — one entry serves redo, no second copy of an 18 MB page mid-undo, and on Onyx
   only the patched region is refreshed. The swap runs row by row through one reused buffer.
+- **The raster eraser's mid-sweep cadence is PER ENGINE, because a redraw does not cost the
+  same thing on two panels (Phase 19, 0.1.32).** `rasterEraseRedrawIntervalMs` is a
+  `protected open val` the base reads in `throttledEraseRedraw`; `RASTER_ERASE_REDRAW_END_ONLY`
+  (`Long.MAX_VALUE`) means no mid-sweep redraw at all, and `finalizeEraseRedraw` presents the
+  final state once whether or not one ever ran. Onyx keeps 16 ms — one frame — because its
+  engine answers `presentRasterEraseProgress` with a regional `handwritingRepaint` of exactly
+  the rubbed corridor. **Supernote has no regional-refresh transaction to ask for**, so the
+  phase opened at 100 ms expecting the frame-silence rule to bite. **It does not bite on an
+  erase sweep** (Nomad, 2026-09-15): that rule's cost is the *masking* an overlay imposes on
+  frames presented under it, and an erase contact releases the overlay at `ACTION_DOWN`, so
+  nothing accumulates — what is left is the panel's own update, which the Nomad keeps up
+  with. Measured: 100 ms good (113 frames / 20 % janky per minute), 60 ms better (162 /
+  22 %), **16 ms the artist's clear choice at 756 / 82 %** — *"this eraser works better on
+  Ratta hardware than it does on Onyx."* **The frame count is far worse and the hand is
+  right**, which is only a contradiction if you were judging the frames. So both engines sit
+  at 16 ms for entirely different reasons, and **agreeing on a number is not sharing a
+  reason** — the seam stays rather than collapsing back into a constant, because the next
+  panel will have its own answer. The tuning door (`RattaTuning`) exists so a walk switches
+  candidates with `setprop` rather than a rebuild each: a judgement of *feel* made against a
+  stale memory of the previous candidate is no judgement.
+- **A preview can only be honest about what the firmware can vary; where it cannot vary tone,
+  the BAKE gives up tone rather than the preview lying (Phase 19, 0.1.32).** The Supernote
+  firmware paints one tone per armed pen. Three rounds on the Nomad tried to make a
+  pressure-toned pencil agree with its preview from the preview's side — a darker grey, then
+  a lighter one, then the pressure-sensitive pen codes — and none could, because the codes vary
+  *width* and the greys are fixed per arming: a lightly drawn line previewed dark and baked
+  pale every time. So `bakePressure(style, pressure)` (a `protected open fun`, identity by
+  default, applied in `compositeIntoRaster` — the one place a raster page is written) lets
+  Ratta bake `PENCIL` at a constant **0.5 against a DARK_GRAY preview** — the artist's *"spot
+  on"*, on the panel and at 3× in a screencap — and the mark on the panel is the mark drawn.
+  **The bake was never wrong** — it was right about a tone the panel could not show while the
+  pen was down, which is a different thing and takes a different fix. Onyx and Paintsprout keep
+  the pressure pencil, because their preview can carry tone; and **stroke mode is untouched on
+  every engine** — the pressures in a `Stroke` are the host's data and must be the measured
+  ones.
+- **A hairline needs a lower firmware floor than a pen does (Phase 19, 0.1.32).** `RattaEmr`
+  (pure, JVM-tested) clamps `px * 100` to 200…1200 for every style but `PENCIL`, whose floor is
+  `EMR_MIN_HAIRLINE` (120, a candidate pending the Nomad measurement). The general floor exists
+  because an EMR near zero paints a sub-pixel line that reads exactly like a dead firmware
+  path — but the sketching pencil is a 1.2 px lead, and at floor 200 the firmware previews it
+  as a 2 px needle and the mark visibly narrows at pen-up. **A preview that lies about width is
+  the serious failure** (the BOOX `CHARCOAL` lesson, from the other direction): width is what
+  the hand aims with, and the collapse is read as the *bake* being broken.
+- **`loadPageRaster` and `swapPageRaster` need no Ratta override, for two different reasons
+  (verified Phase 19 — not a gap).** `loadPageRaster` is a content swap and a page turn calls
+  `clearForContentSwap` first, which bakes and releases the overlay under the swap law before
+  any pixel moves. `swapPageRaster` is an **undo**, which arrives with no swap in front of it —
+  the mark being taken back is very likely still live firmware ink — and what covers it is
+  `redrawCommitted`'s own `pendingBake` guard, in the order the law requires: re-record the
+  page image (already swapped), *then* `clearAll`, *then* present, then arm the ladder. The
+  undone mark's overlay ink goes with the clear.
 - **The same renderer does not make the same pixels on a different rasteriser (Phase 13).**
   `StrokeRenderer` into a hardware `RenderNode` (the committed layer) and into a software
   `Canvas(bitmap)` (`StrokeRasterizer`, covers, the raster page) lay the hairline pencil with the

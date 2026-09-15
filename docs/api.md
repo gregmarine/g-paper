@@ -116,6 +116,29 @@ engine it always had.
 | In | `swapPageRaster(patches)` (0.1.29) | Each patch's pixels go onto the page and **its array is left holding what was there** — one entry serves undo and redo, no second copy. Overlapping patches: reverse read order to undo, read order to redo. One repaint; on Onyx only the region covered. Fires nothing on the listener. A rect not wholly on the page is skipped and logged, never clipped |
 | — | Eraser (0.1.26, rubbing since 0.1.30) | The same sweep as stroke mode, but it **rubs pixels**: within `eraserRadius` of the sweep the alpha is lifted by a fraction per pass — `rasterRubbing` sets the light and firm lift and the feathered edge — once per pixel per pass, again on each reversal of travel, so a light pass softens a line and a few firm passes take it out. Each batch fires `onRasterWillChange(rect)` → lift → `onRasterChanged(rect)` (accumulate the tiles into one undo entry, closed at `onPenLifted`); `onStrokesErased` never fires. The Onyx engine repaints the changed region per throttled batch so rubbing reads live on the panel |
 
+**The eraser's mid-sweep cadence is per engine (0.1.32)**, and it is a measurement, not a
+setting. Both engines landed on **16 ms** — one frame — and for different reasons, which is
+why the seam exists rather than a constant. Onyx can afford it because its engine asks the
+panel to refresh just the rubbed corridor. Supernote has no such transaction, so 100 ms was
+the starting guess; the frame-silence rule turned out not to bite on an erase sweep, because
+its cost is the *masking* an overlay imposes and an erase contact releases the overlay at
+pen-down. Measured on a Nomad (2026-09-15): 100 ms good, 60 ms better, 16 ms the artist's
+clear choice despite the worse frame count. Hosts set nothing either way, and what a host is
+told is unchanged in both engines — the same `onRasterWillChange` / `onRasterChanged` per
+batch, the same one entry per contact.
+
+**On Supernote the pencil bakes at a constant pressure — 0.5, with a DARK_GRAY preview
+(0.1.32)** — so the one-tone firmware preview and the bake agree. That firmware paints a
+single tone per armed pen: no choice of grey tracks a soft touch (black, dark grey and grey
+were all walked), and its pressure-sensitive codes vary *width*, not tone, so arming one
+changed nothing visible. A pressure-toned bake could therefore only ever disagree with its own
+preview — a light line previewing dark and baking pale. Nothing on the preview's side is left
+to vary, so on that engine the bake gives up the tonal range instead; the artist's verdict on
+the pair was *"spot on"*, on the panel and at 3× in a screencap. A per-engine measurement, not
+a model change: Onyx and generic keep the pressure pencil, and **stroke mode is untouched
+everywhere** — the `Stroke` a host persists always carries the pressures the digitizer
+reported.
+
 The image is a layer *over* the paper (white + template still draw under it), so the eraser
 clears to transparent rather than painting white. Format is ARGB_8888; about
 18 MB at a 1860 × 2480 page — one per view, for the life of the page.
@@ -195,6 +218,13 @@ verified on five BOOX devices; the Ratta 0…31 pen-code sweep on Nomad + Manta)
 | `CALLIGRAPHY` | chisel nib, direction-dependent | `STROKE_STYLE_SQUARE_PEN` (7) | code 15 (14 fallback) |
 | `DASH` | uniform, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
 | `CROSS` | stream of small x marks | `STROKE_STYLE_CHARCOAL` (4) — nearest texture, no x-stream in firmware | code 3 (x stream) |
+
+Ratta live width is the firmware's EMR size, `px * 100`, clamped to 200…1200 — except that
+**`PENCIL` has a floor of its own, 120 (0.1.32)**. The sketching pencil is a 1.2 px
+hairline, and at the general floor the firmware previews it as a 2 px needle line: the mark
+would visibly narrow at pen-up when the bake lays the real width, and a preview that lies
+about width is the worst kind, because the hand aims with it and reads the collapse as the
+*bake* being broken. 120 is a candidate pending the Nomad measurement, not a settled number.
 
 Ratta codes with no `StrokeStyle`: 12 is broken firmware-side (never armed), 6/7/9/13
 render nothing, 0/5/8/11 are redundant solid variants of `NEEDLE`, 17–31 alias `INK`.
@@ -554,6 +584,23 @@ Explicit registration — no ServiceLoader, no reflection, R8-safe:
   choice at `Log.i`; `GPaper.create(context, "onyx")` is an explicit override that
   **bypasses** the availability probe. No engine → `IllegalStateException`. **No runtime
   fallback ever** — post-construction engine failures are loud, never silently swapped.
+
+### `RattaTuning` — a measurement door, not host API (0.1.32)
+
+`gpaper-ratta` carries one public object, `RattaTuning`, holding the four Supernote
+raster-page numbers arc 43 "Sketch" settled by hand on a Nomad: the raster eraser's redraw
+cadence (`rasterEraseRedrawIntervalMs`, 16 ms), the `PENCIL` EMR floor (`pencilEmrMin`, 120),
+the pencil's live preview tone (`pencilPreviewGrey`, one of `RattaTuning.Grey` — `BLACK` /
+`DARK` / `GRAY` / `LIGHT` — default `DARK`), and the constant pressure its bake gives up to
+match that preview (`pencilBakePressure`, 0.5; `null` for the real pressure). They are mutable
+so a walk can switch candidates with `setprop` and a restart rather than a rebuild per
+candidate — which is how a judgement of *feel* ends up made against a stale memory of the
+previous one. **Measured 2026-09-15: the defaults are the measurements**, and the two doors
+that were answered "no" (a pressure-sensitive pencil preview, an eraser-pressure log) were
+removed rather than left lying about. **Hosts leave every value at its default**; there is no
+compatibility promise, and the object goes away at the arc's close, each value freezing into a
+constant. Nothing in `gpaper-core`'s host-facing surface changed to make it possible: the
+cadence and the bake pressure are `protected open` seams a device engine overrides.
 
 ## Threading rules
 

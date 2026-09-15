@@ -99,6 +99,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
          */
         const val RASTER_ERASE_REDRAW_INTERVAL_MS = 16L
 
+        /**
+         * The [rasterEraseRedrawIntervalMs] value meaning "no mid-sweep redraw at
+         * all": the sweep is presented once, at its end, by [finalizeEraseRedraw].
+         * A sentinel rather than a flag because the cadence is one number an engine
+         * measures, and "never" is the far end of the same scale.
+         */
+        const val RASTER_ERASE_REDRAW_END_ONLY = Long.MAX_VALUE
+
         /** Default eraser hit radius in px, mirrored from the reference engines. */
         const val DEFAULT_ERASER_RADIUS_PX = 15f
 
@@ -640,10 +648,50 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         val canvas = Canvas(target)
         for (s in strokes) {
             StrokeRenderer.draw(
-                canvas, s.points, s.color, s.width, s.style, scratchPaint, s.id.hashCode(),
+                canvas, bakePoints(s), s.color, s.width, s.style, scratchPaint, s.id.hashCode(),
             )
         }
     }
+
+    /**
+     * The pressure a sample bakes with on a raster page — identity, unless a device
+     * engine overrides [bakePressure].
+     *
+     * Applied here, at the one place a raster page is written, so it covers a fresh mark,
+     * a `loadStrokes` bake and an `addStrokes` bake alike — and nowhere else: the
+     * [Stroke] handed to [PaperListener.onStrokeCommitted] keeps the pressures the
+     * digitizer reported, because in stroke mode that object is the host's data and the
+     * host owns it.
+     */
+    private fun bakePoints(stroke: Stroke): List<StrokePoint> {
+        val pts = stroke.points
+        // Identity by default, so nothing is copied on an engine that doesn't override
+        // the seam. Raw bits rather than ==, so an unreported NaN pressure compares
+        // equal to itself instead of faking a change and copying the whole polyline.
+        val differs = pts.any {
+            bakePressure(stroke.style, it.pressure).toRawBits() != it.pressure.toRawBits()
+        }
+        if (!differs) return pts
+        return pts.map { it.copy(pressure = bakePressure(stroke.style, it.pressure)) }
+    }
+
+    /**
+     * What pressure a captured sample should bake with on a **raster page** — the whole
+     * point being that the preview and the bake agree, so this is where an engine gives
+     * up a tone its hardware cannot show. The default is the pressure that was reported,
+     * and Onyx and the generic engine keep it.
+     *
+     * The case it exists for: Supernote's firmware paints **one tone per armed pen**. No
+     * choice of firmware grey can track a soft touch, so a lightly drawn line always
+     * previews darker than a pressure-toned bake of it — and the fix cannot be on the
+     * preview's side, because there is nothing there to vary. Ratta therefore bakes its
+     * `PENCIL` at a constant pressure: the mark on the panel is the mark that was drawn,
+     * at the cost of a tonal range the panel was never going to preview anyway.
+     *
+     * Stroke mode is untouched — the kept [Stroke] is the host's data, and a host that
+     * persists a pressure must get the one that was measured.
+     */
+    protected open fun bakePressure(style: StrokeStyle, pressure: Float): Float = pressure
 
     /** The page-space patch a stroke may touch when composited — see [RasterDirty]. */
     private fun rasterDirtyOf(stroke: Stroke): Bounds? {
@@ -1569,10 +1617,39 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         return ByteArray(width * height).also { rubPass = it }
     }
 
+    /**
+     * How often the raster eraser may redraw mid-sweep, in milliseconds — the
+     * per-engine cadence seam (0.1.32). [RASTER_ERASE_REDRAW_END_ONLY] means never:
+     * the sweep is presented once, at its end.
+     *
+     * The seam exists because a mid-rub redraw costs a different thing on every
+     * panel, and the right number is a measurement, not a constant. On Onyx the raw
+     * pipeline withholds ordinary frames while the pen is down, so the engine asks
+     * the panel for the changed region itself ([presentRasterEraseProgress]) and one
+     * frame's cadence buys exactly that region. On Supernote there is no
+     * regional-refresh transaction to ask for: every mid-sweep redraw is a whole app
+     * frame the ink daemon must reconcile against the frozen pixels under its
+     * overlay, and that cost grows with the unbaked ink already on it (the
+     * frame-silence rule). So the cadence that reads as live rubbing on one panel is
+     * the cadence that lags the hand on another, and each engine carries its own.
+     *
+     * Onyx and the generic engine keep [RASTER_ERASE_REDRAW_INTERVAL_MS], unchanged.
+     * Ratta measured its way to the same 16 ms for a different reason (the frame-silence
+     * cost is the overlay's masking, and an erase contact has already released the
+     * overlay) — **agreeing on the number is not the same as sharing the reason**, which
+     * is why the seam stays rather than collapsing back into a constant.
+     */
+    protected open val rasterEraseRedrawIntervalMs: Long get() = RASTER_ERASE_REDRAW_INTERVAL_MS
+
     private fun throttledEraseRedraw() {
-        val now = SystemClock.uptimeMillis()
-        val interval = if (pageMode == PageMode.RASTER) RASTER_ERASE_REDRAW_INTERVAL_MS
+        val interval = if (pageMode == PageMode.RASTER) rasterEraseRedrawIntervalMs
                        else ERASE_REDRAW_INTERVAL_MS
+        // End-only: nothing is presented until finalizeEraseRedraw, which redraws the
+        // committed layer whether or not a mid-sweep redraw ever ran. The pending
+        // union goes on accumulating and is dropped there, exactly as it is when the
+        // last batch of an ordinary sweep falls inside the throttle window.
+        if (interval == RASTER_ERASE_REDRAW_END_ONLY) return
+        val now = SystemClock.uptimeMillis()
         if (now - lastEraseRedrawMs >= interval) {
             lastEraseRedrawMs = now
             redrawCommitted()
