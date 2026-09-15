@@ -1087,7 +1087,7 @@ pass."* An adb walk diffed a leaf add/undo/redo pixel-exact beforehand.
 ---
 
 ### Phase 18 — The rubbing eraser: graphite lifted a little at a time (post-v0.1.0)
-**Status:** 🧪 Built 2026-09-14, awaiting the NoteAir5C hand · **Publishes:** 0.1.30 · Opened
+**Status:** ✅ Complete (closed 2026-09-14 on the NoteAir5C, commit `ba8ee8b`) · **Publishes:** 0.1.30 · Opened
 2026-09-14 for Paintsprout Onyx's arc 2 (`ONYX_PLAN.md`, phase E1), which owns the walk.
 
 Phase 14's rubber cut a hole: the sweep stroked onto the page in `CLEAR`, everything within the
@@ -1129,9 +1129,11 @@ the third is the host's radius.
 dwell counts; feathered edge; the rubber **replaces** the hard eraser — there is no `CLEAR`
 mode left to arm.
 
-**Outcome:** *(pending the hand: a line softened in one pass and gone in a few; shading
-lightened evenly; the pen's eraser end rubs; undo takes a rub back whole; a `screencap` before
-and after one light pass shows the corridor paler by about the lift and nothing outside it moved.)*
+**Outcome (NoteAir5C, the artist's hand, 2026-09-14):** *"I'm impressed. This eraser feels
+fantastic!"* Nothing tuned — the phase-start numbers stand. The host's smaller radius (18 → 12 px)
+was judged at the same time: *"The stroke eraser feels better now as well. I think making it
+smaller was the right call."* Whether the eraser end reports real pressure was not separated out
+by the hand and remains unmeasured; the unreported-pressure guard makes it safe either way.
 
 ---
 
