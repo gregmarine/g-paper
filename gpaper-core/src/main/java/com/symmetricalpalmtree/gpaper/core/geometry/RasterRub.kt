@@ -43,6 +43,9 @@ object RasterRub {
     /** Travel shorter than this within a batch says nothing about direction. */
     const val MIN_TRAVEL_PX = 2f
 
+    /** An alpha under this after a lift is nothing: one part in a hundred, under any panel's greys. */
+    const val GONE_BELOW_ALPHA = 3
+
     /** One pass's lift at [pressure] (0..1; anything outside is the middle of the range). */
     fun lift(pressure: Float, rubbing: RasterRubbing): Float {
         val p = if (pressure.isNaN() || pressure < 0f || pressure > 1f) 0.5f else pressure
@@ -130,7 +133,13 @@ object RasterRub {
                 val argb = pixels[i]
                 val a0 = argb ushr 24
                 if (a0 != 0) {
-                    val a1 = (a0 * (1f - p1) / (1f - p0)).roundToInt().coerceIn(0, 255)
+                    var a1 = (a0 * (1f - p1) / (1f - p0)).roundToInt().coerceIn(0, 255)
+                    // Graphite the panel cannot show is graphite that is gone. A lift is a
+                    // ratio and a ratio never reaches zero — a line rubbed out by eye would keep
+                    // an alpha of one or two for twenty light passes — and a page of such ghosts
+                    // is a page the host's blank test calls drawn on, so a rubbed-out leaf would
+                    // wear a smudge on the shelf. Below this the pixel is let go entirely.
+                    if (a1 < GONE_BELOW_ALPHA) a1 = 0
                     pixels[i] = (a1 shl 24) or (argb and 0x00FFFFFF)
                 }
                 pass[maskIndex] = (p1 * 255f).roundToInt().coerceIn(0, 255).toByte()

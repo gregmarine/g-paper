@@ -138,6 +138,18 @@ class RasterRubTest {
         assertEquals(0, alphaAt(pixels, pageW, 32, 32))
     }
 
+    @Test
+    fun `graphite too faint to show is let go entirely`() {
+        val pixels = graphite(pageW, pageH)
+        val pass = ByteArray(pageW * pageH)
+        // Six firm passes: 255 × 0.4⁶ ≈ 1.04, which would round to 1 and sit there for ever.
+        repeat(6) {
+            rub(pixels, pass, listOf(p(32f, 32f)), 0.6f)
+            RasterRub.clearPass(pass, pageW, 0, 0, pageW, pageH)
+        }
+        assertEquals(0, alphaAt(pixels, pageW, 32, 32))
+    }
+
     // ── Reversal ─────────────────────────────────────────────────────────────
 
     @Test

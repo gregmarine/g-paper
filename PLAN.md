@@ -1135,6 +1135,11 @@ was judged at the same time: *"The stroke eraser feels better now as well. I thi
 smaller was the right call."* Whether the eraser end reports real pressure was not separated out
 by the hand and remains unmeasured; the unreported-pressure guard makes it safe either way.
 
+**0.1.31 (the arc-2 code review, 2026-09-14):** a lift is a ratio and never reaches zero, so a
+line rubbed out by eye kept an alpha of one or two for twenty light passes and the host's blank
+test called the leaf drawn on. `rubBatch` now lets a pixel go entirely below `GONE_BELOW_ALPHA`
+(3); one test added (14).
+
 ---
 
 ## Standing Open Questions (ask as they become relevant)
