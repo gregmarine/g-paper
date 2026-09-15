@@ -114,7 +114,7 @@ engine it always had.
 | Out | `copyPageRaster(rect)` | A copy of a patch as a bitmap |
 | Out | `readPageRaster(rect)` (0.1.29) | The pixels inside a rect as a `RasterPatch` (page-space rect + row-major ARGB `IntArray`) — **the before-image for undo**, in the shape `swapPageRaster` takes back. A page with no image yet reads as transparent, so the first mark's before-image is nothing, read for free |
 | In | `swapPageRaster(patches)` (0.1.29) | Each patch's pixels go onto the page and **its array is left holding what was there** — one entry serves undo and redo, no second copy. Overlapping patches: reverse read order to undo, read order to redo. One repaint; on Onyx only the region covered. Fires nothing on the listener. A rect not wholly on the page is skipped and logged, never clipped |
-| — | Eraser (0.1.26) | The same sweep as stroke mode, but it **rubs pixels**: every pixel within `eraserRadius` of the sweep goes transparent. Each batch fires `onRasterWillChange(rect)` → clear → `onRasterChanged(rect)` (accumulate the tiles into one undo entry, closed at `onPenLifted`); `onStrokesErased` never fires. The Onyx engine repaints the changed region per throttled batch so rubbing reads live on the panel |
+| — | Eraser (0.1.26, rubbing since 0.1.30) | The same sweep as stroke mode, but it **rubs pixels**: within `eraserRadius` of the sweep the alpha is lifted by a fraction per pass — `rasterRubbing` sets the light and firm lift and the feathered edge — once per pixel per pass, again on each reversal of travel, so a light pass softens a line and a few firm passes take it out. Each batch fires `onRasterWillChange(rect)` → lift → `onRasterChanged(rect)` (accumulate the tiles into one undo entry, closed at `onPenLifted`); `onStrokesErased` never fires. The Onyx engine repaints the changed region per throttled batch so rubbing reads live on the panel |
 
 The image is a layer *over* the paper (white + template still draw under it), so the eraser
 clears to transparent rather than painting white. Format is ARGB_8888; about
@@ -164,7 +164,7 @@ ink, thumbnails of rows never loaded on a surface).
 ## Tools, selection, and events
 
 `paper.tool` ∈ `NONE | PEN | ERASER | LASSO`; pen via `penColor` / `penWidth` /
-`penStyle`, eraser via `eraserRadius`. Finger input is never a tool — it passes through
+`penStyle`, eraser via `eraserRadius` (and, on a raster page, `rasterRubbing`). Finger input is never a tool — it passes through
 to the host — with one narrow exception: while a lasso selection is active, a single
 finger inside the box drags the selection and a finger tap outside dismisses it, both
 palm-gated (`isPenActive` refuses the contact, a pen turning active mid-drag cancels

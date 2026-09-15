@@ -1086,6 +1086,55 @@ pass."* An adb walk diffed a leaf add/undo/redo pixel-exact beforehand.
 
 ---
 
+### Phase 18 — The rubbing eraser: graphite lifted a little at a time (post-v0.1.0)
+**Status:** 🧪 Built 2026-09-14, awaiting the NoteAir5C hand · **Publishes:** 0.1.30 · Opened
+2026-09-14 for Paintsprout Onyx's arc 2 (`ONYX_PLAN.md`, phase E1), which owns the walk.
+
+Phase 14's rubber cut a hole: the sweep stroked onto the page in `CLEAR`, everything within the
+radius gone in one pass, the corridor's antialiased edge plainly a side. The raster experiment
+closed yes on that eraser, and the artist's notes on it were exact — *it cut holes rather than
+lightened*, *the corridor's edge showed*, *the rubber is too large*. This phase is the first two;
+the third is the host's radius.
+
+**What landed:**
+- `RasterRubbing(liftLight, liftFirm, feather)` in the core package, and `PaperView.rasterRubbing`
+  with the artist's defaults: one pass lifts a quarter of what is there at a light touch and three
+  fifths firm, interpolated by pressure (an unreported pressure — NaN, negative, over 1 — counts as
+  the middle); half the radius, measured in from the edge, is feathered.
+- `geometry/RasterRub`, pure: `coverage` (1 in the core, linear to 0 at the radius), `lift`,
+  `direction` / `isReversal` (a batch travelling more than 120° against the last one), and
+  `rubBatch`, which reads a batch rect of straight-alpha pixels, raises a page-sized byte
+  **pass mask** to `max(old, lift × coverage)` per pixel and scales alpha by
+  `(1 − new) / (1 − old)`. Colour is untouched: lifted graphite is paler, not a different grey.
+- **A pass lifts each pixel once; a reversal starts a new pass.** Batches arrive every frame and
+  overlap at their seams — a rubber that lifted twice wherever two batches met would bead every
+  fast sweep — so within a pass the mask only ever rises. When the arm comes back the pass is
+  dropped and the next lift lands on what the last one left, so dwell counts, as the artist
+  asked. The page's alpha already carries every settled pass, so the ratio needs no memory of
+  them: one byte mask, cleared only over the rect the pass touched, is the whole state.
+- `CanvasPaperView.eraseRasterAlong` is now `getPixels` → `rubBatch` → `setPixels` on the batch
+  rect, mean pressure of the batch as the lift's input; the `CLEAR` paint and path are gone.
+  Everything announced is unchanged — `onRasterWillChange(rect)` before, `onRasterChanged(rect)`
+  after, the one-frame throttled regional repaint between — so the host's grid undo and the Onyx
+  live rubbing ride as before. `beginEraseSweep` drops the pass and the direction.
+- `RasterRubTest` (13): the lift curve and the unreported-pressure guard; the coverage profile
+  with and without feather; one pass lifting the fraction under the core and the edge less than
+  the middle; two chained batches not lifting their seam twice; a second pass compounding
+  (0.6 × 0.6); a firmer batch raising to its own level, a lighter one changing nothing; a fully
+  lifted pixel staying at nothing; reversal versus a corner; the pass cleared over a rect only.
+  206 core tests green; the Onyx module compiles unchanged.
+- `docs/api.md` (the raster eraser row and the tool line), `docs/host-responsibilities.md`.
+
+**Decided at phase start (the artist, 2026-09-14):** pressure-weighted, a quarter to about 60 %,
+dwell counts; feathered edge; the rubber **replaces** the hard eraser — there is no `CLEAR`
+mode left to arm.
+
+**Outcome:** *(pending the hand: a line softened in one pass and gone in a few; shading
+lightened evenly; the pen's eraser end rubs; undo takes a rub back whole; a `screencap` before
+and after one light pass shows the corridor paler by about the lift and nothing outside it moved.)*
+
+---
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

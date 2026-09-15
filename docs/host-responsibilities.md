@@ -94,7 +94,8 @@ before the pixels move — `readPageRaster(rect)` there (0.1.29) is exactly what
 overwrites, as a `RasterPatch`. Undo is `swapPageRaster(patches)`: the patch goes onto the page
 and comes back holding what was there, so the **same entry serves redo** with no second copy
 and no second call shape. Bound such a stack by **bytes** (`RasterPatch.bytes`), not count: a
-page-wide erase's before-image is the whole page. An eraser sweep (0.1.26) fires the pair
+page-wide erase's before-image is the whole page. An eraser sweep (0.1.26; a rubbing lift rather
+than a clear since 0.1.30, same calls) fires the pair
 **once per batch** — many times per contact, and the batch rects overlap heavily along the
 sweep — so accumulate into one entry while a pen-down is open, close it at `onPenLifted`, and
 do not store a rect you already hold the pixels of (a fixed grid of cells, each read once per

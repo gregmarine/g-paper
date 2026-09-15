@@ -89,6 +89,13 @@ interface PaperView {
     /** Eraser hit radius in px around the stylus position. */
     var eraserRadius: Float
 
+    /**
+     * How hard the rubber rubs on a raster page (0.1.30): the lift per pass at a light
+     * and a firm touch, and how much of the radius is feathered. Ignored in stroke mode,
+     * where the eraser takes whole marks. See [RasterRubbing] for the defaults.
+     */
+    var rasterRubbing: RasterRubbing
+
     // ── Pen-gesture recognizers (opt-in, default off) ────────────────────────
 
     /**

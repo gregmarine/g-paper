@@ -7,8 +7,6 @@ import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.RenderNode
@@ -18,6 +16,7 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import com.symmetricalpalmtree.gpaper.core.PageMode
+import com.symmetricalpalmtree.gpaper.core.RasterRubbing
 import com.symmetricalpalmtree.gpaper.core.PaperListener
 import com.symmetricalpalmtree.gpaper.core.RasterPatch
 import com.symmetricalpalmtree.gpaper.core.PaperView
@@ -32,6 +31,7 @@ import com.symmetricalpalmtree.gpaper.core.geometry.GestureRecognizer
 import com.symmetricalpalmtree.gpaper.core.geometry.LassoHitTest
 import com.symmetricalpalmtree.gpaper.core.geometry.RasterDirty
 import com.symmetricalpalmtree.gpaper.core.geometry.RasterErase
+import com.symmetricalpalmtree.gpaper.core.geometry.RasterRub
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapEngine
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapGuide
 import com.symmetricalpalmtree.gpaper.core.geometry.TransformGeometry
@@ -201,21 +201,25 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var rasterErasePending: Rect? = null
 
     /**
-     * The eraser's own paint for a raster page: a round-capped, round-joined stroke
-     * at twice the radius that *clears* what it crosses. CLEAR rather than white
-     * because the page image is a layer over the paper, not the paper — white and the
-     * template still draw beneath it — so a rubber that painted white would leave
-     * opaque holes in any sheet that one day sits under it. Antialiased, so the edge of
-     * the corridor is a soft edge and not a staircase; the batch rect's margin covers
-     * the half-cleared pixels.
+     * The rubbing eraser's state for the contact in progress (0.1.30) — see [RasterRub]
+     * for the model. [rubPass] is the page-sized byte mask of how much this pass has
+     * lifted each pixel so far; [rubPassRect] is the page rect it has touched, so that
+     * dropping the pass at a reversal or a fresh contact clears only what was written;
+     * [rubDirection] is the last batch's travel, which a reversal is judged against;
+     * [rubPixels] is the reused scratch for one batch's rect of page pixels.
+     *
+     * 0.1.26 stroked the sweep onto the page in `CLEAR` — a rubber that cut a hole in
+     * one pass, with an edge that showed. The artist drew with it for an afternoon and
+     * asked for graphite that *lightens*, a corridor whose edge fades, and a smaller
+     * rubber; the first two are this, the third is the host's radius. Nothing about
+     * *what is announced* changed: will-change with the batch rect before the pixels
+     * move, changed after, the throttled regional repaint between — the host's undo and
+     * the panel's live rubbing both ride on the same calls as before.
      */
-    private val rasterErasePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-        xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
-    }
-    private val rasterErasePath = Path()
+    private var rubPass: ByteArray? = null
+    private var rubPassRect: Rect? = null
+    private var rubDirection: FloatArray? = null
+    private var rubPixels = IntArray(0)
 
     /** Content ids already reported to [PaperListener.onContentErased] this erase gesture —
      *  the host removes content asynchronously, so its hit target can outlive the report by
@@ -404,6 +408,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     override var penStyle: StrokeStyle = StrokeStyle.PEN
 
     override var eraserRadius: Float = DEFAULT_ERASER_RADIUS_PX
+    override var rasterRubbing: RasterRubbing = RasterRubbing()
 
     override var pageMode: PageMode = PageMode.STROKE
         set(value) {
@@ -1431,7 +1436,19 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected fun beginEraseSweep() {
         lastEraserPoint = null
         rasterErasePending = null
+        dropRubPass()
+        rubDirection = null
     }
+
+    /** Forget the rubbing pass in progress: the next batch lifts on top of what is there. */
+    private fun dropRubPass() {
+        val rect = rubPassRect ?: return
+        rubPass?.let { RasterRub.clearPass(it, rubPassWidth, rect.left, rect.top, rect.width(), rect.height()) }
+        rubPassRect = null
+    }
+
+    /** The row length the pass mask was allocated for — the page's width at the time. */
+    private var rubPassWidth = 0
 
     /** Fire [PaperListener.onPenLifted] — for device subclasses' own gesture ends. */
     protected fun firePenLifted() {
@@ -1496,15 +1513,21 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     /**
-     * Rub one batch of the sweep off a raster page (0.1.26). There is nothing to hit-test:
-     * the sweep is stroked onto the page image with [rasterErasePaint], and every pixel
-     * within the radius of the polyline goes transparent — the corridor [RasterErase]
-     * describes. The host hears about it exactly as it hears about a mark — will-change
-     * with the batch rect before the pixels go (its before-image moment, one tile per
-     * batch accumulating into one undo entry), changed after — and nothing else fires:
-     * there are no ids for `onStrokesErased` to carry. Host content renderers are not
-     * consulted either; on a raster page the eraser is a rubber, not a tool that removes
-     * objects, and the reference engines' content erase stays a stroke-mode feature.
+     * Rub one batch of the sweep into a raster page (0.1.30; a hole-cutter from 0.1.26).
+     * There is nothing to hit-test: the batch's pixels are read out of the page image,
+     * lifted by [RasterRub.rubBatch] according to [rasterRubbing] and the batch's mean
+     * pressure, and written back. The host hears about it exactly as it hears about a
+     * mark — will-change with the batch rect before the pixels move (its before-image
+     * moment, one tile per batch accumulating into one undo entry), changed after — and
+     * nothing else fires: there are no ids for `onStrokesErased` to carry. Host content
+     * renderers are not consulted either; on a raster page the eraser is a rubber, not a
+     * tool that removes objects, and the reference engines' content erase stays a
+     * stroke-mode feature.
+     *
+     * A reversal of travel ends the pass first, so rubbing back and forth lifts again on
+     * each stroke of the arm; within a pass the seams between batches lift nothing twice.
+     * The pass mask is allocated once per page size and cleared over only what a pass
+     * touched — a page-sized zeroing per contact would be five megabytes for nothing.
      *
      * A page that has never been drawn on has no image, and rubbing it is nothing.
      */
@@ -1512,21 +1535,38 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         val target = pageRaster ?: return
         val dirty = RasterErase.batchRect(sweep, eraserRadius, target.width, target.height)
             ?.toRectOut() ?: return
-        paperListener?.onRasterWillChange(dirty)
-        rasterErasePath.rewind()
-        rasterErasePath.moveTo(sweep[0].x, sweep[0].y)
-        if (sweep.size == 1) {
-            // A stationary dab: a zero-length line still gets its round caps, so the
-            // rubber leaves a disc where it touched rather than nothing.
-            rasterErasePath.lineTo(sweep[0].x, sweep[0].y)
-        } else {
-            for (i in 1 until sweep.size) rasterErasePath.lineTo(sweep[i].x, sweep[i].y)
+        val pass = rubPassFor(target.width, target.height)
+        RasterRub.direction(sweep)?.let { next ->
+            if (RasterRub.isReversal(rubDirection, next)) dropRubPass()
+            rubDirection = next
         }
-        rasterErasePaint.strokeWidth = eraserRadius * 2f
-        Canvas(target).drawPath(rasterErasePath, rasterErasePaint)
+        paperListener?.onRasterWillChange(dirty)
+        val w = dirty.width()
+        val h = dirty.height()
+        if (rubPixels.size < w * h) rubPixels = IntArray(w * h)
+        target.getPixels(rubPixels, 0, w, dirty.left, dirty.top, w, h)
+        var pressure = 0f
+        for (p in sweep) pressure += p.pressure
+        pressure /= sweep.size
+        val changed = RasterRub.rubBatch(
+            pixels = rubPixels, left = dirty.left, top = dirty.top, width = w, height = h,
+            pageWidth = target.width, pass = pass, sweep = sweep, radius = eraserRadius,
+            rubbing = rasterRubbing, lift = RasterRub.lift(pressure, rasterRubbing),
+        )
+        if (changed) target.setPixels(rubPixels, 0, w, dirty.left, dirty.top, w, h)
+        rubPassRect = rubPassRect?.apply { union(dirty) } ?: Rect(dirty)
         paperListener?.onRasterChanged(dirty)
         rasterErasePending = rasterErasePending?.apply { union(dirty) } ?: Rect(dirty)
         throttledEraseRedraw()
+    }
+
+    /** The pass mask for a page of this size, made fresh if the page changed shape. */
+    private fun rubPassFor(width: Int, height: Int): ByteArray {
+        val existing = rubPass
+        if (existing != null && rubPassWidth == width && existing.size == width * height) return existing
+        rubPassRect = null
+        rubPassWidth = width
+        return ByteArray(width * height).also { rubPass = it }
     }
 
     private fun throttledEraseRedraw() {
