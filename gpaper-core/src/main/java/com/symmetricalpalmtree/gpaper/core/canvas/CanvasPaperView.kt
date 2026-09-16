@@ -107,6 +107,22 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
          */
         const val RASTER_ERASE_REDRAW_END_ONLY = Long.MAX_VALUE
 
+        /**
+         * How far a mark may wander before its announcement is cut into another rect
+         * (0.1.33, [RasterDirty.along]), and the most rects one mark may become.
+         *
+         * 256 px is a few before-image cells on the 64 px grid the API document
+         * recommends — fine enough that a long diagonal announces the ink rather than
+         * the page, coarse enough that an ordinary word is still one rect and the host
+         * pays one read. 64 bounds the pathological case; past it the last run absorbs
+         * the tail. Both are candidates until the Notesprout SN arc 43 K6 Nomad walk
+         * measures them on a real page (cells read, entry bytes, pen-up main-thread ms).
+         */
+        internal const val RASTER_DIRTY_SPAN_PX = 256
+
+        /** See [RASTER_DIRTY_SPAN_PX]. */
+        internal const val RASTER_DIRTY_MAX_RECTS = 64
+
         /** Default eraser hit radius in px, mirrored from the reference engines. */
         const val DEFAULT_ERASER_RADIUS_PX = 15f
 
@@ -472,12 +488,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         clearSelection()
         if (pageMode == PageMode.RASTER) {
             if (strokes.isEmpty()) return
-            val dirty = strokes.mapNotNull { rasterDirtyOf(it) }
-                .reduceOrNull { a, b -> a.union(b) }?.toRectOut()
-            dirty?.let { paperListener?.onRasterWillChange(it) }
+            // Every mark announces itself as its own run of rects (0.1.33), and the
+            // strokes go in as one composite — so all the will-changes first, in the
+            // order the runs will be laid down, then the pixels, then all the changed.
+            val dirty = strokes.flatMap { rasterDirtyAlong(it) }
+            for (r in dirty) paperListener?.onRasterWillChange(r)
             compositeIntoRaster(strokes)
             redrawCommitted()
-            dirty?.let { paperListener?.onRasterChanged(it) }
+            for (r in dirty) paperListener?.onRasterChanged(r)
             return
         }
         strokeList.addAll(strokes)
@@ -534,8 +552,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (pageMode != PageMode.RASTER) return
         endActiveTransform()
         clearSelection()
-        val dirty = RasterDirty.wholePage(pageWidth, pageHeight)?.toRectOut()
-        dirty?.let { paperListener?.onRasterWillChange(it) }
+        // Silent (0.1.33): the host replaced its own page, so this is the host's own
+        // news — as it already was for swapPageRaster. Announcing it made every host
+        // carry a "we are loading, ignore the callbacks" flag, which only ever worked
+        // because these calls happen to be synchronous.
         pageRaster = null
         if (bitmap != null) {
             // Copied in, at 1:1 from the origin. The host keeps the bitmap it handed us
@@ -544,7 +564,6 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             ensurePageRaster()?.let { Canvas(it).drawBitmap(bitmap, 0f, 0f, null) }
         }
         redrawCommitted()
-        dirty?.let { paperListener?.onRasterChanged(it) }
     }
 
     override fun getPageRaster(): Bitmap? {
@@ -693,11 +712,28 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      */
     protected open fun bakePressure(style: StrokeStyle, pressure: Float): Float = pressure
 
-    /** The page-space patch a stroke may touch when composited — see [RasterDirty]. */
-    private fun rasterDirtyOf(stroke: Stroke): Bounds? {
+    /**
+     * The page-space patches a stroke may touch when composited, in the order it was
+     * drawn — see [RasterDirty.along].
+     *
+     * One rect per mark was the rule until 0.1.33, and it made a corner-to-corner
+     * hairline announce the whole page: the host's before-image is the *announced* area,
+     * not the ink's, so a long diagonal cost it every undo byte a page has. The run form
+     * follows the polyline instead. Nothing else changes — each rect is what
+     * [RasterDirty.of] makes of its run, generous and page-clipped, and a short mark
+     * still comes back as the single rect it always did.
+     */
+    private fun rasterDirtyAlong(stroke: Stroke): List<Rect> {
         val w = if (pageWidth > 0) pageWidth else width
         val h = if (pageHeight > 0) pageHeight else height
-        return RasterDirty.of(stroke.bounds, stroke.width, w, h)
+        return RasterDirty.along(
+            points = stroke.points,
+            width = stroke.width,
+            pageWidth = w,
+            pageHeight = h,
+            maxSpanPx = RASTER_DIRTY_SPAN_PX,
+            maxRects = RASTER_DIRTY_MAX_RECTS,
+        ).map { it.toRectOut() }
     }
 
     // ── PaperView: template & page geometry ──────────────────────────────────
@@ -1272,13 +1308,17 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             // (the grain is seeded from it, exactly as the live preview was), same
             // renderer — only what is kept differs. The host hears about it three times:
             // will-change before the pixels move (its before-image moment), committed
-            // (its timestamps and counts, as in stroke mode), changed after.
-            val dirty = rasterDirtyOf(stroke)?.toRectOut()
-            dirty?.let { paperListener?.onRasterWillChange(it) }
+            // (its timestamps and counts, as in stroke mode), changed after — and the
+            // two raster halves come once per run of the mark (0.1.33), not once per
+            // mark, so a long diagonal costs its host the ink's area and not the page's.
+            // Every will-change first: the host must hold the before-image of the whole
+            // mark before any of it lands.
+            val dirty = rasterDirtyAlong(stroke)
+            for (r in dirty) paperListener?.onRasterWillChange(r)
             compositeIntoRaster(listOf(stroke))
             bakeAfterCommit()
             paperListener?.onStrokeCommitted(stroke)
-            dirty?.let { paperListener?.onRasterChanged(it) }
+            for (r in dirty) paperListener?.onRasterChanged(r)
             return true
         }
         strokeList.add(stroke)

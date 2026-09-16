@@ -1153,7 +1153,8 @@ test called the leaf drawn on. `rubBatch` now lets a pixel go entirely below `GO
 2026-09-15 for Notesprout SN's arc 43 "Sketch"
 (`~/git/Notesprout/extensions/sketch/SKETCH_PLAN.md`, phase K1), which owns the walk.
 Note: Paintsprout's `ONYX_PLAN.md` had reserved 0.1.32–0.1.34 for its own abandoned arcs 3/4,
-on paper only (0.1.34 was built and then dropped); 0.1.33 and 0.1.34 remain free.
+on paper only (0.1.34 was built and then dropped); 0.1.33 went to Phase 20 below and 0.1.34
+remains free.
 
 Phases 13–18 built the raster page, the pixel eraser, the patch undo and the rubbing eraser,
 and every one of them was walked on a NoteAir5C. **Nothing on Supernote has ever run raster
@@ -1295,6 +1296,104 @@ pure.
 its 203 JVM tests are not a gate here — the core change is additive (two `protected open`
 members and one private constant) and the compile check belongs to the publish step, with
 `publishToMavenLocal` and the SN re-pin held until Fable has read this diff and these numbers.
+*Still held at the time of writing:* Phase 20 landed on top of this one before either was
+published, so the two publish together at 0.1.33.
+
+---
+
+### Phase 20 — A mark says where it landed (post-v0.1.0)
+**Status:** ✅ Complete (closed 2026-09-15 on the Supernote Nomad, the artist's hand — Notesprout SN arc 43 K6) ·
+**Publishes:** 0.1.33 · Opened 2026-09-15 for Notesprout SN's arc 43 "Sketch"
+(`~/git/Notesprout/extensions/sketch/SKETCH_PLAN.md`, phase K6), which owns the walk and the
+numbers.
+
+Two things Paintsprout wrote down while building on the raster page (`ONYX_PLAN.md`, items 1
+and 2), and both of them are the same mistake seen from two sides: **the engine was telling the
+host about a change in a shape that suited the engine rather than the host.**
+
+The first is the pen-up composite. A mark announced one rect — its bounding box — so a
+corner-to-corner hairline announced the whole page, because a bounding box is a bad model of a
+line. What a host pays is the *announced* area, not the ink's: on a 1404×1685 Nomad page that is
+every 64 px cell of the page read on the main thread inside the pen-up callback, about 9.5 MB
+(≈19.7 MB on a Manta), and two such strokes fill an undo budget bounded by bytes, as the API
+document tells hosts to bound it. The eraser had already been announcing per batch since 0.1.26;
+the composite was the one place still speaking in boxes.
+
+The second is `loadPageRaster`. It fired a whole-page will-change/changed pair, so every host
+carried a flag to ignore its own load — `loadingRaster` in Paintsprout's `SketchbookActivity`,
+the same in SN's `SketchActivity` — and that flag only works because these callbacks happen to
+be synchronous. A correctness argument resting on an implementation detail nobody promised is a
+bug with a date on it. `swapPageRaster` has been silent since 0.1.29 for the right reason, and
+the reason covers the load too.
+
+**What landed:**
+- **`RasterDirty.along(points, width, pageWidth, pageHeight, maxSpanPx, maxRects)`** — pure
+  Kotlin beside `of`, which it calls once per run, so the pad (`width` + `MARGIN_PX`), the
+  outward snap and the page clip are one rule with one test. The polyline is walked in order and
+  cut where taking the next point in would push the run's **unpadded** span — the larger of its
+  width and height — past `maxSpanPx`. **The closing point belongs to both runs**: it is the last
+  point of one and the first of the next, so the segment across the boundary lies wholly inside
+  the next rect and consecutive rects overlap by at least the pad around it. Cutting *between*
+  two points would leave that segment announced by neither, which is the one failure the object
+  exists to prevent. **Coverage is the invariant** — every pixel a mark can touch lies in at
+  least one returned rect — and the span, the cap and the dropping are savings taken only where
+  coverage is not at stake. A single segment longer than the span is still one run (two points
+  cannot be cut); at `maxRects` the last run absorbs the whole tail, so a pathological polyline
+  degrades to the old behaviour rather than to a missing piece of a mark; a run that clips off
+  the page is dropped, and a mark wholly off it announces nothing; no points, no rects; and a
+  mark that never reaches the span comes back as exactly the one rect `of` always gave it — an
+  equivalence pinned by a test, because a word must not start costing more than it did.
+- **`CanvasPaperView.rasterDirtyAlong(stroke)`** replaces `rasterDirtyOf` (the single-rect form
+  had no other caller), reading the same `pageWidth`/`width` fallback and the two new private
+  constants `RASTER_DIRTY_SPAN_PX` (256 — a few of the 64 px before-image cells the API document
+  recommends) and `RASTER_DIRTY_MAX_RECTS` (64). Both are **candidates the K6 walk measures.**
+  `commitCapturedStroke` and `addStrokes` fire one `onRasterWillChange` per run, **all of them
+  before any pixel moves**, then the composite, then `bakeAfterCommit` / `redrawCommitted`, then
+  `onStrokeCommitted` (commit only), then one `onRasterChanged` per run in the same order.
+  `addStrokes` concatenates the runs of every stroke around its one composite.
+- **`loadPageRaster` is silent** — the `endActiveTransform` / `clearSelection` / copy-in /
+  `redrawCommitted` sequence is untouched, only the announcement is gone. `loadStrokes` (the
+  RASTER bake), `addStrokes` and `clear()` stay reported: SN's "Bring in ink" door fills its undo
+  entry through `addStrokes`' will-change, and a bake or a clear changes pixels a host may well
+  want a before-image of. The rule, stated in the `PaperListener` KDoc, in `PaperView`'s and in
+  both documents: **a change the host made itself (`loadPageRaster`, `swapPageRaster`) is not
+  announced; a change the pen or a bake made is.**
+- `RasterDirtyTest` +8 (215 core, from 207): empty in, empty out; one point equals `of`; a short
+  mark equals `of` exactly; a long line cut into runs each inside `span + 2 × pad`, consecutive
+  rects overlapping by at least the pad; a corner-to-corner hairline on a 1404×1685 page covered
+  segment by segment at quarter-pixel steps for **under a quarter of the page**; the cap reached,
+  the tail absorbed and coverage still holding; off-page runs dropped and a wholly off-page mark
+  silent; a stroke doubling back staying inside the span budget. Coverage is checked the honest
+  way — every sample's padded box, clipped to the page, must lie inside **one** rect.
+- `docs/api.md` (the raster rows and two new paragraphs), `docs/host-responsibilities.md` (the
+  undo paragraph: several will-change calls per contact is now the rule for marks as well as
+  sweeps, and the `loadingRaster`-style flag is gone), `docs/architecture.md` (the purity split
+  — the run rule is pure, so coverage is proved rather than eyeballed), `CLAUDE.md`, and the
+  0.1.33 version pin in `README.md` / `docs/integration-guide.md` / `gradle.properties`.
+- No engine-module change: `gpaper-onyx` and `gpaper-ratta` compile untouched, and the demo's
+  host-side undo (which reads its before-images from `onRasterWillChange` onto a 64 px grid,
+  once per cell per contact) needed nothing — it already accumulates per contact, and it never
+  called `loadPageRaster`. **215 core / 12 ratta / 0 onyx, all green; `:demo:assembleDebug`
+  builds.**
+
+**The numbers this phase does not have.** Everything above is reasoning and JVM tests. What it
+is worth on a panel — cells read and entry bytes for a corner-to-corner hairline before and
+after, the pen-up main-thread milliseconds, and that undo is still an involution across several
+runs of one mark — belongs to the arc 43 K6 walk on the Nomad, along with whether 256/64 are the
+right pair.
+
+**Outcome (Supernote Nomad, the artist's hand, 2026-09-15, through Notesprout SN's sketch
+face — one corner-to-corner pencil hairline on a fresh 1404×1685 page, undo, redo):** with the
+host reading before-images on its 64 px grid, the mark cost **550 cells / 8 985 600 B / 40 ms on
+the main thread at pen-up on 0.1.32, and 134 cells / 2 190 336 B / 18 ms on 0.1.33** — 4.1× fewer
+cells and bytes, the undo and the redo swapping 134 tiles both ways and the line coming back whole.
+Two page turns afterwards recorded no undo entry and dirtied nothing, so the host dropped its
+`loadingRaster` flag the same day. **The 256 px span and 64-rect cap stand as measured** — the
+diagonal's runs deduplicate on the host's grid to about a quarter of the box, and nothing in the
+walk argued for a finer cut. Review before publish (Fable) changed one thing: the two constants
+are `internal`, not public API. Paintsprout Onyx's 203 stayed green on its 0.1.31 pin; its
+`ONYX_PLAN.md` watch-list items 1 and 2 are struck through, and its own `loadingRaster` goes with
+its pin jump, when it chooses to make one.
 
 ---
 

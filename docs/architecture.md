@@ -73,6 +73,12 @@ narrow phase (segment-to-segment distance, so fast sweeps can't jump strokes bet
 lasso hit testing (any-point-in-polygon for strokes, polygon-vs-rect for host content), the
 pen-gesture recognizer gates (smart-lasso velocity/closure/winding, scribble
 diagonal/density/reversals with the jitter filter), and the Ratta grey-threshold ink map.
+It also holds the rule for **what a raster change announces** (`geometry/RasterDirty`): the
+generous, page-clipped rect a mark of a given width can touch, and since 0.1.33 the run of such
+rects a whole polyline is cut into — a bounding box makes a corner-to-corner hairline announce
+the entire page, and what a host's before-image costs is the announced area, not the ink's. That
+the runs still cover every segment is a property worth proving rather than eyeballing, which is
+exactly what being pure buys.
 Android bridging lives in `model/AndroidInterop.kt`.
 
 ## Rendering model (base engine)

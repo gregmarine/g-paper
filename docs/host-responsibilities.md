@@ -94,14 +94,28 @@ before the pixels move — `readPageRaster(rect)` there (0.1.29) is exactly what
 overwrites, as a `RasterPatch`. Undo is `swapPageRaster(patches)`: the patch goes onto the page
 and comes back holding what was there, so the **same entry serves redo** with no second copy
 and no second call shape. Bound such a stack by **bytes** (`RasterPatch.bytes`), not count: a
-page-wide erase's before-image is the whole page. An eraser sweep (0.1.26; a rubbing lift rather
-than a clear since 0.1.30, same calls) fires the pair
-**once per batch** — many times per contact, and the batch rects overlap heavily along the
-sweep — so accumulate into one entry while a pen-down is open, close it at `onPenLifted`, and
-do not store a rect you already hold the pixels of (a fixed grid of cells, each read once per
-contact, bounds an entry by the page and makes the patches disjoint, so swap order stops
-mattering); `onStrokesErased` does not fire on a raster page. Before 0.1.29 the route was
-`copyPageRaster` + `loadPageRaster` of a patched copy — a whole-page repaint per undo.
+page-wide erase's before-image is the whole page.
+
+**An undo builder must accept several will-change calls per contact.** An eraser sweep (0.1.26;
+a rubbing lift rather than a clear since 0.1.30, same calls) fires the pair **once per batch** —
+many times per contact, with the batch rects overlapping heavily along the sweep — and since
+0.1.33 a *mark* does the same, once per run of its polyline, because one rect for a
+corner-to-corner hairline is the whole page and what a before-image costs is the announced area,
+not the ink's. Every will-change of a mark arrives before any of its pixels move and every
+changed after, in the same order, so the pattern is one pattern for both: accumulate into one
+entry while a pen-down is open, close it at `onPenLifted`, and do not store a rect you already
+hold the pixels of (a fixed grid of cells, each read once per contact, bounds an entry by the
+page and makes the patches disjoint, so swap order stops mattering). `onStrokesErased` does not
+fire on a raster page.
+
+**The load is silent (0.1.33).** `loadPageRaster` and `swapPageRaster` announce nothing: a change
+the *host* made is the host's own news, and it already holds whatever history it wants of the
+page it just handed over. A change the pen or a bake made — a commit, a `loadStrokes` /
+`addStrokes` bake, a `clear()`, an eraser batch — is announced. So a page turn needs no "we are
+loading, ignore the callbacks" flag around the load; if you carry one from an earlier version,
+drop it, because it only ever worked by relying on the callbacks being synchronous. Before
+0.1.29 the undo route was `copyPageRaster` + `loadPageRaster` of a patched copy — a whole-page
+repaint per undo, and the reason the load ever announced anything.
 
 `loadStrokes(list)` is the blunt instrument (full page replay); `addStrokes`/`removeStrokes`
 are the targeted ones. Any data-in call dismisses an active selection first; re-select via

@@ -107,14 +107,33 @@ engine it always had.
 
 | Direction | API | Notes |
 |---|---|---|
-| In | `loadPageRaster(bitmap?)` | Page load / undo replay; copied in at 1:1 from the page origin, null = blank. Handles the EPD handoff |
+| In | `loadPageRaster(bitmap?)` | Page load; copied in at 1:1 from the page origin, null = blank. Handles the EPD handoff. **Fires nothing on the listener (0.1.33)** — like `swapPageRaster`, this is a change the host made itself |
 | In | `loadStrokes` / `addStrokes` | Composite into the image — the **one-way bake** of a stroke page. `removeStrokes` does nothing; `getStrokes()` is empty |
-| Out | `onRasterWillChange(rect)` → change → `onRasterChanged(rect)` | Around every change, page space, rect generous and page-clipped. The first is the host's before-image moment (`copyPageRaster(rect)`), the second its dirty flag. `onStrokeCommitted` still fires for a composited mark (timestamps and counts from one place) — don't store that stroke as a row |
+| Out | `onRasterWillChange(rect)` → change → `onRasterChanged(rect)` | Around every change **the pen or a bake makes**, page space, rect generous and page-clipped. The first is the host's before-image moment (`readPageRaster(rect)` / `copyPageRaster(rect)`), the second its dirty flag. **One mark may fire the pair several times (0.1.33)** — once per run of the polyline, every will-change before any pixel moves and every changed after, in the same order. `onStrokeCommitted` still fires for a composited mark (timestamps and counts from one place) — don't store that stroke as a row |
 | Out | `getPageRaster()` | A **copy**, or null when blank — encode it off the main thread for a save |
 | Out | `copyPageRaster(rect)` | A copy of a patch as a bitmap |
 | Out | `readPageRaster(rect)` (0.1.29) | The pixels inside a rect as a `RasterPatch` (page-space rect + row-major ARGB `IntArray`) — **the before-image for undo**, in the shape `swapPageRaster` takes back. A page with no image yet reads as transparent, so the first mark's before-image is nothing, read for free |
-| In | `swapPageRaster(patches)` (0.1.29) | Each patch's pixels go onto the page and **its array is left holding what was there** — one entry serves undo and redo, no second copy. Overlapping patches: reverse read order to undo, read order to redo. One repaint; on Onyx only the region covered. Fires nothing on the listener. A rect not wholly on the page is skipped and logged, never clipped |
+| In | `swapPageRaster(patches)` (0.1.29) | Each patch's pixels go onto the page and **its array is left holding what was there** — one entry serves undo and redo, no second copy. Overlapping patches: reverse read order to undo, read order to redo. One repaint; on Onyx only the region covered. Fires nothing on the listener, as `loadPageRaster` has not since 0.1.33. A rect not wholly on the page is skipped and logged, never clipped |
 | — | Eraser (0.1.26, rubbing since 0.1.30) | The same sweep as stroke mode, but it **rubs pixels**: within `eraserRadius` of the sweep the alpha is lifted by a fraction per pass — `rasterRubbing` sets the light and firm lift and the feathered edge — once per pixel per pass, again on each reversal of travel, so a light pass softens a line and a few firm passes take it out. Each batch fires `onRasterWillChange(rect)` → lift → `onRasterChanged(rect)` (accumulate the tiles into one undo entry, closed at `onPenLifted`); `onStrokesErased` never fires. The Onyx engine repaints the changed region per throttled batch so rubbing reads live on the panel |
+
+**A mark says where it landed, not where its corners are (0.1.33).** Until then a composited
+mark announced one rect — its bounding box — so a corner-to-corner hairline announced the whole
+page, and a host's before-image costs the *announced* area rather than the ink's: on a 1404×1685
+page that is every 64 px cell of the page read on the main thread inside the pen-up callback,
+about 9.5 MB, and two such strokes fill an undo budget. The polyline is now cut into runs of at
+most 256 px of span and each run is announced in turn — the same generous, page-clipped rect per
+run, the closing point of one run shared with the next so nothing between them goes unannounced.
+The contract keeps its shape: **every** `onRasterWillChange` for the mark fires before any of its
+pixels move, and **every** `onRasterChanged` after, in the same order. A host that accumulates
+what it is told into one undo entry per contact — which the eraser has required since 0.1.26,
+because a sweep reports per batch — needs no change at all. A mark short enough never to reach
+the span is still exactly one rect.
+
+**A change the host made itself is not announced (0.1.33).** `loadPageRaster` and
+`swapPageRaster` both replace page pixels and neither fires the pair: the host put those pixels
+there and holds whatever history it wants of them. Hosts that carried a "we are loading, ignore
+the callbacks" flag around a load should drop it — it only ever worked because these calls
+happen to be synchronous, which was never a promise.
 
 **The eraser's mid-sweep cadence is per engine (0.1.32)**, and it is a measurement, not a
 setting. Both engines landed on **16 ms** — one frame — and for different reasons, which is

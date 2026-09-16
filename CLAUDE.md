@@ -59,6 +59,28 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   before-image as a `RasterPatch`, and `swapPageRaster` puts it back and leaves the array holding
   what was there — one entry serves redo, no second copy of an 18 MB page mid-undo, and on Onyx
   only the patched region is refreshed. The swap runs row by row through one reused buffer.
+- **A mark announces itself as RUNS, not as a box — and a change the host made itself is not
+  announced at all (Phase 20, 0.1.33).** A raster host's before-image costs the *announced*
+  area, never the ink's, so one rect per mark made a corner-to-corner hairline cost the whole
+  page: ~9.5 MB of 64 px cells read on the main thread inside the pen-up callback on a 1404×1685
+  Nomad page (~19.7 MB on a Manta), two such strokes filling a host's undo budget. Generosity
+  *outward* is still right — a rect that misses one fleck leaves a fleck undo cannot lift — but
+  generosity *across the diagonal* is only the bounding box being a bad model of a line.
+  **Measured on the Nomad through SN's sketch face: a corner-to-corner hairline cost the host
+  550 cells / 9.0 MB / 40 ms at pen-up on 0.1.32 and 134 cells / 2.2 MB / 18 ms on 0.1.33.**
+  `RasterDirty.along` (pure, JVM-tested) cuts the polyline into runs of at most
+  `RASTER_DIRTY_SPAN_PX` (256) of unpadded span, at most `RASTER_DIRTY_MAX_RECTS` (64) of them,
+  and **the closing point of a run is the first point of the next** so the segment across the
+  boundary lies wholly inside one rect: coverage is the invariant and every other property is a
+  saving taken where coverage is not at stake. Past the cap the last run absorbs the tail — a
+  bigger rect, never a dropped one. Every `onRasterWillChange` of a mark fires before any of its
+  pixels move and every `onRasterChanged` after, in the same order; the eraser has reported per
+  batch since 0.1.26, so a host that accumulates one entry per contact already handles it.
+  **And `loadPageRaster` is now silent, as `swapPageRaster` always was**: a page the host
+  replaced is the host's own news, and the flag every host carried to swallow the load's
+  callbacks (`loadingRaster` in Paintsprout's `SketchbookActivity` and SN's `SketchActivity`)
+  only worked because these calls happen to be synchronous — a correctness argument resting on
+  an implementation detail nobody promised is a bug waiting for the day the detail changes.
 - **The raster eraser's mid-sweep cadence is PER ENGINE, because a redraw does not cost the
   same thing on two panels (Phase 19, 0.1.32).** `rasterEraseRedrawIntervalMs` is a
   `protected open val` the base reads in `throttledEraseRedraw`; `RASTER_ERASE_REDRAW_END_ONLY`

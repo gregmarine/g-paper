@@ -241,8 +241,17 @@ interface PaperView {
      * page's, and it is expected to be the page's size ([setPageSize]); a different size
      * is copied at 1:1 from the origin, never stretched, because a page image that no
      * longer registers with the page it was drawn on is a host bug worth seeing rather
-     * than hiding. Brackets the change with [PaperListener.onRasterWillChange] /
-     * [PaperListener.onRasterChanged] over the whole page. A no-op in [PageMode.STROKE].
+     * than hiding.
+     *
+     * **Fires nothing on the listener (0.1.33)**, as [swapPageRaster] never has: a
+     * change the host made itself — this load, that swap — is the host's own news, and
+     * the host already holds whatever history it wants of the page it just handed over.
+     * A change the pen or a bake made is announced; this one is not, so a host needs no
+     * "we are loading, ignore the callbacks" flag around it. (Until 0.1.32 this call
+     * announced a whole-page change, and such a flag was the usual way to swallow it —
+     * which only worked because the callbacks happen to be synchronous.)
+     *
+     * A no-op in [PageMode.STROKE].
      */
     fun loadPageRaster(bitmap: Bitmap?)
 

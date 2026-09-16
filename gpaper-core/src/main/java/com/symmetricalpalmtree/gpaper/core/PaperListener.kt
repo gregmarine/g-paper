@@ -110,22 +110,43 @@ interface PaperListener {
     /**
      * The page image is about to change inside [rect] (page space) — [PageMode.RASTER]
      * only (0.1.25). Fires on the main thread immediately before the pixels are touched,
-     * for every change: a mark composited at pen-up, a load, a clear, and (from 0.1.26)
-     * each batch of an eraser sweep. This is the host's one chance at a before-image for
-     * undo — [PaperView.readPageRaster] with this rect, now, holds exactly the pixels the
-     * change will overwrite, in the shape [PaperView.swapPageRaster] takes back (0.1.29;
-     * [PaperView.copyPageRaster] is the bitmap form). The engine keeps no history in
-     * either mode. The rect is
-     * generous by design (the mark's bounds pushed out by its width and a margin, clipped
-     * to the page), so a before-image taken from it always covers the change.
+     * for every change the pen or a bake makes: a mark composited at pen-up, a
+     * [PaperView.loadStrokes] or [PaperView.addStrokes] bake, a [PaperView.clear], and
+     * (from 0.1.26) each batch of an eraser sweep. This is the host's one chance at a
+     * before-image for undo — [PaperView.readPageRaster] with this rect, now, holds
+     * exactly the pixels the change will overwrite, in the shape
+     * [PaperView.swapPageRaster] takes back (0.1.29; [PaperView.copyPageRaster] is the
+     * bitmap form). The engine keeps no history in either mode. The rect is
+     * generous by design (the run's bounds pushed out by the mark's width and a margin,
+     * clipped to the page), so a before-image taken from it always covers the change.
+     *
+     * **A change the host made itself is not announced (0.1.33).**
+     * [PaperView.loadPageRaster] and [PaperView.swapPageRaster] both replace page pixels
+     * and neither fires this pair: the host put those pixels there and already holds
+     * whatever history it wants of them. A host therefore needs no "we are loading,
+     * ignore the callbacks" flag — and should not keep one, because it only ever worked
+     * by relying on these calls being synchronous.
+     *
+     * **One mark may announce itself as several rects (0.1.33).** The runs of a mark
+     * arrive here in the order it was drawn, *all of them before any pixel moves*, and
+     * again through [onRasterChanged] in the same order once they have. A stroke's
+     * bounding box is the whole page for a corner-to-corner hairline, and a host's
+     * before-image costs the announced area rather than the ink's, so the announcement
+     * follows the polyline instead (see `RasterDirty.along`). An eraser sweep has
+     * reported per batch since 0.1.26, so an undo builder that accumulates what it is
+     * told into one entry per contact — closing it at [onPenLifted] — already handles
+     * this; one that assumed a mark was one rect does not.
      */
     fun onRasterWillChange(rect: Rect) {}
 
     /**
      * The page image changed inside [rect] (page space) — the closing half of
-     * [onRasterWillChange], same rect, after the pixels were touched. The host's dirty
+     * [onRasterWillChange], the same rects in the same order, after the pixels were
+     * touched. The host's dirty
      * flag: a raster page has no per-mark rows to write, so this is what schedules its
-     * save. In [PageMode.RASTER] a composited mark still reports through
+     * save. It is silent for the same changes [onRasterWillChange] is silent for — a
+     * page the host itself loaded or swapped in. In [PageMode.RASTER] a composited mark
+     * still reports through
      * [onStrokeCommitted] as well (the host keeps its timestamps and edit counts from
      * one place in both modes) — the stroke it carries is the one just composited, and
      * a raster host must not store it as a row.
