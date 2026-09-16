@@ -604,22 +604,18 @@ Explicit registration — no ServiceLoader, no reflection, R8-safe:
   **bypasses** the availability probe. No engine → `IllegalStateException`. **No runtime
   fallback ever** — post-construction engine failures are loud, never silently swapped.
 
-### `RattaTuning` — a measurement door, not host API (0.1.32)
+### The Ratta measurement door closed (0.1.34)
 
-`gpaper-ratta` carries one public object, `RattaTuning`, holding the four Supernote
-raster-page numbers arc 43 "Sketch" settled by hand on a Nomad: the raster eraser's redraw
-cadence (`rasterEraseRedrawIntervalMs`, 16 ms), the `PENCIL` EMR floor (`pencilEmrMin`, 120),
-the pencil's live preview tone (`pencilPreviewGrey`, one of `RattaTuning.Grey` — `BLACK` /
-`DARK` / `GRAY` / `LIGHT` — default `DARK`), and the constant pressure its bake gives up to
-match that preview (`pencilBakePressure`, 0.5; `null` for the real pressure). They are mutable
-so a walk can switch candidates with `setprop` and a restart rather than a rebuild per
-candidate — which is how a judgement of *feel* ends up made against a stale memory of the
-previous one. **Measured 2026-09-15: the defaults are the measurements**, and the two doors
-that were answered "no" (a pressure-sensitive pencil preview, an eraser-pressure log) were
-removed rather than left lying about. **Hosts leave every value at its default**; there is no
-compatibility promise, and the object goes away at the arc's close, each value freezing into a
-constant. Nothing in `gpaper-core`'s host-facing surface changed to make it possible: the
-cadence and the bake pressure are `protected open` seams a device engine overrides.
+`gpaper-ratta` briefly carried one public object, `RattaTuning`, holding the four Supernote
+raster-page numbers arc 43 "Sketch" settled by hand on a Nomad — the raster eraser's redraw
+cadence, the `PENCIL` EMR floor, the pencil's live preview tone and the constant pressure its
+bake gives up to match it — as mutable properties, so a walk could switch candidates with
+`setprop` and a restart instead of a rebuild per candidate. **Measured 2026-09-15; none of the
+four was re-opened on the later walks, so the object is gone at 0.1.34 and every value is a
+constant** in `RattaEmr` / `RattaPaperView`, each carrying its measurement in its KDoc. It was
+never host API and hosts never set it, so there is nothing to migrate. Nothing in
+`gpaper-core`'s host-facing surface was involved either way: the cadence and the bake pressure
+are `protected open` seams a device engine overrides.
 
 ## Threading rules
 

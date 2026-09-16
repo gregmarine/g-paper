@@ -1284,7 +1284,8 @@ branch; `PENCIL` arms `NEEDLE` unconditionally again) and `logEraserPressure`, a
 `CanvasPaperView.onRasterEraseBatch` seam it was the only user of, and both demo properties.
 `RattaTuning` itself stays, holding the four measured numbers as a door for arc 43's later
 walks on a real page (K5/K6), and **is removed at the arc's close (K8)**, each value freezing
-into a constant.
+into a constant. *(That close is Phase 21 below, 0.1.34: no question was re-opened on K5 or K6,
+and the four values are constants where they are read.)*
 
 **No JVM test for the end-only sentinel or the bake seam.** `throttledEraseRedraw` and
 `bakePoints` are private and live inside an Android `View`; extracting a one-line comparison
@@ -1394,6 +1395,66 @@ walk argued for a finer cut. Review before publish (Fable) changed one thing: th
 are `internal`, not public API. Paintsprout Onyx's 203 stayed green on its 0.1.31 pin; its
 `ONYX_PLAN.md` watch-list items 1 and 2 are struck through, and its own `loadingRaster` goes with
 its pin jump, when it chooses to make one.
+
+---
+
+### Phase 21 — The door closes (post-v0.1.0)
+**Status:** ✅ Complete (2026-09-16) · **Publishes:** 0.1.34 · Opened 2026-09-16 for Notesprout
+SN's arc 43 "Sketch" (`~/git/Notesprout/extensions/sketch/SKETCH_PLAN.md`, phase K8 — docs and
+freeze), which is the close Phase 19 promised this to.
+Note: Paintsprout's `ONYX_PLAN.md` had reserved 0.1.32–0.1.34 for its own abandoned arcs 3/4 and
+had built-and-dropped a "Phase 21 / 0.1.34" on paper only; the number is this phase's.
+
+Phase 19 measured four Supernote raster-page numbers on the Nomad and then left them behind
+`RattaTuning`, a `setprop` door, on the reasoning that arc 43's later walks would be on a real
+page rather than the demo's and might want to re-open one. **K5 and K6 walked the real page and
+re-opened none of them.** So the door closes on the terms it was opened on.
+
+The rule it leaves behind is the one worth keeping: **a measurement door is temporary by
+construction.** Opening one is right — a judgement of *feel* made against a stale memory of the
+previous candidate is no judgement, and a rebuild per candidate is exactly how that happens.
+Keeping one after the measuring stops is not: a mutable global holding a number the hand has
+already settled is a behaviour nothing in the tree can be reasoned about from, it survives into a
+release as a public object on a module that promises nothing about it, and its existence invites
+a host to "configure" what was measured. **The number is worth nothing without the walk that
+produced it** — so each value freezes into a constant *where it is read*, carrying its
+measurement in its KDoc, and re-opening a question means another walk and another door.
+
+**What landed** — **no behaviour change anywhere**: the same four numbers, the same arming, the
+same bake.
+- **`RattaTuning` is gone** (the whole file), along with its `Grey` levels, `greyName`, and its
+  duplicate of core's `RASTER_ERASE_REDRAW_END_ONLY` sentinel (core keeps its own, private, which
+  is why the copy existed at all).
+- **`RattaPaperView` gains three private constants**, each with the walk's story condensed into
+  its KDoc: `RASTER_ERASE_REDRAW_MS` (16 — 100 ms good / 60 better / 16 the hand's clear choice
+  at six times the janky frames, because an erase contact has already released the overlay),
+  `PENCIL_PREVIEW_GREY` (`SupernoteInk.Color.DARK_GRAY` — the `PENCIL`-only exception to
+  `RattaInkMap`, kept because the firmware paints one tone per armed pen so no rung of the ladder
+  could carry it alone), and `PENCIL_BAKE_PRESSURE` (0.5 — the bake gives up its tonal range
+  because nothing on the preview's side can be made to vary; Ratta only, stroke mode untouched).
+  `rasterEraseRedrawIntervalMs` and `bakePressure` are one line each now; the long-form reasoning
+  moved to the constants so the number and its measurement sit together.
+- **`RattaEmr.penSize(style, widthPx)` loses its `floor` parameter** and reads
+  `EMR_MIN_HAIRLINE` (120) directly. The parameter existed only so the door could move the floor
+  on a running device, and with the door gone nothing varies it — a parameter kept for its tests
+  is the module inventing work to justify them. The `coerceIn(0, EMR_MAX)` that absorbed a
+  nonsense `setprop` goes with it: nothing can set a nonsense floor any more.
+- **The demo drops the four `debug.gpaper.*` reads**, `getprop`, `tuningLine` and the tuning text
+  on the raster status line. Everything else about the raster vehicle — the toggle, the host-owned
+  undo, the swap timer — is untouched.
+- `docs/api.md` (the `RattaTuning` section becomes a short note that the door closed and there is
+  nothing to migrate, since it was never host API), `CLAUDE.md` (a standing rule for the door's
+  life cycle; the Phase 19 cadence bullet now names the constant), the Phase 19 entry above (one
+  line pointing here), and the 0.1.34 version pin in `gradle.properties` / `README.md` /
+  `docs/integration-guide.md`.
+- `RattaEmrTest` keeps its five tests: the floor-parameter test, which tested the door, is
+  replaced by one pinning the two floors and the ceiling as the measured numbers they now are.
+  **215 core / 5 ratta-emr within 12 ratta, all green; `:demo:assembleDebug` builds.**
+  `gpaper-onyx` is untouched and `gpaper-core` unchanged.
+
+**Nothing to verify on a panel.** Every value is the one that was already running, so the walk
+that validates this phase is the one that produced the numbers. The host pin jump to 0.1.34 is
+SN's arc 43 K8, after `publishToMavenLocal`.
 
 ---
 

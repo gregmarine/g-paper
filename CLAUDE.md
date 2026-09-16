@@ -98,9 +98,20 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   right**, which is only a contradiction if you were judging the frames. So both engines sit
   at 16 ms for entirely different reasons, and **agreeing on a number is not sharing a
   reason** — the seam stays rather than collapsing back into a constant, because the next
-  panel will have its own answer. The tuning door (`RattaTuning`) exists so a walk switches
-  candidates with `setprop` rather than a rebuild each: a judgement of *feel* made against a
-  stale memory of the previous candidate is no judgement.
+  panel will have its own answer. Ratta's 16 is the private `RASTER_ERASE_REDRAW_MS` in
+  `RattaPaperView` since Phase 21 (0.1.34); the `setprop` door it was walked behind is gone.
+- **A measurement door is temporary by construction — it closes when the measuring stops
+  (Phase 21, 0.1.34).** `RattaTuning` existed so a walk could switch candidates with `setprop`
+  and a restart rather than a rebuild each, because a judgement of *feel* made against a stale
+  memory of the previous candidate is no judgement. That is a reason to open a door, not a
+  reason to keep one: a mutable global holding a number the hand has already settled is a
+  behaviour nothing in the tree can be reasoned about from, and its very existence invites a
+  host to "configure" what was measured. So each of the four values froze into a private
+  constant **where it is read** — `RASTER_ERASE_REDRAW_MS`, `PENCIL_PREVIEW_GREY` and
+  `PENCIL_BAKE_PRESSURE` in `RattaPaperView`, `RattaEmr.EMR_MIN_HAIRLINE` used directly — each
+  carrying its measurement in its KDoc, because **the number is worth nothing without the walk
+  that produced it.** Re-opening one of these questions means another walk and another door,
+  not a knob left standing for a walk nobody has scheduled.
 - **A preview can only be honest about what the firmware can vary; where it cannot vary tone,
   the BAKE gives up tone rather than the preview lying (Phase 19, 0.1.32).** The Supernote
   firmware paints one tone per armed pen. Three rounds on the Nomad tried to make a

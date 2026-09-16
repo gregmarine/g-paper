@@ -80,6 +80,68 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         const val REG_OFFSET_MANTA_PX = 3f
         const val REG_MANTA_MIN_DIM = 1600
 
+        // ── The raster page's three measured numbers (0.1.32, frozen 0.1.34) ─────
+        //
+        // Each was settled by hand on a Supernote Nomad on 2026-09-15 and carried for
+        // one arc behind a `setprop` door (`RattaTuning`) so arc 43's later walks could
+        // re-open a question without a rebuild per candidate. None was re-opened, so
+        // the door closed at 0.1.34 and the measurements are constants. Re-opening one
+        // means another walk, not another knob: a judgement of *feel* is worth only what
+        // the hand that made it was comparing against. (The fourth of that walk's
+        // numbers, the `PENCIL` EMR floor, is `RattaEmr.EMR_MIN_HAIRLINE`.)
+
+        /**
+         * How often the raster eraser redraws mid-sweep here, in ms —
+         * **measured 16 ms, one frame**, which is the number Onyx uses and is arrived
+         * at for a different reason. That is exactly why the core seam
+         * (`rasterEraseRedrawIntervalMs`) stays a seam: the two engines agree on the
+         * value, not on why, and the next panel will have its own answer.
+         *
+         * 100 ms was good (113 frames / 20 % janky over a minute), 60 ms better
+         * (162 / 22 %), 16 ms the artist's clear choice at 756 / 82 % — *"this eraser
+         * works better on Ratta hardware than it does on Onyx"*. The frame count is six
+         * times worse and the hand is right, because the frame-silence rule's cost is
+         * the *masking* an overlay imposes on frames presented under it and an erase
+         * contact releases the overlay at ACTION_DOWN: nothing accumulates, and what is
+         * left is the panel's own update, which the Nomad keeps up with. 250 ms and
+         * end-only were never walked — there was no reason to go slower once 16 won.
+         */
+        const val RASTER_ERASE_REDRAW_MS = 16L
+
+        /**
+         * The firmware grey `PENCIL`'s live preview is armed as — **measured
+         * DARK_GRAY**, and the one `PENCIL`-only exception to [RattaInkMap], which is
+         * otherwise untouched (every other style still takes the grey nearest its own
+         * colour; `#505050` maps to BLACK, which is what this exists to escape).
+         *
+         * Graphite bakes as a scatter of flecks with bare paper between them and reads
+         * far paler than the solid line any firmware code paints. BLACK was too dark,
+         * GRAY was tried, and **no rung of the ladder could carry it alone**: the
+         * firmware paints one tone per armed pen, so a soft touch cannot preview softer.
+         * DARK_GRAY paired with the constant bake below is what the artist called *"spot
+         * on"*, on the panel and again in a Mac screencap at 3×.
+         */
+        const val PENCIL_PREVIEW_GREY = SupernoteInk.Color.DARK_GRAY
+
+        /**
+         * The constant pressure `PENCIL` **bakes** at on a raster page here —
+         * **measured 0.5**, against the [PENCIL_PREVIEW_GREY] preview.
+         *
+         * **Why the bake gives way and not the preview.** Three rounds on the Nomad
+         * tried to make a pressure-toned bake agree with its preview from the preview's
+         * side and could not: the greys are fixed per arming, and the pressure-sensitive
+         * pen codes vary *width*, not tone. There is nothing on the preview's side left
+         * to vary, so on this engine the pencil gives up its tonal range instead — live
+         * ink and baked ink agree, and the mark on the panel is the mark that was drawn.
+         * The bake was never wrong; it was right about a tone the panel could not show
+         * while the pen was down, which is a different fault and takes a different fix.
+         *
+         * **Ratta only.** BOOX and Paintsprout keep the pressure pencil — their preview
+         * can carry tone, so they have nothing to give up — and stroke mode is untouched
+         * on every engine: the pressures a host persists are the ones that were measured.
+         */
+        const val PENCIL_BAKE_PRESSURE = 0.5f
+
         /**
          * Overlay-clear retry ladder (overlay law 2): a clear issued in the wake of a
          * pen-lift lands inside the daemon's stroke-finalization window and is eaten,
@@ -195,7 +257,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * `PENCIL` stays on NEEDLE: arming the pressure-sensitive INK for it was tried on the
      * Nomad (2026-09-15) and made no visible difference, while the pressure codes vary
      * *width* — the one thing a preview must never lie about. The pencil's tone problem
-     * was answered at the bake instead ([RattaTuning.pencilBakePressure]).
+     * was answered at the bake instead ([PENCIL_BAKE_PRESSURE]).
      */
     private fun livePenCode(style: StrokeStyle): Int = when (style) {
         StrokeStyle.PEN, StrokeStyle.MARKER, StrokeStyle.PENCIL -> SupernoteInk.Pen.NEEDLE
@@ -211,20 +273,20 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /**
      * The firmware colour for the armed pen: the nearest firmware grey to the ink's own
      * colour, so the pen-lift handoff is invisible — except for `PENCIL`, which takes
-     * [RattaTuning.pencilPreviewGrey] straight. Graphite bakes as a scatter of flecks
-     * with bare paper between them and reads far paler than the solid line any firmware
-     * code paints, so the tone that matches pen-up is a rung on a ladder, not the nearest
+     * [PENCIL_PREVIEW_GREY] straight. Graphite bakes as a scatter of flecks with bare
+     * paper between them and reads far paler than the solid line any firmware code
+     * paints, so the tone that matches pen-up is a rung on a ladder, not the nearest
      * grey to `#505050` (which is BLACK). The baked stroke keeps its true ARGB value.
      */
     private fun firmwarePenColor(): Int =
-        if (penStyle == StrokeStyle.PENCIL) RattaTuning.pencilPreviewGrey
+        if (penStyle == StrokeStyle.PENCIL) PENCIL_PREVIEW_GREY
         else RattaInkMap.firmwareColorFor(penColor)
 
     /** Arm the firmware pen with the current style/width and its live colour. */
     private fun applyPenToFirmware() {
         SupernoteInk.setPen(
             livePenCode(penStyle),
-            RattaEmr.penSize(penStyle, penWidth, RattaTuning.pencilEmrMin),
+            RattaEmr.penSize(penStyle, penWidth),
             firmwarePenColor(),
         )
     }
@@ -353,51 +415,28 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (baked) armOverlayClearLadder()
     }
 
-    // ── The raster page (0.1.32) ─────────────────────────────────────────────
+    // ── The raster page (0.1.32; the numbers frozen at 0.1.34) ──────────────
 
     /**
-     * The raster eraser's redraw cadence on Supernote — **16 ms, measured on the Nomad
-     * 2026-09-15**, which is the same number Onyx uses and arrived at for a different
-     * reason. That is exactly why the seam stays: the two engines agree on the value and
-     * not on why, and the next panel will have its own answer.
-     *
-     * Onyx can afford a frame's cadence because its engine answers
-     * `presentRasterEraseProgress` with a regional `handwritingRepaint` of exactly the
-     * rubbed corridor. No such transaction exists here — the firmware owns the panel and
-     * the app can only present frames — so the phase opened at 100 ms expecting the
-     * frame-silence rule to bite. It does not bite on an erase sweep: that rule's cost is
-     * the *masking* an overlay imposes on frames presented under it, and an erase contact
-     * releases the overlay at ACTION_DOWN, so nothing accumulates. What is left is the
-     * panel's own update, and the Nomad keeps up with it. 100 ms was good (113 frames /
-     * 20 % janky over a minute), 60 ms better (162 / 22 %), 16 ms the artist's clear
-     * choice at 756 / 82 % — *"this eraser works better on Ratta hardware than it does on
-     * Onyx"*. The frame count is worse and the hand is right; the hand is what the
-     * cadence is for.
+     * The raster eraser's redraw cadence on Supernote — [RASTER_ERASE_REDRAW_MS], whose
+     * KDoc holds the measurement. Onyx can afford a frame's cadence because its engine
+     * answers `presentRasterEraseProgress` with a regional `handwritingRepaint` of
+     * exactly the rubbed corridor; no such transaction exists here, and the same number
+     * is reached from the other direction.
      */
-    override val rasterEraseRedrawIntervalMs: Long
-        get() = RattaTuning.rasterEraseRedrawIntervalMs
+    override val rasterEraseRedrawIntervalMs: Long get() = RASTER_ERASE_REDRAW_MS
 
     /**
-     * `PENCIL` bakes at a constant pressure on this engine
-     * ([RattaTuning.pencilBakePressure]), so the live ink and the baked ink agree.
-     *
-     * The firmware paints **one tone per armed pen**: no rung of the grey ladder tracked
-     * a soft touch on the Nomad, and the pressure-sensitive pen codes vary width rather
-     * than tone, so a pressure-toned bake could only ever disagree with its own preview —
-     * a lightly drawn line previewing dark and then baking pale. Nothing on the preview's
-     * side can be fixed, so the bake gives up the tonal range instead. The panel was
-     * never going to show it while the pen was down.
+     * `PENCIL` bakes at a constant pressure on this engine ([PENCIL_BAKE_PRESSURE],
+     * whose KDoc holds the reasoning and the measurement), so the live ink and the baked
+     * ink agree.
      *
      * Gated on [firmware]: with the binder absent this view renders its own live ink
      * through the same renderer as the bake, which *can* carry pressure — so there the
      * real pressure is what keeps the two identical.
      */
     override fun bakePressure(style: StrokeStyle, pressure: Float): Float =
-        if (style == StrokeStyle.PENCIL && firmware) {
-            RattaTuning.pencilBakePressure ?: pressure
-        } else {
-            pressure
-        }
+        if (style == StrokeStyle.PENCIL && firmware) PENCIL_BAKE_PRESSURE else pressure
 
     /**
      * The handoff: bake any overlay-shown strokes into the committed layer, then clear

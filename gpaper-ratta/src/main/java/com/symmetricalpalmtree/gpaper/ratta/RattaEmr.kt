@@ -19,13 +19,11 @@ import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
  * being broken (`CLAUDE.md`, learned twice on BOOX). So `PENCIL` gets its own lower
  * floor, [EMR_MIN_HAIRLINE].
  *
- * **120 is a candidate, not a fact.** Whether the firmware renders an EMR of 120 at all
- * on the Nomad — and whether what it renders reads as a 1.2 px line rather than as
- * nothing — is the arc-43 M2 measurement, taken against the baked hairline with
- * [RattaTuning.pencilEmrMin] switched between 120 / 150 / 200 on the device. Whatever
- * the eye settles on is what this constant becomes; until then it is a starting point
- * chosen as the largest round number below the general floor that still leaves the
- * preview visibly thinner than a needle.
+ * **120 is measured, not guessed (Nomad, 2026-09-15, the artist's hand).** It was
+ * switched between 120 / 150 / 200 on the running device against the baked hairline and
+ * 120 is what the eye settled on: the preview is the width the bake turns out to be. The
+ * door that switched it closed at 0.1.34 — re-opening the question means another walk,
+ * not another knob.
  */
 internal object RattaEmr {
 
@@ -41,19 +39,17 @@ internal object RattaEmr {
     /**
      * Floor for `PENCIL` only: the hairline lead's preview may go thinner than the
      * general floor because the alternative is a preview that is wrong about width.
-     * Candidate value pending the Nomad measurement (see the object KDoc).
+     * Measured on the Nomad (see the object KDoc).
      */
     const val EMR_MIN_HAIRLINE = 120
 
     /**
-     * The EMR size to arm for a [style] mark of [widthPx] px. [floor] is the `PENCIL`
-     * floor — a parameter so the measurement door ([RattaTuning.pencilEmrMin]) can move
-     * it on a running device without a rebuild; every other style keeps [EMR_MIN].
+     * The EMR size to arm for a [style] mark of [widthPx] px: `px * 100` clamped to the
+     * style's floor ([EMR_MIN_HAIRLINE] for `PENCIL`, [EMR_MIN] for everything else) and
+     * the panel's ceiling.
      */
-    fun penSize(style: StrokeStyle, widthPx: Float, floor: Int = EMR_MIN_HAIRLINE): Int {
-        // A floor above the ceiling would make coerceIn throw; the door is a tuning
-        // knob, not a contract, so absorb a typo rather than kill a writing session.
-        val min = (if (style == StrokeStyle.PENCIL) floor else EMR_MIN).coerceIn(0, EMR_MAX)
+    fun penSize(style: StrokeStyle, widthPx: Float): Int {
+        val min = if (style == StrokeStyle.PENCIL) EMR_MIN_HAIRLINE else EMR_MIN
         return (widthPx * 100f).toInt().coerceIn(min, EMR_MAX)
     }
 }

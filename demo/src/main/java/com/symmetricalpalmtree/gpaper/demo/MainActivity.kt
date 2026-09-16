@@ -34,7 +34,6 @@ import com.symmetricalpalmtree.gpaper.core.model.Stroke
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
 import com.symmetricalpalmtree.gpaper.core.render.HitTarget
-import com.symmetricalpalmtree.gpaper.ratta.RattaTuning
 
 /**
  * Demo v1 (Phase 2): full-screen paper + e-ink-first minimal controls.
@@ -153,7 +152,6 @@ class MainActivity : Activity() {
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        applyTuningProps()
 
         paper = GPaper.create(this)
         paper.addContentRenderer(sampleObject)
@@ -346,7 +344,7 @@ class MainActivity : Activity() {
             setTextColor(Color.BLACK)
             setBackgroundColor(Color.WHITE)
             setPadding(dp(8), dp(4), dp(8), dp(4))
-            // Three on a raster page: the counters, the effective tuning, the last event.
+            // The counters and the last event, with a line spare for a long one to wrap.
             maxLines = 3
         }
 
@@ -584,7 +582,7 @@ class MainActivity : Activity() {
         }
         applyModeChrome()
         lastEvent = if (rasterMode) {
-            "raster page: PENCIL ${rasterPencilWidthPx}px #505050 · rubber ${rasterEraserRadiusPx.toInt()}px · $tuningLine"
+            "raster page: PENCIL ${rasterPencilWidthPx}px #505050 · rubber ${rasterEraserRadiusPx.toInt()}px"
         } else {
             "stroke page"
         }
@@ -708,76 +706,6 @@ class MainActivity : Activity() {
             "read $readMs ms, swap $swapMs ms"
         refreshStatus()
     }
-
-    // ── The Ratta measurement door (0.1.32) ──────────────────────────────────
-
-    /**
-     * Apply the arc-43 tuning properties, so a walk switches candidates with `setprop`
-     * plus a restart instead of a rebuild each:
-     *
-     * ```
-     * adb shell setprop debug.gpaper.raster_erase_ms 16    # or 60 / 100 / 250 / end
-     * adb shell setprop debug.gpaper.pencil_emr_min 120    # or 150 / 200
-     * adb shell setprop debug.gpaper.pencil_grey dark      # black | dark | gray | light
-     * adb shell setprop debug.gpaper.pencil_bake_pressure 0.5  # 0.3 | 0.5 | 0.7 | real
-     * ```
-     *
-     * All four defaults are now the Nomad's measured answers (2026-09-15); the properties
-     * stay so arc 43's later walks can re-open a question on a real page.
-     *
-     * A demo may read a system property with a subprocess; nothing in the library does.
-     * Unset or unparseable leaves [RattaTuning]'s own default in place.
-     */
-    private fun applyTuningProps() {
-        getprop("debug.gpaper.raster_erase_ms")?.let { raw ->
-            val value = if (raw.equals("end", ignoreCase = true)) {
-                RattaTuning.RASTER_ERASE_REDRAW_END_ONLY
-            } else {
-                raw.toLongOrNull()
-            }
-            if (value != null && value > 0) RattaTuning.rasterEraseRedrawIntervalMs = value
-        }
-        getprop("debug.gpaper.pencil_emr_min")?.toIntOrNull()
-            ?.let { RattaTuning.pencilEmrMin = it }
-        getprop("debug.gpaper.pencil_grey")?.let { raw ->
-            when (raw.lowercase()) {
-                "black" -> RattaTuning.Grey.BLACK
-                "dark" -> RattaTuning.Grey.DARK
-                "gray", "grey" -> RattaTuning.Grey.GRAY
-                "light" -> RattaTuning.Grey.LIGHT
-                else -> null
-            }?.let { RattaTuning.pencilPreviewGrey = it }
-        }
-        getprop("debug.gpaper.pencil_bake_pressure")?.let { raw ->
-            if (raw.equals("real", ignoreCase = true)) {
-                RattaTuning.pencilBakePressure = null
-            } else {
-                raw.toFloatOrNull()?.let { RattaTuning.pencilBakePressure = it }
-            }
-        }
-        Log.i(TAG, "ratta tuning: $tuningLine")
-    }
-
-    private fun getprop(name: String): String? = try {
-        val process = ProcessBuilder("getprop", name).redirectErrorStream(true).start()
-        val value = process.inputStream.bufferedReader().use { it.readText() }.trim()
-        process.waitFor()
-        value.ifEmpty { null }
-    } catch (t: Throwable) {
-        Log.w(TAG, "getprop $name failed: $t")
-        null
-    }
-
-    /** The effective tuning values, for the status line and the log. */
-    private val tuningLine: String
-        get() {
-            val cadence = RattaTuning.rasterEraseRedrawIntervalMs.let {
-                if (it == RattaTuning.RASTER_ERASE_REDRAW_END_ONLY) "end" else "${it}ms"
-            }
-            return "erase $cadence · emr ${RattaTuning.pencilEmrMin}" +
-                " · grey:${RattaTuning.greyName(RattaTuning.pencilPreviewGrey)}" +
-                " · bake:${RattaTuning.pencilBakePressure?.toString() ?: "real"}"
-        }
 
     // ── Toolbar ──────────────────────────────────────────────────────────────
 
@@ -996,7 +924,7 @@ class MainActivity : Activity() {
     private fun applyStatusText() {
         val head = if (rasterMode) {
             "engine:${paper.engineId} · RASTER · undo:$rasterCursor/${rasterHistory.size} · " +
-                "penLifts:$penLifts · raw:$rawEvents\n$tuningLine"
+                "penLifts:$penLifts · raw:$rawEvents"
         } else {
             "engine:${paper.engineId} · strokes:${paper.getStrokes().size} · " +
                 "penLifts:$penLifts · raw:$rawEvents"

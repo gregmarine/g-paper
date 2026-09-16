@@ -26,9 +26,9 @@ class RattaEmrTest {
     fun `every other style keeps the general floor`() {
         assertEquals(200, RattaEmr.penSize(StrokeStyle.PEN, 1.2f))
         assertEquals(200, RattaEmr.penSize(StrokeStyle.FOUNTAIN, 0.4f))
-        // The pencil floor is a pencil floor: it never lowers anything else, even when
-        // the door has moved it.
-        assertEquals(200, RattaEmr.penSize(StrokeStyle.MARKER, 1.2f, floor = 120))
+        // The pencil floor is a pencil floor: a 1.2 px marker is not a hairline, so it
+        // is raised to 200 like every other style.
+        assertEquals(200, RattaEmr.penSize(StrokeStyle.MARKER, 1.2f))
     }
 
     @Test
@@ -46,12 +46,14 @@ class RattaEmrTest {
     }
 
     @Test
-    fun `the pencil floor is a parameter, and a nonsense one cannot throw`() {
-        assertEquals(150, RattaEmr.penSize(StrokeStyle.PENCIL, 1.2f, floor = 150))
-        assertEquals(200, RattaEmr.penSize(StrokeStyle.PENCIL, 1.2f, floor = 200))
-        // The measurement door is a knob, not a contract: a floor above the ceiling
-        // clamps rather than killing the writing session with an exception.
-        assertEquals(1200, RattaEmr.penSize(StrokeStyle.PENCIL, 1.2f, floor = 9000))
-        assertEquals(120, RattaEmr.penSize(StrokeStyle.PENCIL, 1.2f, floor = -5))
+    fun `the two floors are the two measured numbers`() {
+        // Frozen at 0.1.34 when the measurement door closed: the hairline floor is the
+        // Nomad's answer and the general floor is the one the Needle array needs, and
+        // the pencil is the only style that may go below the latter.
+        assertEquals(120, RattaEmr.EMR_MIN_HAIRLINE)
+        assertEquals(200, RattaEmr.EMR_MIN)
+        assertEquals(1200, RattaEmr.EMR_MAX)
+        assertEquals(RattaEmr.EMR_MIN_HAIRLINE, RattaEmr.penSize(StrokeStyle.PENCIL, 0f))
+        assertEquals(RattaEmr.EMR_MIN, RattaEmr.penSize(StrokeStyle.PEN, 0f))
     }
 }
