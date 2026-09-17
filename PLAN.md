@@ -1481,6 +1481,35 @@ angle previewed as a hairline and baked with the flank of the lead. Both Superno
 **Verified by hand on both panels (2026-09-17):** Manta and Nomad, upright and leaned, the bake
 is the line that was previewed. 215 core / 12 ratta green.
 
+### Phase 23 — The pencil previews its tone on Ratta (post-v0.1.0)
+**Status:** ⬜ Not started · **Publishes:** 0.1.36 · branch `pencil-tones` · Opened 2026-09-17 for
+Notesprout SN's arc 44 "Pencils" (branch `pencils` there; plan + ledger in
+`extensions/sketch/PENCILS_PLAN.md`, phase T1).
+
+NSE · Sketch is growing fifteen greyscale pencil shades (`#000000 … #EEEEEE` in `0x11` steps) and
+five lead sizes (1.2 / 2 / 4 / 7 / 12 px). The bake already takes both from `penColor` /
+`penWidth`. The preview does not: `RattaPaperView.firmwarePenColor()` answers
+`PENCIL_PREVIEW_GREY` (DARK_GRAY) for every pencil, so a black lead and a pale one would preview
+alike. **The artist's decision (2026-09-17): the pencil preview maps to the nearest usable firmware
+tone.**
+
+**Planned**
+- Pure `RattaInkMap.pencilPreviewFor(argb)` with **its own** thresholds — `firmwareColorFor`'s are
+  "do not revisit" and stay untouched; a pencil bakes at pressure 0.5 through grain and reads
+  lighter than its nominal colour, so it needs its own ladder. Must answer DARK_GRAY for `#555555`
+  (K1's "spot on") and never LIGHT_GRAY (near-invisible). Starting ladder: levels 0–2 → BLACK,
+  3–9 → DARK_GRAY, 10–14 → GRAY; the hand on the Nomad settles it.
+- `firmwarePenColor()` routes `PENCIL` through it; the `PENCIL_PREVIEW_GREY` constant goes.
+  `bakePressure` 0.5, `bakeTilt` 0, both EMR floors and the erase cadence **do not move**.
+- `RattaInkMapTest` pins the ladder.
+- Demo: the raster toggle gains shade + size cyclers (the walk surface), and each of the five lead
+  sizes is rendered to a PNG before it reaches a panel (`CLAUDE.md`'s rule).
+- A measurement door only if the first ladder misses, opened and closed inside the phase.
+- `docs/api.md` + `CLAUDE.md` in the same commit as the code. Paintsprout Onyx green on its pin
+  before publish.
+
+Opus writes on Fable's brief; Fable reviews the diff before publish.
+
 ---
 
 ## Standing Open Questions (ask as they become relevant)
