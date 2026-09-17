@@ -158,6 +158,24 @@ a model change: Onyx and generic keep the pressure pencil, and **stroke mode is 
 everywhere** — the `Stroke` a host persists always carries the pressures the digitizer
 reported.
 
+**The Supernote pencil preview follows the lead's colour (0.1.36).** Until now `PENCIL`
+armed one grey whatever `penColor` was, which was right while the sketching pencil had one
+lead and wrong the moment a host offered a choice of them: a black lead and a pale one
+previewed identically, so the preview said nothing about the pick the artist had just made.
+The armed tone is now the **nearest usable firmware tone to the lead**, on a ladder of its
+own rather than the one every other style uses. Two things make it its own: a pencil bakes
+as flecks with bare paper between them, at a constant pressure and upright on this engine,
+so it reads lighter than a solid line of the same colour and the whole ladder is offset
+pale-ward (`#505050` and `#555555` still arm dark grey, the pairing the Nomad settled); and
+it **never arms the near-invisible lightest code**, because a pale lead's bake may be faint
+but the line under the hand while it is being drawn may not be. `penColor` re-arms the
+firmware pen, so a host changing shade mid-page sees it on the next mark. Nothing here is
+host API and nothing changed shape: hosts set `penColor` and `penWidth` as they always did,
+and the baked stroke keeps its true ARGB value. **The ladder's boundaries were settled by the
+artist's hand on a Nomad (2026-09-17)**: a grey up to `#222222` arms black, up to `#666666`
+dark grey, anything paler grey. The palest leads preview a shade darker than they bake; the
+lightest code was trialled for them and rejected, because the line could not be followed.
+
 The image is a layer *over* the paper (white + template still draw under it), so the eraser
 clears to transparent rather than painting white. Format is ARGB_8888; about
 18 MB at a 1860 × 2480 page — one per view, for the life of the page.

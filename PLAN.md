@@ -1482,7 +1482,7 @@ angle previewed as a hairline and baked with the flank of the lead. Both Superno
 is the line that was previewed. 215 core / 12 ratta green.
 
 ### Phase 23 — The pencil previews its tone on Ratta (post-v0.1.0)
-**Status:** ⬜ Not started · **Publishes:** 0.1.36 · branch `pencil-tones` · Opened 2026-09-17 for
+**Status:** ✅ Complete (2026-09-17) · **Publishes:** 0.1.36 · branch `pencil-tones` · Opened 2026-09-17 for
 Notesprout SN's arc 44 "Pencils" (branch `pencils` there; plan + ledger in
 `extensions/sketch/PENCILS_PLAN.md`, phase T1).
 
@@ -1509,6 +1509,93 @@ tone.**
   before publish.
 
 Opus writes on Fable's brief; Fable reviews the diff before publish.
+
+**Landed (2026-09-17 — as first written; the walk below moved one number)**
+- **`RattaInkMap.pencilPreviewFor(argb)`** — pure, beside `firmwareColorFor`, with its own two
+  private thresholds: `PENCIL_BLACK_MAX_LUMA` 42.5 (the midpoint of shade levels 2 and 3) and
+  `PENCIL_DARK_GRAY_MAX_LUMA` 161.5 (the midpoint of 9 and 10), so levels 0–2 → BLACK, 3–9 →
+  DARK_GRAY, 10–14 and anything lighter → GRAY. A boundary sits between two shades rather than on
+  one, so no level is a rounding away from the other side. `firmwareColorFor`, its 85/187/222 and
+  their "do not revisit" KDoc are **byte-for-byte untouched** — this is a second ladder, not a
+  shift in the first. It never answers LIGHT_GRAY: that code renders near-invisibly, which is
+  consistent for a solid line of near-white ink and wrong for a pencil, because the palest lead
+  must still be *watchable while it is drawn*. `#555555` (the new default) and `#505050` (arc 43's
+  lead, the one the hand actually paired with the 0.5 bake) both still answer DARK_GRAY.
+  **Both numbers are starting values with a reason, not measurements**, and the KDoc says so.
+- **`firmwarePenColor()` routes `PENCIL` through it** and **`PENCIL_PREVIEW_GREY` is gone.** Its
+  KDoc's still-true half — the Phase 19 history, why BLACK was too dark, one tone per arming — is
+  now in `pencilPreviewFor`'s KDoc and in `firmwarePenColor`'s; `PENCIL_BAKE_PRESSURE`'s KDoc, the
+  companion's door-closing note and `CLAUDE.md`'s Phase 21 bullet all re-point at the ladder rather
+  than at a constant that no longer exists. Nothing else moved: `bakePressure` 0.5, `bakeTilt` 0,
+  `RattaEmr`'s two floors and `RASTER_ERASE_REDRAW_MS` are as they were. **No door**: the ladder is
+  two constants in a pure object, and if the walk moves them it moves them in source.
+- **Checked rather than assumed:** `penColor`'s setter already calls `rearmPenIfLive()` (as
+  `penWidth`'s and `penStyle`'s do), so a shade picked mid-page re-arms the firmware pen on the
+  next mark with no tool boundary and nothing had to be added.
+- **`RattaInkMapTest` +5 (17 ratta, from 12):** all fifteen shade levels pinned one by one to the
+  code they arm; both boundaries pinned from both sides, at the shade *and* at the luma; the
+  `#555555`/`#505050` → DARK_GRAY pairing pinned **together with** `firmwareColorFor("#505050")` →
+  BLACK, so the test states what the two ladders disagree about; LIGHT_GRAY refused across **all
+  256 greys**, not just white; alpha ignored. The existing seven are untouched.
+- **The demo's raster page gains a shade cycler and a lead cycler** (raster-only chrome, built and
+  styled exactly like the stroke page's style/width/colour cyclers): shade steps the fifteen levels
+  from 5 (`#555555`), lead steps 1.2 / 2 / 4 / 7 / 12 from 1.2, each tap wraps, each face carries
+  its current value, each pushes straight into `penColor`/`penWidth` and reports the armed pencil
+  on the gate-deferred status line. They replace the fixed `#505050` at 1.2 px. **The demo is still
+  one tool** — no style choice on a raster page. The armed *firmware tone* is deliberately **not**
+  reported: `RattaInkMap` is `internal` to `gpaper-ratta` and nothing public exposes it, and
+  widening the public API to light up a status line is not a trade worth making.
+- **`PencilRenderHarness` (`gpaper-core/src/test`, +1 core → 216)** — `CLAUDE.md`'s "render a new
+  lead size to a PNG before it reaches a panel", which arc 44 triggers five times over. It drives
+  the real `GraphiteGrain` and writes a contact sheet of the five leads × three shades × straight
+  and curved marks, at 1× and at a nearest-neighbour 3×, plus a per-lead 3× crop, into
+  `gpaper-core/build/pencil-renders/` (never committed). **It cannot drive `StrokeRenderer`** —
+  that is `android.graphics` and an Android module's unit tests compile against `android.jar`,
+  which has neither Skia nor AWT nor ImageIO — so the fleck loop is a hand-mirror of
+  `drawPencil` (same levels, same `fleckPx(level, width)`, same `levelAlpha`, discs for round
+  caps) onto a small self-contained rasteriser and PNG writer built on `java.util.zip` alone:
+  **no new dependency**, in a repo whose whole test stack is JUnit 4. That makes it a *third* rasteriser, so
+  its images are evidence about **geometry** and never about tone — 0.1.13 already measured Skia's
+  own two paths ~40 % apart in tone on identical flecks. It also pins the 0.1.24 rule that produced
+  the habit: a fleck is never wider than the lead that lays it.
+- **What the renders show (read by eye at 1× and 3×, and measured threshold-free):** all five leads
+  lay isotropic graphite with no combing, no connected bristle, no bead at a cap and no banding;
+  the inked extent is the nominal lead plus one to three pixels at every size (1.2 → 4.0, 2 → 4.0,
+  4 → 6.0, 7 → 8.0, 12 → 14.0, measured as the rows holding the middle 98 % of the mark's mass),
+  i.e. **every lead reads at its nominal width plus about one fleck of bleed** — which is what the
+  document promises, and it holds at the hairline as well as at 12 px, so nothing in the new range
+  is quietly fatter or thinner than it says. The widest fleck on the 1.2 px lead is 1.2 px, the
+  0.1.24 cap doing its job. One thing worth
+  a second look on the panel rather than here: **an exactly axis-aligned hairline reads gappier
+  than the same lead on a curve**, because a horizontal mark lines its lanes up with the pixel
+  rows. It is a rasteriser artifact of straight-and-level marks, not a lead problem, and no hand
+  draws that line — but it is the sort of thing that gets reported as "the thin pencil is broken".
+- `docs/api.md` (a paragraph under the constant-bake one: the preview follows the lead's colour,
+  why the ladder is its own, why it stops short of the lightest code, and that the boundaries await
+  the walk), `CLAUDE.md` (the Phase 21 bullet's constant list corrected — `PENCIL_PREVIEW_GREY` was
+  not re-opened but **outgrown** — plus one new standing bullet: one tone per arming limits a
+  single mark, not the set of them).
+- **215 → 216 core, 12 → 17 ratta, all green; `:demo:assembleDebug` builds.** `gpaper-onyx` and
+  `gpaper-core`'s main source set are untouched, so the **public API surface is unchanged** and
+  Paintsprout's pin is unaffected.
+
+**The walk (the artist's hand, Nomad, 2026-09-17) — what turned the guess into a measurement**
+- **Levels 7–9 previewed darker than they baked** on the first ladder (3–9 → DARK_GRAY). The
+  DARK_GRAY ceiling moved 161.5 → **110.5** (the midpoint of levels 6 and 7): **0–2 BLACK, 3–6
+  DARK_GRAY, 7–14 GRAY**, and the hand passed it. The BLACK ceiling (42.5) stood.
+- **Levels 12–14 also preview darker as GRAY than they bake.** LIGHT_GRAY was trialled for them in
+  a throwaway build and **rejected by the same hand** — it "doesn't work": the line cannot be
+  followed while it is drawn. GRAY stays the palest rung; "never LIGHT_GRAY" is now measured, not
+  only argued. Whether the host offers levels 13–14 at all is the host's question (arc 44 T3) —
+  the ladder covers every grey either way.
+- **All five lead sizes pass** — preview and bake agree in width at 1.2 / 2 / 4 / 7 / 12 px. No
+  EMR change, no door opened.
+- Fable reviewed the diff line by line (three wording corrections: the Phase 19 record says GRAY
+  "was tried", not "too pale"; two "the third" miscounts). KDoc, `RattaInkMapTest`, `docs/api.md`
+  and `CLAUDE.md` re-stated from "starting values" to the walked ones.
+
+**Gate:** 216 core / 17 ratta green; `:demo:assembleDebug` builds; Paintsprout Onyx 203 green on
+its pin; published to mavenLocal as **0.1.36**. SN re-pins at arc 44 T3.
 
 ---
 

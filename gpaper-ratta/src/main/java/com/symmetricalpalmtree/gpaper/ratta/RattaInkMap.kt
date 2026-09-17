@@ -19,6 +19,12 @@ package com.symmetricalpalmtree.gpaper.ratta
  * is consistent: near-white baked ink is equally invisible on paper). The panel renders
  * 3 usable live shades; **do not revisit the thresholds** — shifting them only
  * misaligns live from baked to fake variety the panel cannot render.
+ *
+ * Two ladders live here, not one. [firmwareColorFor] is the ladder above, for styles
+ * that bake a solid line. [pencilPreviewFor] (0.1.36) is `PENCIL`'s own, with its own
+ * thresholds, because graphite bakes as flecks at a constant pressure and reads lighter
+ * than its nominal colour — a different question, answered separately rather than by
+ * bending the first one.
  */
 internal object RattaInkMap {
 
@@ -50,6 +56,91 @@ internal object RattaInkMap {
             luma <= DARK_GRAY_MAX_LUMA -> SupernoteInk.Color.DARK_GRAY
             luma <= GRAY_MAX_LUMA -> SupernoteInk.Color.GRAY
             else -> SupernoteInk.Color.LIGHT_GRAY
+        }
+    }
+
+    // ── The PENCIL preview's own ladder (0.1.36) ─────────────────────────────
+    //
+    // A second ladder, not a shift in the first one. [firmwareColorFor] answers the
+    // question "which firmware grey renders nearest the colour this stroke will bake
+    // at", and for every style that lays a solid line that is the right question. The
+    // pencil does not lay a solid line: it bakes as a scatter of flecks with bare paper
+    // between them, and on this engine it bakes at a constant pressure 0.5 and upright
+    // (`RattaPaperView.PENCIL_BAKE_PRESSURE` / `bakeTilt`), so what lands on the page
+    // reads markedly lighter than the nominal colour a solid line of it would. Run
+    // through the nearest-grey ladder a `#505050` lead asks for BLACK — which is what
+    // arc 43 discovered the hard way, and why a `PENCIL`-only exception existed at all
+    // before this ladder replaced it. So the pencil's preview is offset pale-ward, and
+    // it stops one rung short at the top.
+
+    /**
+     * Ceiling for [SupernoteInk.Color.BLACK] on the pencil ladder — the midpoint
+     * between shade levels 2 (`#222222`, luma 34) and 3 (`#333333`, luma 51). The
+     * starting value, and the Nomad walk of 2026-09-17 let it stand: levels 0–2 agreed
+     * with their bake as BLACK and level 3 as DARK_GRAY.
+     */
+    private const val PENCIL_BLACK_MAX_LUMA = 42.5f
+
+    /**
+     * Ceiling for [SupernoteInk.Color.DARK_GRAY] on the pencil ladder — the midpoint
+     * between shade levels 6 (`#666666`, luma 102) and 7 (`#777777`, luma 119).
+     * **Measured on the Nomad, 2026-09-17**: the first guess was 161.5 (between levels
+     * 9 and 10), and the artist's hand found levels 7–9 previewing darker than they
+     * baked; at 110.5 they preview GRAY and agree. It sits far dark-ward of
+     * [DARK_GRAY_MAX_LUMA] (187) — that gap is the measure of how much paler graphite
+     * bakes than a solid line of the same colour.
+     */
+    private const val PENCIL_DARK_GRAY_MAX_LUMA = 110.5f
+
+    /**
+     * The firmware colour code `PENCIL`'s **live preview** is armed as for a lead of
+     * colour [argb] — the nearest *usable* firmware tone, which is not the same thing
+     * as the nearest tone.
+     *
+     * **Why the pencil needs a ladder of its own.** [firmwareColorFor] is calibrated so
+     * the live overlay and the baked stroke read alike at pen-lift, and it assumes the
+     * bake lays a solid line of the colour it was given. Graphite does not: it lands as
+     * flecks with bare paper between them, and on this engine at a constant pressure
+     * 0.5 and with no lean, so the mark reads lighter than its nominal colour. Feeding
+     * a pencil through the solid-line ladder therefore previews it too dark at every
+     * shade — arc 43's `#505050` lead asked for BLACK, which is the mismatch the
+     * (now removed) single `PENCIL_PREVIEW_GREY` constant existed to escape. This is a
+     * `PENCIL`-only ladder beside that one, **not** a revision of it: [firmwareColorFor]
+     * and its three thresholds are untouched and stay "do not revisit".
+     *
+     * **Why one constant is no longer enough.** DARK_GRAY was the measured answer on the
+     * Nomad (2026-09-15) for the one shade the sketch pencil had — BLACK was too dark for
+     * `#505050`, GRAY was tried, and the pair of DARK_GRAY with the 0.5 bake was the
+     * artist's *"spot on"*. It was one constant because there was one lead. NSE · Sketch
+     * now offers fifteen (`#000000 … #EEEEEE` in `0x11` steps, level *n* = grey
+     * `n × 0x11`), so a black lead and a pale one would preview identically, and the
+     * preview would be lying about the one thing it is for. The firmware still paints
+     * exactly one tone per arming — that has not changed and cannot be worked around —
+     * so what a ladder buys is agreement *between* shades, not within one.
+     *
+     * **Never LIGHT_GRAY.** That code renders around `#F0F0F0` (luma ~240) and is
+     * near-invisible on the panel. For a solid line that is consistent — near-white baked
+     * ink is equally invisible — but a pencil is drawn *to be watched while it is drawn*,
+     * and the palest lead must still show a line under the hand even if the bake is faint.
+     * So this ladder tops out at GRAY and a lead lighter than every shade still previews
+     * as GRAY.
+     *
+     * **The rungs, as the hand settled them (Nomad, 2026-09-17).** Levels 0–2 → BLACK,
+     * 3–6 → DARK_GRAY, 7–14 (and anything lighter) → GRAY, with the thresholds at the
+     * midpoints between adjacent shades so a level never sits on a boundary. DARK_GRAY
+     * stays on the default `#555555` (level 5) and on arc 43's `#505050`, so the pairing
+     * Phase 19 settled is unchanged. The walk also reported levels 12–14 previewing
+     * darker as GRAY than they bake, and **LIGHT_GRAY was trialled for them and
+     * rejected by the same hand** — the line could not be followed while it was drawn —
+     * so the pale end's mismatch is the accepted cost of a preview that can be seen, and
+     * "never LIGHT_GRAY" is now a measurement as well as an argument.
+     */
+    fun pencilPreviewFor(argb: Int): Int {
+        val luma = luma(argb)
+        return when {
+            luma <= PENCIL_BLACK_MAX_LUMA -> SupernoteInk.Color.BLACK
+            luma <= PENCIL_DARK_GRAY_MAX_LUMA -> SupernoteInk.Color.DARK_GRAY
+            else -> SupernoteInk.Color.GRAY
         }
     }
 }

@@ -80,7 +80,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         const val REG_OFFSET_MANTA_PX = 3f
         const val REG_MANTA_MIN_DIM = 1600
 
-        // ── The raster page's three measured numbers (0.1.32, frozen 0.1.34) ─────
+        // ── The raster page's measured numbers (0.1.32, frozen 0.1.34) ──────────
         //
         // Each was settled by hand on a Supernote Nomad on 2026-09-15 and carried for
         // one arc behind a `setprop` door (`RattaTuning`) so arc 43's later walks could
@@ -88,7 +88,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // the door closed at 0.1.34 and the measurements are constants. Re-opening one
         // means another walk, not another knob: a judgement of *feel* is worth only what
         // the hand that made it was comparing against. (The fourth of that walk's
-        // numbers, the `PENCIL` EMR floor, is `RattaEmr.EMR_MIN_HAIRLINE`.)
+        // numbers, the `PENCIL` EMR floor, is `RattaEmr.EMR_MIN_HAIRLINE`; another,
+        // the pencil's single preview grey, became a rung of
+        // [RattaInkMap.pencilPreviewFor]'s ladder at 0.1.36 when the pencil grew
+        // fifteen shades — the same answer for the lead it was measured on.)
 
         /**
          * How often the raster eraser redraws mid-sweep here, in ms —
@@ -109,23 +112,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         const val RASTER_ERASE_REDRAW_MS = 16L
 
         /**
-         * The firmware grey `PENCIL`'s live preview is armed as — **measured
-         * DARK_GRAY**, and the one `PENCIL`-only exception to [RattaInkMap], which is
-         * otherwise untouched (every other style still takes the grey nearest its own
-         * colour; `#505050` maps to BLACK, which is what this exists to escape).
-         *
-         * Graphite bakes as a scatter of flecks with bare paper between them and reads
-         * far paler than the solid line any firmware code paints. BLACK was too dark,
-         * GRAY was tried, and **no rung of the ladder could carry it alone**: the
-         * firmware paints one tone per armed pen, so a soft touch cannot preview softer.
-         * DARK_GRAY paired with the constant bake below is what the artist called *"spot
-         * on"*, on the panel and again in a Mac screencap at 3×.
-         */
-        const val PENCIL_PREVIEW_GREY = SupernoteInk.Color.DARK_GRAY
-
-        /**
          * The constant pressure `PENCIL` **bakes** at on a raster page here —
-         * **measured 0.5**, against the [PENCIL_PREVIEW_GREY] preview.
+         * **measured 0.5**, against the DARK_GRAY preview a `#505050` lead was armed
+         * with (that single preview grey is now a rung of
+         * [RattaInkMap.pencilPreviewFor]'s ladder, which answers DARK_GRAY for the same
+         * lead; the pairing the walk settled is unchanged).
          *
          * **Why the bake gives way and not the preview.** Three rounds on the Nomad
          * tried to make a pressure-toned bake agree with its preview from the preview's
@@ -272,14 +263,21 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
     /**
      * The firmware colour for the armed pen: the nearest firmware grey to the ink's own
-     * colour, so the pen-lift handoff is invisible — except for `PENCIL`, which takes
-     * [PENCIL_PREVIEW_GREY] straight. Graphite bakes as a scatter of flecks with bare
-     * paper between them and reads far paler than the solid line any firmware code
-     * paints, so the tone that matches pen-up is a rung on a ladder, not the nearest
-     * grey to `#505050` (which is BLACK). The baked stroke keeps its true ARGB value.
+     * colour, so the pen-lift handoff is invisible — except for `PENCIL`, which reads
+     * its own ladder ([RattaInkMap.pencilPreviewFor]). Graphite bakes as a scatter of
+     * flecks with bare paper between them, here at a constant pressure and upright, and
+     * reads far paler than the solid line any firmware code paints, so the tone that
+     * matches pen-up is offset pale-ward of the nearest grey to the lead's colour
+     * (`#505050`'s nearest is BLACK) and stops short of the near-invisible LIGHT_GRAY.
+     * Both are still *mappings from the armed colour*: since 0.1.36 a black lead and a
+     * pale one preview differently, because the pencil has fifteen shades to tell apart.
+     * The baked stroke keeps its true ARGB value in either case.
+     *
+     * Re-read at every arming, and [penColor]'s setter re-arms — so picking a shade
+     * mid-page changes the live tone without a tool boundary.
      */
     private fun firmwarePenColor(): Int =
-        if (penStyle == StrokeStyle.PENCIL) PENCIL_PREVIEW_GREY
+        if (penStyle == StrokeStyle.PENCIL) RattaInkMap.pencilPreviewFor(penColor)
         else RattaInkMap.firmwareColorFor(penColor)
 
     /** Arm the firmware pen with the current style/width and its live colour. */
