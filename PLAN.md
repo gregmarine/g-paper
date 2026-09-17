@@ -1456,6 +1456,31 @@ same bake.
 that validates this phase is the one that produced the numbers. The host pin jump to 0.1.34 is
 SN's arc 43 K8, after `publishToMavenLocal`.
 
+### Phase 22 — The pencil bakes upright on Ratta (post-v0.1.0)
+**Status:** ✅ Complete (2026-09-17) · **Publishes:** 0.1.35 · Opened 2026-09-17 for Notesprout
+SN's Manta walk of NSE · Sketch (branch `sketch-manta` there).
+
+On the Manta the baked `PENCIL` hairline landed **10–15× wider** than the firmware's live line.
+The first reading was wrong: the bake is the same pixels on both panels, so the EMR size was
+suspected, and a measurement door (`RattaTuning`, pencil EMR + bake pressure) was re-opened for
+the walk. The artist's "10–15×" is what corrected it — no EMR mismatch is that large, and
+`GraphiteGrain`'s lean profile is exactly that large (1× at 9°, ≈4.9× at 44°, ≈10.9× at 75°).
+**The firmware's live line cannot widen with lean**, so a hairline drawn at an ordinary writing
+angle previewed as a hairline and baked with the flank of the lead. Both Supernotes deliver
+`AXIS_TILT`; the Nomad's K1 walk simply happened at an upright grip.
+
+**What landed**
+- **Core: `bakeTilt(style, tilt)`**, a `protected open` seam beside `bakePressure` and applied at
+  the same one place (`bakePoints`, the raster composite). Identity by default — Onyx and the
+  generic engine keep the leaning pencil, because their preview can show it. Stroke mode is
+  untouched: the kept `Stroke` still carries the tilt the digitizer reported.
+- **Ratta overrides it to 0 for `PENCIL`**, gated on `firmware` exactly as `bakePressure` is.
+- **The door opened and closed inside the phase** — `RattaTuning` was never published in a
+  release a host pinned; the EMR floor (120) and bake pressure (0.5) were not moved.
+
+**Verified by hand on both panels (2026-09-17):** Manta and Nomad, upright and leaned, the bake
+is the line that was previewed. 215 core / 12 ratta green.
+
 ---
 
 ## Standing Open Questions (ask as they become relevant)

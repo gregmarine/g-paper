@@ -100,6 +100,14 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   reason** — the seam stays rather than collapsing back into a constant, because the next
   panel will have its own answer. Ratta's 16 is the private `RASTER_ERASE_REDRAW_MS` in
   `RattaPaperView` since Phase 21 (0.1.34); the `setprop` door it was walked behind is gone.
+- **A firmware preview cannot lean, so on Ratta the `PENCIL` bakes upright (Phase 22, 0.1.35).**
+  `GraphiteGrain` widens a leaned lead up to ~11×; the Supernote live line is one width whatever
+  the tilt, so a hairline drawn at a writing angle baked 10–15× wider than it previewed (found on
+  the Manta; the Nomad walk had been at an upright grip — both deliver `AXIS_TILT`). The `bakeTilt`
+  seam sits beside `bakePressure` for the same reason: **the preview and the bake must agree, and
+  where the hardware cannot vary something the bake gives it up.** Before tuning an EMR size
+  against a width mismatch, ask how *large* the mismatch is — an EMR error is tens of percent,
+  a lean error is an order of magnitude.
 - **A measurement door is temporary by construction — it closes when the measuring stops
   (Phase 21, 0.1.34).** `RattaTuning` existed so a walk could switch candidates with `setprop`
   and a restart rather than a rebuild each, because a judgement of *feel* made against a stale
