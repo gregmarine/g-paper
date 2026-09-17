@@ -447,6 +447,14 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         } else pressure
 
     /**
+     * `PENCIL` bakes upright on this engine: the firmware's live line cannot widen with
+     * lean, so a bake that did would be up to ~11× the line that was previewed. Gated on
+     * [firmware] for the same reason as [bakePressure].
+     */
+    override fun bakeTilt(style: StrokeStyle, tilt: Float): Float =
+        if (style == StrokeStyle.PENCIL && firmware) 0f else tilt
+
+    /**
      * The handoff: bake any overlay-shown strokes into the committed layer, then clear
      * the firmware overlay so the app layer takes over. Natural boundaries ONLY — never
      * per pen lift.

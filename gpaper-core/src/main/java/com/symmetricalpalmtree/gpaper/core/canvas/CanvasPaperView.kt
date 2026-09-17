@@ -688,11 +688,29 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         // the seam. Raw bits rather than ==, so an unreported NaN pressure compares
         // equal to itself instead of faking a change and copying the whole polyline.
         val differs = pts.any {
-            bakePressure(stroke.style, it.pressure).toRawBits() != it.pressure.toRawBits()
+            bakePressure(stroke.style, it.pressure).toRawBits() != it.pressure.toRawBits() ||
+                bakeTilt(stroke.style, it.tilt).toRawBits() != it.tilt.toRawBits()
         }
         if (!differs) return pts
-        return pts.map { it.copy(pressure = bakePressure(stroke.style, it.pressure)) }
+        return pts.map {
+            it.copy(
+                pressure = bakePressure(stroke.style, it.pressure),
+                tilt = bakeTilt(stroke.style, it.tilt),
+            )
+        }
     }
+
+    /**
+     * What tilt a captured sample should bake with on a **raster page** — [bakePressure]'s
+     * twin, for the same reason: the preview and the bake must agree. The default is the
+     * tilt that was reported.
+     *
+     * The case it exists for: a leaned `PENCIL` bakes with the flank of the lead, up to
+     * ~11× the set width, and Supernote's firmware line cannot widen with lean at all. A
+     * hairline drawn at an ordinary writing angle previewed as a hairline and baked as a
+     * broad band (found on the Manta, 0.1.35). Ratta therefore bakes its `PENCIL` upright.
+     */
+    protected open fun bakeTilt(style: StrokeStyle, tilt: Float): Float = tilt
 
     /**
      * What pressure a captured sample should bake with on a **raster page** — the whole
