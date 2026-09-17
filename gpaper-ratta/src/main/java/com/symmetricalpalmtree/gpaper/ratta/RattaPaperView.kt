@@ -282,17 +282,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (penStyle == StrokeStyle.PENCIL) PENCIL_PREVIEW_GREY
         else RattaInkMap.firmwareColorFor(penColor)
 
-    /** The Manta walk's measurement door ([RattaTuning.pencilEmr]) — `PENCIL` only. */
-    private fun pencilEmrOverride(): Int? =
-        if (penStyle == StrokeStyle.PENCIL) {
-            RattaTuning.pencilEmr?.coerceIn(1, RattaEmr.EMR_MAX)
-        } else null
-
     /** Arm the firmware pen with the current style/width and its live colour. */
     private fun applyPenToFirmware() {
         SupernoteInk.setPen(
             livePenCode(penStyle),
-            pencilEmrOverride() ?: RattaEmr.penSize(penStyle, penWidth),
+            RattaEmr.penSize(penStyle, penWidth),
             firmwarePenColor(),
         )
     }
@@ -442,9 +436,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * real pressure is what keeps the two identical.
      */
     override fun bakePressure(style: StrokeStyle, pressure: Float): Float =
-        if (style == StrokeStyle.PENCIL && firmware) {
-            RattaTuning.pencilBakePressure ?: PENCIL_BAKE_PRESSURE
-        } else pressure
+        if (style == StrokeStyle.PENCIL && firmware) PENCIL_BAKE_PRESSURE else pressure
 
     /**
      * `PENCIL` bakes upright on this engine: the firmware's live line cannot widen with
