@@ -1799,6 +1799,14 @@ at launch → 70.9 MB** after the walk with both rasters live (each ~9.6 MB on t
 swaps 7–20 ms for 6–9 graphite tiles; a pen line's entry 33 tiles on ink alone, every rub entry
 on graphite alone. 0.1.39 published to mavenLocal.
 
+**Consumer closed (2026-09-18):** Notesprout SN re-pinned 0.1.39 at arc 45 / G3 (`sn-screen`), and
+the sketch face now carries both rasters — per-layer saves as lossless WebP, per-layer undo
+entries, the layered listener overrides only. The user's Nomad hand walk was clean: pencil over
+pen and rubbed, pen over pencil and rubbed, a rub over ink alone, undo/redo across both rasters,
+Bring in ink then rub then undo — *"Clean!"* Face PSS 67.7 MB with both rasters live vs. 64.2 MB
+at one; an ink lattice's undo entry costs exactly what the same graphite lattice's does (368 tiles
+/ 6 029 312 B each). Merge of `two-rasters` to `main` pending the user's word.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
