@@ -1718,6 +1718,37 @@ fleck 48 px out**, twice the station pitch. Combs pile up and part at the rim. I
 release host + `NSE · Sketch` installed, the 96 px lead drawn by hand: *"Sooooo much better :)"*
 `graphite-tooth` merged to `main` (`--no-ff`) the same day and deleted.
 
+### Phase 26 — Two rasters: graphite and ink (post-v0.1.0)
+**Status:** ⬜ Planned (2026-09-17) · **Publishes:** 0.1.39 · branch `two-rasters` ·
+Opened 2026-09-17 by the artist's decision for NSE · Sketch's arc 45 "Ink" (Notesprout
+`extensions/sketch/INK_PLAN.md`): *"in the real world, ink is more permanent than pencil"* — the
+gel pen must not lift under the rubber. The page held one ARGB bitmap and a pixel does not know
+which tool laid it, so the fix is the page's data model, not a colour key: **two rasters, one
+picture.**
+
+**Scope (Fable's brief to Opus; Fable reviews the diff before publish)**
+- `RasterLayer { GRAPHITE, INK }` in `gpaper-core`. `CanvasPaperView` holds `graphiteRaster` and
+  `inkRaster`, both allocated lazily as `pageRaster` is today.
+- **Routing by style**: `compositeIntoRaster` bakes `PENCIL` into graphite and every other style
+  into ink — a fresh mark, a `loadStrokes` bake and an `addStrokes` bake alike.
+- **Flatten = `DARKEN`**: the committed-layer draw paints graphite then ink with
+  `PorterDuff.Mode.DARKEN`, so each pixel is the darker of the two — order-independent, and right
+  for a coloured ink later. The Ratta live preview is untouched.
+- **The rubber rubs graphite only** (`eraseRasterAlong`); the ink raster is never read by an
+  erase. `RasterRubbing` and `RasterRub` are unchanged — an `inkLift` fraction is a future
+  decision, not this phase.
+- **Layer-qualified API**: `getPageRaster(layer)` / `loadPageRaster(layer, bitmap)` /
+  `copyPageRaster(layer, rect)` / `swapPageRaster(layer, patches)`, and a layer on
+  `PaperListener.onRasterWillChange` / `onRasterChanged`; **the un-layered forms keep meaning
+  graphite**, so Paintsprout compiles unchanged against a re-pin. One contact announces exactly one
+  layer. `clear()` drops both. `RasterDirty` unchanged.
+- Demo: the raster page draws pencil + pen + rubs, and renders the flatten to a PNG before a panel
+  sees it (this file's standing rule). `docs/api.md` + `CLAUDE.md` in the same commit.
+
+**Gate:** `./gradlew test` green (core + ratta + onyx); Paintsprout Onyx green on its pin; the
+Nomad demo by the artist's hand — pen over pencil, pencil over pen, rub each way: graphite lifts,
+ink stays; flatten redraw ms vs. 0.1.38 and demo PSS recorded here; 0.1.39 to mavenLocal.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
