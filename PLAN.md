@@ -1714,7 +1714,9 @@ fleck 48 px out**, twice the station pitch. Combs pile up and part at the rim. I
 - **217 core green**; the determinism pins in `GraphiteGrainTest` pass untouched — the field is a
   stateless hash like everything else here.
 
-**Gate:** the artist's Manta hand walk of the 96 px lead after SN re-pins `:sn-screen` at 0.1.38.
+**Gate — passed (the artist's hand, Manta, 2026-09-17):** SN re-pinned `:sn-screen` at 0.1.38, the
+release host + `NSE · Sketch` installed, the 96 px lead drawn by hand: *"Sooooo much better :)"*
+`graphite-tooth` merged to `main` (`--no-ff`) the same day and deleted.
 
 ## Standing Open Questions (ask as they become relevant)
 
