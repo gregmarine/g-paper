@@ -34,6 +34,7 @@ import com.symmetricalpalmtree.gpaper.core.model.Stroke
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
 import com.symmetricalpalmtree.gpaper.core.render.HitTarget
+import java.util.Locale
 
 /**
  * Demo v1 (Phase 2): full-screen paper + e-ink-first minimal controls.
@@ -79,10 +80,50 @@ class MainActivity : Activity() {
 
     private var rasterMode = false
 
-    /** Paintsprout's pencil, unchanged: a 1.2 px hairline of soft graphite. */
-    private val rasterPencilWidthPx = 1.2f
-    private val rasterPencilColor = 0xFF505050.toInt()
+    /**
+     * Arc 44's fifteen pencil shades: level *n* is the grey `n × 0x11`, `#000000` through
+     * `#EEEEEE`, the e-paper ladder without white. Level 5 (`#555555`) is the default, and
+     * it replaces the single `#505050` lead the raster vehicle carried for arc 43 — near
+     * enough to it that the DARK_GRAY preview the Nomad settled is unchanged, and on the
+     * ladder that the fifteen actually use.
+     */
+    private val rasterShadeLevels = IntArray(15) { it }
+    private var rasterShadeIndex = 5
+
+    /**
+     * The lead sizes, in px. 1.2 is the hairline arc 43 shipped and 1.2 … 12 were arc 44's
+     * five; **16 … 96 are the walk surface Phase 24 was opened by** — with the old EMR
+     * ceiling of 1200 every one of them previewed as a 12 px lead and baked at its true
+     * width, which is exactly the width lie this project treats as the serious one. The
+     * hand walked all seven on the Nomad (2026-09-17) and every one previews at the width
+     * it bakes, so the ceiling moved to 9600 and the cycler keeps them: 96 is the widest
+     * lead anything has armed, and it stays in the demo because that is what makes the
+     * ceiling a measurement instead of a number in a KDoc.
+     */
+    private val rasterLeads = floatArrayOf(1.2f, 2f, 4f, 7f, 12f, 16f, 20f, 24f, 32f, 48f, 64f, 96f)
+    private var rasterLeadIndex = 0
+
     private val rasterEraserRadiusPx = 12f
+
+    /** ARGB of shade level [level] — a grey of `level × 0x11` in all three channels. */
+    private fun shadeColor(level: Int): Int {
+        val v = level * 0x11
+        return (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+    }
+
+    private fun shadeHex(level: Int): String =
+        "#%02X%02X%02X".format(level * 0x11, level * 0x11, level * 0x11)
+
+    /** `1.2px` / `4px` — `Locale.US` so a comma-decimal locale can't rename a lead size. */
+    private fun leadLabel(px: Float): String =
+        if (px == px.toInt().toFloat()) "${px.toInt()}px" else String.format(Locale.US, "%.1fpx", px)
+
+    private val rasterShade: Int get() = rasterShadeLevels[rasterShadeIndex]
+    private val rasterLead: Float get() = rasterLeads[rasterLeadIndex]
+
+    /** What the armed pencil is, for a button face and for the status line. */
+    private fun rasterPencilSummary(): String =
+        "shade $rasterShade ${shadeHex(rasterShade)} · lead ${leadLabel(rasterLead)}"
 
     /** The stroke-mode eraser radius, restored when raster mode is turned off. */
     private var strokeEraserRadiusPx = 0f
@@ -549,10 +590,18 @@ class MainActivity : Activity() {
      * content swap does, so the demo clears first in both directions and starts each
      * mode from a blank page — a mode is never flipped under ink.
      *
-     * Raster mode is Paintsprout's sketching page, as the artist approved it: one
-     * `PENCIL` at 1.2 px in `#505050`, the rubbing eraser at 12 px on the 0.1.30
-     * defaults, no lasso, no gestures (a hatch is not a scribble, and a closed shading
-     * loop is not a selection), no style/width/colour to choose.
+     * Raster mode is the sketching page as the artist approved it: one `PENCIL`, the
+     * rubbing eraser at 12 px on the 0.1.30 defaults, no lasso, no gestures (a hatch is
+     * not a scribble, and a closed shading loop is not a selection), and no *style* to
+     * choose — it is a one-tool page and stays one.
+     *
+     * **It does now have a shade and a lead size to choose (0.1.36).** Arc 44 gives the
+     * sketch pencil fifteen greys and five leads, and this page is where they are walked:
+     * the two cyclers are the only way to put a shade in front of the Ratta preview's new
+     * ladder and a lead in front of the EMR floor on a real panel. They replace the single
+     * fixed `#505050` at 1.2 px, and they are raster-only chrome — the stroke page's own
+     * style / width / colour cyclers are untouched and still hidden here, because they
+     * choose among *styles*, which this page does not have.
      */
     private fun toggleRaster() {
         if (paper.transformingContentId != null) paper.endTransform()
@@ -565,8 +614,8 @@ class MainActivity : Activity() {
         if (rasterMode) {
             strokeEraserRadiusPx = paper.eraserRadius
             paper.penStyle = StrokeStyle.PENCIL
-            paper.penWidth = rasterPencilWidthPx
-            paper.penColor = rasterPencilColor
+            paper.penWidth = rasterLead
+            paper.penColor = shadeColor(rasterShade)
             paper.eraserRadius = rasterEraserRadiusPx
             paper.rasterRubbing = RasterRubbing()
             paper.smartLassoEnabled = false
@@ -582,7 +631,7 @@ class MainActivity : Activity() {
         }
         applyModeChrome()
         lastEvent = if (rasterMode) {
-            "raster page: PENCIL ${rasterPencilWidthPx}px #505050 · rubber ${rasterEraserRadiusPx.toInt()}px"
+            "raster page: PENCIL ${rasterPencilSummary()} · rubber ${rasterEraserRadiusPx.toInt()}px"
         } else {
             "stroke page"
         }
@@ -721,7 +770,8 @@ class MainActivity : Activity() {
      *  (one pencil, one rubber: nothing here has a meaning there). */
     private val strokeOnlyButtons = mutableListOf<TextView>()
 
-    /** Chrome that only a raster page has: the host-owned undo and the swap timer. */
+    /** Chrome that only a raster page has: the pencil's shade and lead (0.1.36), the
+     *  host-owned undo and the swap timer. */
     private val rasterOnlyButtons = mutableListOf<TextView>()
 
     private fun applyTransformButtons() {
@@ -821,13 +871,37 @@ class MainActivity : Activity() {
         val redoButton = toolbarButton("Redo") { rasterRedo() }
         val swapPageButton = toolbarButton("Swap pg") { swapWholePage() }
 
+        // The pencil's shade and lead (0.1.36) — arc 44's walk surface. Each tap steps one
+        // and wraps, like the stroke page's cyclers, and the face carries the current value
+        // because on a walk the question is always "which one am I looking at now". Both
+        // push straight into the live pen: `penColor` / `penWidth` re-arm the firmware on
+        // Ratta, so a pick takes effect on the very next mark without a tool boundary.
+        // The lead cycler runs to 96 px since 0.1.37 — see `rasterLeads`.
+        val shadeButton = toolbarButton("Shade $rasterShade ${shadeHex(rasterShade)}") { }
+        shadeButton.setOnClickListener {
+            rasterShadeIndex = (rasterShadeIndex + 1) % rasterShadeLevels.size
+            paper.penColor = shadeColor(rasterShade)
+            shadeButton.text = "Shade $rasterShade ${shadeHex(rasterShade)}"
+            lastEvent = "pencil ${rasterPencilSummary()}"
+            refreshStatus()
+        }
+
+        val leadButton = toolbarButton("Lead ${leadLabel(rasterLead)}") { }
+        leadButton.setOnClickListener {
+            rasterLeadIndex = (rasterLeadIndex + 1) % rasterLeads.size
+            paper.penWidth = rasterLead
+            leadButton.text = "Lead ${leadLabel(rasterLead)}"
+            lastEvent = "pencil ${rasterPencilSummary()}"
+            refreshStatus()
+        }
+
         strokeOnlyButtons += listOf(
             lassoButton, styleButton, widthButton, colorButton,
             smartLassoButton, scribbleButton, transformButton, lockButton,
         )
-        rasterOnlyButtons += listOf(undoButton, redoButton, swapPageButton)
+        rasterOnlyButtons += listOf(shadeButton, leadButton, undoButton, redoButton, swapPageButton)
 
-        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, smartLassoButton, scribbleButton, clearButton, transformButton, lockButton, rasterButton, undoButton, redoButton, swapPageButton, notesButton)) {
+        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, smartLassoButton, scribbleButton, clearButton, transformButton, lockButton, rasterButton, shadeButton, leadButton, undoButton, redoButton, swapPageButton, notesButton)) {
             bar.addView(b, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginEnd = dp(6) })

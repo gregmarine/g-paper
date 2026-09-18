@@ -158,6 +158,24 @@ a model change: Onyx and generic keep the pressure pencil, and **stroke mode is 
 everywhere** — the `Stroke` a host persists always carries the pressures the digitizer
 reported.
 
+**The Supernote pencil preview follows the lead's colour (0.1.36).** Until now `PENCIL`
+armed one grey whatever `penColor` was, which was right while the sketching pencil had one
+lead and wrong the moment a host offered a choice of them: a black lead and a pale one
+previewed identically, so the preview said nothing about the pick the artist had just made.
+The armed tone is now the **nearest usable firmware tone to the lead**, on a ladder of its
+own rather than the one every other style uses. Two things make it its own: a pencil bakes
+as flecks with bare paper between them, at a constant pressure and upright on this engine,
+so it reads lighter than a solid line of the same colour and the whole ladder is offset
+pale-ward (`#505050` and `#555555` still arm dark grey, the pairing the Nomad settled); and
+it **never arms the near-invisible lightest code**, because a pale lead's bake may be faint
+but the line under the hand while it is being drawn may not be. `penColor` re-arms the
+firmware pen, so a host changing shade mid-page sees it on the next mark. Nothing here is
+host API and nothing changed shape: hosts set `penColor` and `penWidth` as they always did,
+and the baked stroke keeps its true ARGB value. **The ladder's boundaries were settled by the
+artist's hand on a Nomad (2026-09-17)**: a grey up to `#222222` arms black, up to `#666666`
+dark grey, anything paler grey. The palest leads preview a shade darker than they bake; the
+lightest code was trialled for them and rejected, because the line could not be followed.
+
 The image is a layer *over* the paper (white + template still draw under it), so the eraser
 clears to transparent rather than painting white. Format is ARGB_8888; about
 18 MB at a 1860 × 2480 page — one per view, for the life of the page.
@@ -238,12 +256,23 @@ verified on five BOOX devices; the Ratta 0…31 pen-code sweep on Nomad + Manta)
 | `DASH` | uniform, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
 | `CROSS` | stream of small x marks | `STROKE_STYLE_CHARCOAL` (4) — nearest texture, no x-stream in firmware | code 3 (x stream) |
 
-Ratta live width is the firmware's EMR size, `px * 100`, clamped to 200…1200 — except that
+Ratta live width is the firmware's EMR size, `px * 100`, clamped to 200…9600 — except that
 **`PENCIL` has a floor of its own, 120 (0.1.32)**. The sketching pencil is a 1.2 px
 hairline, and at the general floor the firmware previews it as a 2 px needle line: the mark
 would visibly narrow at pen-up when the bake lays the real width, and a preview that lies
 about width is the worst kind, because the hand aims with it and reads the collapse as the
-*bake* being broken. 120 is a candidate pending the Nomad measurement, not a settled number.
+*bake* being broken. 120 is the Nomad's own answer (2026-09-15), walked against 150 and 200.
+
+**The ceiling is 9600 = 96 px since 0.1.37, and what that number is matters.** It was 1200
+from the PoC onwards, on the reasoning that the panel gained nothing above it and the daemon
+lagged — but nothing above it had ever been armed, because nothing had ever asked for a lead
+wider than 12 px. The artist's hand walked 16 / 20 / 24 / 32 / 48 / 64 / 96 px on the Nomad
+(2026-09-17) and **every one previews at the width it bakes, with no lag at any of them**;
+Supernote's own notes app offers widths around 24 px, comfortably inside that. So 96 px is
+the ceiling because it is the widest lead anyone has walked, **not** because the panel was
+found to refuse anything wider — a host that needs more should expect a walk to grant it.
+Widths above the ceiling still clamp rather than fail, so the live preview simply stops
+growing while the bake goes on laying the width you asked for.
 
 Ratta codes with no `StrokeStyle`: 12 is broken firmware-side (never armed), 6/7/9/13
 render nothing, 0/5/8/11 are redundant solid variants of `NEEDLE`, 17–31 alias `INK`.

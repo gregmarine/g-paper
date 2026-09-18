@@ -119,7 +119,11 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   `PENCIL_BAKE_PRESSURE` in `RattaPaperView`, `RattaEmr.EMR_MIN_HAIRLINE` used directly — each
   carrying its measurement in its KDoc, because **the number is worth nothing without the walk
   that produced it.** Re-opening one of these questions means another walk and another door,
-  not a knob left standing for a walk nobody has scheduled.
+  not a knob left standing for a walk nobody has scheduled. (Phase 23, 0.1.36: one of
+  those, `PENCIL_PREVIEW_GREY`, is gone — not re-opened but *outgrown*, when the pencil went
+  from one lead to fifteen and one constant could no longer answer. Its measurement lives on as
+  a rung of `RattaInkMap.pencilPreviewFor`, which still answers DARK_GRAY for the lead the walk
+  was run on.)
 - **A preview can only be honest about what the firmware can vary; where it cannot vary tone,
   the BAKE gives up tone rather than the preview lying (Phase 19, 0.1.32).** The Supernote
   firmware paints one tone per armed pen. Three rounds on the Nomad tried to make a
@@ -135,14 +139,46 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   the pressure pencil, because their preview can carry tone; and **stroke mode is untouched on
   every engine** — the pressures in a `Stroke` are the host's data and must be the measured
   ones.
+- **One tone per arming is a limit on a single mark, not on the set of them (Phase 23, 0.1.36).**
+  Phase 19's answer — a constant preview grey for `PENCIL` — was right for a pencil with one
+  lead, and stopped being right the moment NSE · Sketch grew fifteen shades: a black lead and a
+  pale one previewed identically, so the preview lied about the choice the artist had just made.
+  A firmware that cannot vary tone *within* a stroke can still vary it *between* strokes, and
+  what the hand needs to see is that the pick took. `RattaInkMap.pencilPreviewFor` is therefore a
+  **second ladder beside `firmwareColorFor`, with its own thresholds** — because a scatter of
+  flecks baked at constant pressure reads lighter than a solid line of the same colour, so the
+  nearest-grey question has a different answer for a pencil, and bending the shared thresholds to
+  fit would have broken every other style's pen-lift handoff to fix one. It tops out at GRAY and
+  never answers LIGHT_GRAY: a mark that is invisible *while it is being drawn* is worse than one
+  that previews a shade off, because the hand aims with it. **Its rungs are the artist's
+  hand on the Nomad (2026-09-17): 0–2 BLACK, 3–6 DARK_GRAY, 7–14 GRAY** — the first guess put
+  7–9 on DARK_GRAY and they previewed darker than they baked; LIGHT_GRAY was trialled for 12–14
+  and rejected by the same hand, so the pale end previews a shade dark and stays visible.
+  DARK_GRAY still carries `#505050`/`#555555`, Phase 19's pairing.
 - **A hairline needs a lower firmware floor than a pen does (Phase 19, 0.1.32).** `RattaEmr`
-  (pure, JVM-tested) clamps `px * 100` to 200…1200 for every style but `PENCIL`, whose floor is
-  `EMR_MIN_HAIRLINE` (120, a candidate pending the Nomad measurement). The general floor exists
+  (pure, JVM-tested) clamps `px * 100` to 200…9600 for every style but `PENCIL`, whose floor is
+  `EMR_MIN_HAIRLINE` (120, the Nomad's answer — see Phase 24 for the ceiling). The general floor exists
   because an EMR near zero paints a sub-pixel line that reads exactly like a dead firmware
   path — but the sketching pencil is a 1.2 px lead, and at floor 200 the firmware previews it
   as a 2 px needle and the mark visibly narrows at pen-up. **A preview that lies about width is
   the serious failure** (the BOOX `CHARCOAL` lesson, from the other direction): width is what
   the hand aims with, and the collapse is read as the *bake* being broken.
+- **A limit nothing ever reached is not a measurement, and it will be believed anyway
+  (Phase 24, 0.1.37).** `RattaEmr.EMR_MAX` carried 1200 from the PoC through Phase 19 with the
+  reason *"the panel gains nothing above it and the daemon lags"* — a sentence stating two
+  findings, **neither of which had been made**: nothing had ever armed an EMR above 1200,
+  because in a world whose widest lead was 12 px nothing ever asked to. It survived Phase 19's
+  rewrite, a floors-and-ceiling JVM test, and the Phase 21 freeze that went through these very
+  constants pairing each with its walk, because a clamp nobody hits is invisible from every side
+  — the only thing that can expose it is a host finally asking for more. Arc 44 did, and **all
+  seven wide leads (16 / 20 / 24 / 32 / 48 / 64 / 96 px) preview at the width they bake with no
+  lag at any of them** (the artist's hand, Nomad, 2026-09-17); Supernote's own notes app sits
+  around 24. The ceiling is now 9600 and its KDoc says the thing the old one did not: **96 px is
+  the widest lead a hand has walked, not a width the panel refused.** Two standing rules fall out
+  of it. A bound stated as a device finding must name the walk that found it or say plainly that
+  it is a guess — `EMR_MIN_HAIRLINE`'s KDoc does this and is why nobody has had to re-derive 120.
+  And when a clamp is the suspect, ask first whether anything has ever *touched* it: a wrong
+  ceiling and a right one are indistinguishable until the day something reaches them.
 - **`loadPageRaster` and `swapPageRaster` need no Ratta override, for two different reasons
   (verified Phase 19 — not a gap).** `loadPageRaster` is a content swap and a page turn calls
   `clearForContentSwap` first, which bakes and releases the overlay under the swap law before
