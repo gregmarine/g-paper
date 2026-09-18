@@ -1672,7 +1672,7 @@ because it was never met by one.
 **0.1.37** to mavenLocal (`GPAPER_VERSION`, `README.md`, `docs/integration-guide.md` bumped). SN
 re-pinned at arc 44 T3 (`:sn-screen` 0.1.35 → 0.1.37) and walked the twelve leads on the Nomad;
 **arc 44 froze at T5 (2026-09-17)** on the user's hand walks — Phases 23 and 24 are closed with
-it. `pencil-tones` merges to `main` (`--no-ff`) only on the artist's word.
+it. `pencil-tones` merged to `main` (`--no-ff`) on the artist's word, 2026-09-17, and deleted.
 
 ---
 
