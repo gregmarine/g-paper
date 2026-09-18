@@ -1676,6 +1676,48 @@ it. `pencil-tones` merged to `main` (`--no-ff`) on the artist's word, 2026-09-17
 
 ---
 
+### Phase 25 — Graphite on paper: the wide lead stops being a comb (post-v0.1.0)
+**Status:** ✅ Complete (2026-09-17) · **Publishes:** 0.1.38 · branch `graphite-tooth` ·
+Opened 2026-09-17 by the artist's Manta screencap of NSE · Sketch's 96 px lead: *"it doesn't
+look like a natural graphite grain. It looks like a series of lines more than anything."*
+
+It was. Reproduced offline (a JVM dump of `GraphiteGrain.of` rendered in Python — the pure-Kotlin
+promise paying off), and the mechanism was **not** the fleck jitter, which was the first guess and
+changed nothing at 1.0: the centre of the mark was laid evenly along its length and the **rim came
+in bunches with a ~4 px period**, each bunch a short bar across the mark. A cross-section is a
+rigid comb turned to the smoothed travel direction, and that direction wobbles by a couple of
+degrees after `TANGENT_SMOOTH_PX` — nothing at the centre line, **1.7 px along the stroke on a
+fleck 48 px out**, twice the station pitch. Combs pile up and part at the rim. Invisible on the
+12 px lead every earlier phase looked at; the whole look at 96. Smoothing harder would need a
+~1000 px window to hold that lever arm still, which would drag every curve.
+
+**Landed (all in `GraphiteGrain`, `gpaper-core` only — public API unchanged)**
+- **`LEVER_JITTER` (0.08 px along per px out):** a fleck's along-the-stroke freedom grows with its
+  distance from the centre line, so the rim flecks land a few px ahead of or behind their station
+  — more than the wobble can move them — and the bunching averages out. Centre flecks keep their
+  cell. `JITTER` raised 0.62 → 1.0 in both axes while there (a full cell; the comb was the real
+  fault but a lattice that shows through at 0.62 is a second one).
+- **The skate is two-dimensional** (`SKATE_WIDTH_PX` 5): it was a function of arc alone, so it
+  lifted a whole cross-section at once — on a fine lead a streak, on a 96 px lead a **bar across
+  the mark every 26 px**. Now long along and short across: streaks in the direction of travel.
+- **The sheet's tooth (`tooth`, `catches`, `TOOTH_CELL_PX` 3.5 / `TOOTH_WEIGHT` 0.55 /
+  `TOOTH_SEED`):** with the comb gone the mark was white noise — every site an independent coin
+  toss, an even spray that reads as static. Real tooth comes in patches; so a two-octave value-noise
+  field in **page** coordinates, seeded by a constant (the sheet, not the stroke), and a site's catch
+  is a blend of its own toss and the tooth height under it. Mottled like paper; two strokes over the
+  same spot share the same hollows; at full coverage the field is overruled and a hard press goes
+  solid. Applied to the tap as well as the sweep.
+- **Total ink is unchanged within 1 %** (measured on the offline render), so the fifteen-shade
+  ladder the hand approved in Phase 23 does not move; the texture is redistributed, not darkened.
+  Checked at 96 px / 0.5, 96 px / 1.0 (solid), 24 px, 5 px, the 1.2 px hairline, and a 12 px lead
+  at 60° (pale, broad, mottled like shading): nothing regressed on the narrow leads BOOX draws.
+- **217 core green**; the determinism pins in `GraphiteGrainTest` pass untouched — the field is a
+  stateless hash like everything else here.
+
+**Gate — passed (the artist's hand, Manta, 2026-09-17):** SN re-pinned `:sn-screen` at 0.1.38, the
+release host + `NSE · Sketch` installed, the 96 px lead drawn by hand: *"Sooooo much better :)"*
+`graphite-tooth` merged to `main` (`--no-ff`) the same day and deleted.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
