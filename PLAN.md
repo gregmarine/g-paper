@@ -1597,6 +1597,81 @@ Opus writes on Fable's brief; Fable reviews the diff before publish.
 **Gate:** 216 core / 17 ratta green; `:demo:assembleDebug` builds; Paintsprout Onyx 203 green on
 its pin; published to mavenLocal as **0.1.36**. SN re-pins at arc 44 T3.
 
+### Phase 24 — The lead goes wide on Ratta (post-v0.1.0)
+**Status:** ✅ Complete (2026-09-17) · **Publishes:** 0.1.37 · branch `pencil-tones` ·
+Opened 2026-09-17 by Notesprout SN's arc 44 "Pencils" phase T3 (branch `pencils` there; plan +
+ledger in `extensions/sketch/PENCILS_PLAN.md`).
+
+Phase 23 gave the pencil fifteen shades and walked its five leads (1.2 / 2 / 4 / 7 / 12 px). T3 is
+where the host picks which sizes it actually offers, and the artist went looking above 12 — where
+`RattaEmr.EMR_MAX` had been clamping the live preview to 12 px since the PoC, so a 24 px lead
+previewed as a 12 px one and baked at 24. **That is the width lie this project treats as the
+serious one**, and it had been sitting behind a ceiling whose KDoc read *"the panel gains nothing
+above it and the daemon lags"* — a sentence asserting two device findings, neither of which had
+ever been made. Nothing had ever armed an EMR above 1200, because until arc 44 nothing asked to.
+
+**Planned**
+- Lift `EMR_MAX` to the widest size the hand walks, and rewrite its KDoc to say what is measured
+  and what is merely untried. `EMR_MIN` (200) and `EMR_MIN_HAIRLINE` (120) **do not move** — the
+  floors are measurements and this phase is only about the other end.
+- `RattaEmrTest`: the ceiling pins move, and each walked width gets its own pin, so a lead the
+  walk approved can never be silently clamped back.
+- The demo keeps its widened lead cycler as the walk surface.
+- `docs/api.md`, `CLAUDE.md` and this entry in the same commit as the code.
+- Audit `gpaper-ratta` / `gpaper-core` for anything else assuming a 12 px maximum.
+
+**Landed (2026-09-17)**
+- **`RattaEmr.EMR_MAX` = 9600 (96 px)**, and its KDoc now separates the measurement from the
+  assumption in as many words: 96 px is the widest lead a hand has walked, and it is the ceiling
+  **because nothing wider has been tried, not because anything refused**. A host wanting more
+  should expect a walk to grant it — the opposite of the old ceiling's story. `penSize` itself is
+  unchanged: one `coerceIn` between a style-dependent floor and this ceiling.
+- **`EMR_MIN` and `EMR_MIN_HAIRLINE` are byte-for-byte untouched**, as is every other Ratta
+  constant (`PENCIL_BAKE_PRESSURE` 0.5, `bakeTilt` 0, `RASTER_ERASE_REDRAW_MS` 16,
+  `RattaInkMap`'s two ladders). `gpaper-core`'s main source set and `gpaper-onyx` are untouched,
+  so the **public API surface is unchanged** and Paintsprout's pin is unaffected.
+- **The 12 px-maximum audit found nothing else to fix.** `RattaEmr.EMR_MAX` was the only place in
+  either module where a maximum width was written down. The firmware **eraser** has a floor and no
+  ceiling at all (`eraserEmr`, `radius * 50` coerced up to `ERASER_EMR_MIN` 400), so a wide rubber
+  was never clamped. `RasterDirty`'s pad is `width + MARGIN_PX` — driven by the mark's own width,
+  so it already grows with the lead and needed no change; the one consequence worth stating is
+  that at a 96 px lead a run's announced rect is ~452 px a side rather than the ~284 a 12 px lead
+  makes of the same 256 px span (`MARGIN_PX` is 2), which costs a
+  raster host a larger before-image per run exactly as it should. The remaining "12 px" in the
+  tree are unrelated: `PencilRenderHarness`'s cell geometry is arc 44's five lead sizes, and
+  `docs/api.md`'s "12 px-inflated box" is the selection overlay's inflation. One thing the audit
+  did turn up and the KDoc now says: `RattaEmr`'s own opening paragraph notes the Needle
+  penSizeArray running "~200…2400", and the walk arms sizes well past that and the firmware
+  renders them — **that array is the range Ratta's own app picks from, not a bound the daemon
+  enforces.** Same mistake in miniature, and the reason the floor argument rests on what a thin
+  line *looks* like rather than on where the array starts.
+- **`RattaEmrTest` +1 test (17 → 18 ratta):** `a wide pen stops at the ceiling` now pins 12 px at
+  1200 (nowhere near the ceiling now), 40 px passing through at 4000, and 200 px clamping at 9600;
+  the new `every lead the hand walked arms the width it asked for` pins all seven walked sizes
+  (16 / 20 / 24 / 32 / 48 / 64 / 96 → 1600 / 2000 / 2400 / 3200 / 4800 / 6400 / 9600) one by one;
+  the floors-and-ceiling test keeps its two floors and takes the new ceiling. The class KDoc says
+  why the ceiling is pinned for the opposite reason to the floors.
+- **The demo's lead cycler keeps 1.2 … 96** (twelve leads), with its KDoc rewritten to record that
+  16 … 96 are the walk surface this phase was opened by and why they stay: 96 is what makes the
+  ceiling a measurement rather than a number in a KDoc.
+- `docs/api.md` (the "200…1200" sentence becomes 200…9600 plus a short paragraph on the
+  measurement and on what the number is *not*), `CLAUDE.md` (the Phase 19 hairline bullet's clamp
+  text corrected, plus one new standing bullet: **a limit nothing ever reached is not a
+  measurement, and it will be believed anyway** — a bound stated as a device finding must name its
+  walk or admit it is a guess, and when a clamp is the suspect, ask first whether anything has
+  ever touched it).
+- **216 core / 18 ratta green; `:demo:assembleDebug` builds.**
+
+**The walk (the artist's hand, Nomad, 2026-09-17)** — with the ceiling lifted, PENCIL leads of
+**16 / 20 / 24 / 32 / 48 / 64 / 96 px all preview at the width they bake**, and no lag was reported
+at any of them: *"all of those wide-lead sizes work."* Supernote's own notes app offers widths
+around 24 px, well inside the walked range. The old 1200 was never contradicted by a measurement,
+because it was never met by one.
+
+**Gate:** 216 core / 18 ratta green; `:demo:assembleDebug` builds; Fable reviewed the diff and published
+**0.1.37** to mavenLocal (`GPAPER_VERSION`, `README.md`, `docs/integration-guide.md` bumped). SN
+re-pins at arc 44 T3.
+
 ---
 
 ## Standing Open Questions (ask as they become relevant)

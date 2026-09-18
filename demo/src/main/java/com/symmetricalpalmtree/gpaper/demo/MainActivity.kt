@@ -90,8 +90,17 @@ class MainActivity : Activity() {
     private val rasterShadeLevels = IntArray(15) { it }
     private var rasterShadeIndex = 5
 
-    /** Arc 44's five lead sizes, in px. 1.2 is the hairline arc 43 shipped. */
-    private val rasterLeads = floatArrayOf(1.2f, 2f, 4f, 7f, 12f)
+    /**
+     * The lead sizes, in px. 1.2 is the hairline arc 43 shipped and 1.2 … 12 were arc 44's
+     * five; **16 … 96 are the walk surface Phase 24 was opened by** — with the old EMR
+     * ceiling of 1200 every one of them previewed as a 12 px lead and baked at its true
+     * width, which is exactly the width lie this project treats as the serious one. The
+     * hand walked all seven on the Nomad (2026-09-17) and every one previews at the width
+     * it bakes, so the ceiling moved to 9600 and the cycler keeps them: 96 is the widest
+     * lead anything has armed, and it stays in the demo because that is what makes the
+     * ceiling a measurement instead of a number in a KDoc.
+     */
+    private val rasterLeads = floatArrayOf(1.2f, 2f, 4f, 7f, 12f, 16f, 20f, 24f, 32f, 48f, 64f, 96f)
     private var rasterLeadIndex = 0
 
     private val rasterEraserRadiusPx = 12f
@@ -867,6 +876,7 @@ class MainActivity : Activity() {
         // because on a walk the question is always "which one am I looking at now". Both
         // push straight into the live pen: `penColor` / `penWidth` re-arm the firmware on
         // Ratta, so a pick takes effect on the very next mark without a tool boundary.
+        // The lead cycler runs to 96 px since 0.1.37 — see `rasterLeads`.
         val shadeButton = toolbarButton("Shade $rasterShade ${shadeHex(rasterShade)}") { }
         shadeButton.setOnClickListener {
             rasterShadeIndex = (rasterShadeIndex + 1) % rasterShadeLevels.size

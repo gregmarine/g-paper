@@ -24,6 +24,25 @@ import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
  * 120 is what the eye settled on: the preview is the width the bake turns out to be. The
  * door that switched it closed at 0.1.34 — re-opening the question means another walk,
  * not another knob.
+ *
+ * **The ceiling was a guess and it was wrong (0.1.37).** [EMR_MAX] carried 1200 from the
+ * PoC's private `emrSize` through Phase 19, with the reason "the panel gains nothing above
+ * it and the daemon lags" — and **nothing above it had ever been armed.** The widest lead
+ * anything asked for was 12 px, so 1200 was never a limit anyone met; it was a plausible
+ * number in a hairline world. Arc 44 gave the sketch pencil wide leads and the hand walked
+ * them on the Nomad (2026-09-17): **16 / 20 / 24 / 32 / 48 / 64 / 96 px all preview at the
+ * width they bake, with no lag at any of them** — "all of those wide-lead sizes work".
+ * Supernote's own notes app offers widths around 24 px, well inside that. Note that the walk
+ * arms sizes well past the ~2400 top of the Needle penSizeArray above and the firmware
+ * renders them: that array is the range Ratta's own app *picks from*, never a bound the
+ * daemon enforces — which is the same mistake in miniature, and why the floor argument
+ * above rests on what a thin line looks like rather than on where the array starts.
+ *
+ * So the ceiling is now 9600, and it is worth being exact about what that number is:
+ * **96 px is the widest lead a hand has walked, not a width the panel was found to refuse.**
+ * Nothing above it has been tried, and nothing measured says the daemon minds. If a host
+ * ever needs a wider lead, that is another walk — and a walk that raises this number is
+ * expected to succeed, which is the opposite of the old ceiling's story.
  */
 internal object RattaEmr {
 
@@ -33,8 +52,13 @@ internal object RattaEmr {
      */
     const val EMR_MIN = 200
 
-    /** Ceiling — the panel gains nothing above it and the daemon lags. */
-    const val EMR_MAX = 1200
+    /**
+     * Ceiling: 96 px, the widest lead the artist's hand has walked on the Nomad
+     * (2026-09-17) — preview and bake agreed at every size up to it and the daemon kept
+     * up. It is a ceiling because nothing wider has been *tried*, not because anything
+     * refused. See the object KDoc for why the old 1200 was never a measurement.
+     */
+    const val EMR_MAX = 9600
 
     /**
      * Floor for `PENCIL` only: the hairline lead's preview may go thinner than the

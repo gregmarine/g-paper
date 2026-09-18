@@ -156,13 +156,29 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   and rejected by the same hand, so the pale end previews a shade dark and stays visible.
   DARK_GRAY still carries `#505050`/`#555555`, Phase 19's pairing.
 - **A hairline needs a lower firmware floor than a pen does (Phase 19, 0.1.32).** `RattaEmr`
-  (pure, JVM-tested) clamps `px * 100` to 200…1200 for every style but `PENCIL`, whose floor is
-  `EMR_MIN_HAIRLINE` (120, a candidate pending the Nomad measurement). The general floor exists
+  (pure, JVM-tested) clamps `px * 100` to 200…9600 for every style but `PENCIL`, whose floor is
+  `EMR_MIN_HAIRLINE` (120, the Nomad's answer — see Phase 24 for the ceiling). The general floor exists
   because an EMR near zero paints a sub-pixel line that reads exactly like a dead firmware
   path — but the sketching pencil is a 1.2 px lead, and at floor 200 the firmware previews it
   as a 2 px needle and the mark visibly narrows at pen-up. **A preview that lies about width is
   the serious failure** (the BOOX `CHARCOAL` lesson, from the other direction): width is what
   the hand aims with, and the collapse is read as the *bake* being broken.
+- **A limit nothing ever reached is not a measurement, and it will be believed anyway
+  (Phase 24, 0.1.37).** `RattaEmr.EMR_MAX` carried 1200 from the PoC through Phase 19 with the
+  reason *"the panel gains nothing above it and the daemon lags"* — a sentence stating two
+  findings, **neither of which had been made**: nothing had ever armed an EMR above 1200,
+  because in a world whose widest lead was 12 px nothing ever asked to. It survived Phase 19's
+  rewrite, a floors-and-ceiling JVM test, and the Phase 21 freeze that went through these very
+  constants pairing each with its walk, because a clamp nobody hits is invisible from every side
+  — the only thing that can expose it is a host finally asking for more. Arc 44 did, and **all
+  seven wide leads (16 / 20 / 24 / 32 / 48 / 64 / 96 px) preview at the width they bake with no
+  lag at any of them** (the artist's hand, Nomad, 2026-09-17); Supernote's own notes app sits
+  around 24. The ceiling is now 9600 and its KDoc says the thing the old one did not: **96 px is
+  the widest lead a hand has walked, not a width the panel refused.** Two standing rules fall out
+  of it. A bound stated as a device finding must name the walk that found it or say plainly that
+  it is a guess — `EMR_MIN_HAIRLINE`'s KDoc does this and is why nobody has had to re-derive 120.
+  And when a clamp is the suspect, ask first whether anything has ever *touched* it: a wrong
+  ceiling and a right one are indistinguishable until the day something reaches them.
 - **`loadPageRaster` and `swapPageRaster` need no Ratta override, for two different reasons
   (verified Phase 19 — not a gap).** `loadPageRaster` is a content swap and a page turn calls
   `clearForContentSwap` first, which bakes and releases the overlay under the swap law before
