@@ -2,6 +2,7 @@ package com.symmetricalpalmtree.gpaper.demo
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -21,6 +22,7 @@ import android.widget.TextView
 import com.symmetricalpalmtree.gpaper.core.PageMode
 import com.symmetricalpalmtree.gpaper.core.PaperListener
 import com.symmetricalpalmtree.gpaper.core.PaperView
+import com.symmetricalpalmtree.gpaper.core.RasterLayer
 import com.symmetricalpalmtree.gpaper.core.RasterPatch
 import com.symmetricalpalmtree.gpaper.core.RasterRubbing
 import com.symmetricalpalmtree.gpaper.core.RawAction
@@ -34,6 +36,9 @@ import com.symmetricalpalmtree.gpaper.core.model.Stroke
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
 import com.symmetricalpalmtree.gpaper.core.render.HitTarget
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.util.Locale
 
 /**
@@ -73,10 +78,11 @@ class MainActivity : Activity() {
     // ── Raster mode (0.1.32): the measurement vehicle ────────────────────────
     //
     // The demo is how the Supernote raster numbers get taken — the eraser's redraw
-    // cadence, the pencil's EMR floor, the cost of an undo swap — so it carries the
-    // sketching page Notesprout SN's arc 43 will ship: one pencil, one rubber, no
-    // colour, no width choice, and a host-owned undo built the way the API document
-    // says to build one.
+    // cadence, the pencil's EMR floor, the cost of an undo swap, and since 0.1.39 the
+    // cost of the flatten — so it carries the sketching page Notesprout SN ships: the
+    // pencil (shades and leads since 0.1.36), the gel pen beside it (0.1.39), one
+    // rubber, and a host-owned undo built the way the API document says to build one,
+    // keyed by (layer, tile) now that a page is two rasters.
 
     private var rasterMode = false
 
@@ -105,6 +111,17 @@ class MainActivity : Activity() {
 
     private val rasterEraserRadiusPx = 12f
 
+    /**
+     * The gel pen the raster page grew in 0.1.39 — the SN pen exactly: one width, one
+     * colour, no choices. It is here to be *rubbed at*: on two rasters the rubber lifts
+     * graphite and leaves this alone, and the only way to see that is a page with both on
+     * it.
+     */
+    private val rasterPenWidthPx = 5f
+
+    /** Which of the raster page's two tools is armed — the pencil unless the pen is. */
+    private var rasterPenArmed = false
+
     /** ARGB of shade level [level] — a grey of `level × 0x11` in all three channels. */
     private fun shadeColor(level: Int): Int {
         val v = level * 0x11
@@ -125,8 +142,39 @@ class MainActivity : Activity() {
     private fun rasterPencilSummary(): String =
         "shade $rasterShade ${shadeHex(rasterShade)} · lead ${leadLabel(rasterLead)}"
 
+    /** What is actually under the hand on the raster page — pencil or gel pen. */
+    private fun rasterToolSummary(): String =
+        if (rasterPenArmed) "PEN ${leadLabel(rasterPenWidthPx)} black (ink)"
+        else "PENCIL ${rasterPencilSummary()} (graphite)"
+
+    /**
+     * Arm the raster page's current tool. The pencil takes the two cyclers' values; the
+     * pen takes its own three and ignores them, which is why the cyclers go on stepping
+     * while it is armed — a shade picked mid-pen is waiting when the pencil comes back.
+     * Both push straight into the live pen: `penColor` / `penWidth` / `penStyle` re-arm
+     * the firmware on Ratta, so a switch takes on the very next mark.
+     */
+    private fun applyRasterTool() {
+        if (rasterPenArmed) {
+            paper.penStyle = StrokeStyle.PEN
+            paper.penWidth = rasterPenWidthPx
+            paper.penColor = Color.BLACK
+        } else {
+            paper.penStyle = StrokeStyle.PENCIL
+            paper.penWidth = rasterLead
+            paper.penColor = shadeColor(rasterShade)
+        }
+    }
+
     /** The stroke-mode eraser radius, restored when raster mode is turned off. */
     private var strokeEraserRadiusPx = 0f
+
+    /**
+     * One cell of one layer's before-image (0.1.39). The layer belongs in the key, not
+     * beside it: a mark and a rub can cover the same 64 px cell in one sitting on
+     * different rasters, and a cell read from graphite is not a before-image of ink.
+     */
+    private data class TileKey(val layer: RasterLayer, val x: Int, val y: Int)
 
     /**
      * Before-images, one entry per pen contact, read on a 64 px grid so a cell is read
@@ -134,10 +182,14 @@ class MainActivity : Activity() {
      * would capture pixels the sweep had already lifted and make the undo a lie. Each
      * entry is both its undo and its redo: `swapPageRaster` leaves every array holding
      * what the page held (0.1.29), so one list serves in both directions.
+     *
+     * Each patch carries the layer it was read from, because `swapPageRaster` takes the
+     * layer as a call parameter and a patch put back on the wrong one would paint
+     * graphite where ink was.
      */
-    private val rasterHistory = ArrayList<List<RasterPatch>>()
+    private val rasterHistory = ArrayList<List<Pair<RasterLayer, RasterPatch>>>()
     private var rasterCursor = 0
-    private var openRasterEntry: LinkedHashMap<Long, RasterPatch>? = null
+    private var openRasterEntry: LinkedHashMap<TileKey, RasterPatch>? = null
 
     /**
      * The host-rendered sample object: a rounded box the host owns and draws. Implements
@@ -214,9 +266,13 @@ class MainActivity : Activity() {
                 refreshStatus()
             }
 
-            /** The before-image moment: the pixels under [rect] are about to move. */
-            override fun onRasterWillChange(rect: Rect) {
-                captureBeforeImage(rect)
+            /**
+             * The before-image moment: the pixels of [layer] under [rect] are about to
+             * move. The **layered** form (0.1.39) — a host that draws with anything but a
+             * pencil must override this one, or it hears nothing of its own ink.
+             */
+            override fun onRasterWillChange(layer: RasterLayer, rect: Rect) {
+                captureBeforeImage(layer, rect)
             }
 
             // ── Selection callbacks (Phase 5): the payloads ARE the demo ─────
@@ -602,6 +658,12 @@ class MainActivity : Activity() {
      * fixed `#505050` at 1.2 px, and they are raster-only chrome — the stroke page's own
      * style / width / colour cyclers are untouched and still hidden here, because they
      * choose among *styles*, which this page does not have.
+     *
+     * **And it does now have a second tool (0.1.39).** The `Pen` toggle arms the SN gel
+     * pen — `PEN`, 5 px, black — beside the pencil, which is the whole of what two rasters
+     * are for: the pencil lands on graphite, the pen on ink, the rubber lifts graphite and
+     * leaves ink, and none of that can be judged on a page with only one tool on it. The
+     * page still has no style *choice*: two named tools is not a style cycler.
      */
     private fun toggleRaster() {
         if (paper.transformingContentId != null) paper.endTransform()
@@ -613,9 +675,7 @@ class MainActivity : Activity() {
         paper.pageMode = if (rasterMode) PageMode.RASTER else PageMode.STROKE
         if (rasterMode) {
             strokeEraserRadiusPx = paper.eraserRadius
-            paper.penStyle = StrokeStyle.PENCIL
-            paper.penWidth = rasterLead
-            paper.penColor = shadeColor(rasterShade)
+            applyRasterTool()
             paper.eraserRadius = rasterEraserRadiusPx
             paper.rasterRubbing = RasterRubbing()
             paper.smartLassoEnabled = false
@@ -631,7 +691,7 @@ class MainActivity : Activity() {
         }
         applyModeChrome()
         lastEvent = if (rasterMode) {
-            "raster page: PENCIL ${rasterPencilSummary()} · rubber ${rasterEraserRadiusPx.toInt()}px"
+            "raster page: ${rasterToolSummary()} · rubber ${rasterEraserRadiusPx.toInt()}px"
         } else {
             "stroke page"
         }
@@ -640,6 +700,7 @@ class MainActivity : Activity() {
 
     private fun applyModeChrome() {
         styleButton(rasterButton, selected = rasterMode)
+        styleButton(rasterPenButton, selected = rasterPenArmed)
         for (b in strokeOnlyButtons) b.visibility = if (rasterMode) View.GONE else View.VISIBLE
         for (b in rasterOnlyButtons) b.visibility = if (rasterMode) View.VISIBLE else View.GONE
         applyToolSelection()
@@ -652,20 +713,21 @@ class MainActivity : Activity() {
      * second read of a seam would capture pixels the first batch had already lifted, and
      * the undo would put back a corridor that was never there.
      */
-    private fun captureBeforeImage(rect: Rect) {
+    private fun captureBeforeImage(layer: RasterLayer, rect: Rect) {
         if (!rasterMode || suppressRasterCapture) return
-        val entry = openRasterEntry ?: LinkedHashMap<Long, RasterPatch>().also { openRasterEntry = it }
+        val entry = openRasterEntry
+            ?: LinkedHashMap<TileKey, RasterPatch>().also { openRasterEntry = it }
         val x0 = (rect.left / rasterTilePx) * rasterTilePx
         val y0 = (rect.top / rasterTilePx) * rasterTilePx
         var ty = y0
         while (ty < rect.bottom) {
             var tx = x0
             while (tx < rect.right) {
-                val key = (ty.toLong() shl 32) or (tx.toLong() and 0xFFFFFFFFL)
+                val key = TileKey(layer, tx, ty)
                 if (!entry.containsKey(key)) {
                     // readPageRaster clips to the page, so edge cells come back short
                     // and an off-page cell comes back null.
-                    paper.readPageRaster(Rect(tx, ty, tx + rasterTilePx, ty + rasterTilePx))
+                    paper.readPageRaster(layer, Rect(tx, ty, tx + rasterTilePx, ty + rasterTilePx))
                         ?.let { entry[key] = it }
                 }
                 tx += rasterTilePx
@@ -680,11 +742,22 @@ class MainActivity : Activity() {
         openRasterEntry = null
         if (entry.isEmpty()) return
         while (rasterHistory.size > rasterCursor) rasterHistory.removeAt(rasterHistory.size - 1)
-        rasterHistory.add(entry.values.toList())
+        val patches = entry.map { (key, patch) -> key.layer to patch }
+        rasterHistory.add(patches)
         rasterCursor = rasterHistory.size
-        val bytes = entry.values.sumOf { it.bytes }
-        Log.i(TAG, "raster undo entry: ${entry.size} tiles, $bytes bytes (${rasterHistory.size} deep)")
+        val bytes = patches.sumOf { it.second.bytes }
+        Log.i(
+            TAG,
+            "raster undo entry: ${patches.size} tiles on ${layerNames(patches)}, " +
+                "$bytes bytes (${rasterHistory.size} deep)",
+        )
     }
+
+    /** `graphite` / `ink` / `graphite+ink` — which rasters an entry spans. */
+    private fun layerNames(patches: List<Pair<RasterLayer, RasterPatch>>): String =
+        RasterLayer.entries
+            .filter { layer -> patches.any { it.first == layer } }
+            .joinToString("+") { it.name.lowercase(Locale.US) }
 
     private fun resetRasterHistory() {
         openRasterEntry = null
@@ -699,8 +772,9 @@ class MainActivity : Activity() {
             return
         }
         rasterCursor--
-        val ms = timedSwap(rasterHistory[rasterCursor], "undo")
-        lastEvent = "undo: ${rasterHistory[rasterCursor].size} tiles in $ms ms " +
+        val entry = rasterHistory[rasterCursor]
+        val ms = timedSwap(entry, "undo")
+        lastEvent = "undo: ${entry.size} tiles on ${layerNames(entry)} in $ms ms " +
             "($rasterCursor/${rasterHistory.size})"
         refreshStatus()
     }
@@ -711,9 +785,10 @@ class MainActivity : Activity() {
             refreshStatus()
             return
         }
-        val ms = timedSwap(rasterHistory[rasterCursor], "redo")
+        val entry = rasterHistory[rasterCursor]
+        val ms = timedSwap(entry, "redo")
         rasterCursor++
-        lastEvent = "redo: ${rasterHistory[rasterCursor - 1].size} tiles in $ms ms " +
+        lastEvent = "redo: ${entry.size} tiles on ${layerNames(entry)} in $ms ms " +
             "($rasterCursor/${rasterHistory.size})"
         refreshStatus()
     }
@@ -722,37 +797,85 @@ class MainActivity : Activity() {
      * The swap, wall-clocked (arc 43 M4/M5). The same list serves undo and redo because
      * `swapPageRaster` leaves every array holding what the page held — so this is the
      * whole of a raster history's cost, and what it costs is a device number.
+     *
+     * Grouped by layer (0.1.39) and one call each: the layer is a parameter of the call,
+     * not data on the patch, so an entry that spans both rasters is two swaps. The tiles
+     * of a grid entry are disjoint, so the order within a layer does not matter here —
+     * a host whose patches overlap swaps them in reverse read order to undo.
      */
-    private fun timedSwap(patches: List<RasterPatch>, what: String): String {
-        val bytes = patches.sumOf { it.bytes }
+    private fun timedSwap(patches: List<Pair<RasterLayer, RasterPatch>>, what: String): String {
+        val bytes = patches.sumOf { it.second.bytes }
+        val byLayer = patches.groupBy({ it.first }, { it.second })
         val t0 = System.nanoTime()
-        paper.swapPageRaster(patches)
+        for ((layer, group) in byLayer) paper.swapPageRaster(layer, group)
         val ms = (System.nanoTime() - t0) / 1_000_000.0
-        val text = String.format("%.1f", ms)
-        Log.i(TAG, "swapPageRaster ($what): ${patches.size} patches, $bytes bytes, $text ms")
+        val text = String.format(Locale.US, "%.1f", ms)
+        Log.i(
+            TAG,
+            "swapPageRaster ($what): ${patches.size} patches on ${layerNames(patches)} " +
+                "(${byLayer.size} call(s)), $bytes bytes, $text ms",
+        )
         return text
     }
 
     /**
-     * Debug door: read the whole page and swap it straight back — an identity swap whose
-     * only product is its own duration. The worst case a raster history can ask for is
-     * exactly this (a page-wide erase undone in one step), and it is the number that
-     * decides whether an undo needs a progress indication on a given panel.
+     * Debug door: read the whole page — **both rasters** — and swap it straight back, an
+     * identity swap whose only product is its own duration. The worst case a raster
+     * history can ask for is exactly this (a page-wide erase undone in one step), and it
+     * is the number that decides whether an undo needs a progress indication on a given
+     * panel. Two rasters doubled that worst case, which is the point of measuring it here.
      */
     private fun swapWholePage() {
         val v = paper.asView()
+        val full = Rect(0, 0, v.width, v.height)
         val t0 = System.nanoTime()
-        val patch = paper.readPageRaster(Rect(0, 0, v.width, v.height))
-        if (patch == null) {
+        val read = RasterLayer.entries.mapNotNull { layer ->
+            paper.readPageRaster(layer, full)?.let { layer to it }
+        }
+        if (read.isEmpty()) {
             lastEvent = "no raster page to swap"
             refreshStatus()
             return
         }
-        val readMs = String.format("%.1f", (System.nanoTime() - t0) / 1_000_000.0)
-        val swapMs = timedSwap(listOf(patch), "whole page")
-        Log.i(TAG, "whole-page read ${patch.bytes} bytes in $readMs ms")
-        lastEvent = "page swap: ${patch.rect.width()}×${patch.rect.height()}, " +
-            "read $readMs ms, swap $swapMs ms"
+        val readMs = String.format(Locale.US, "%.1f", (System.nanoTime() - t0) / 1_000_000.0)
+        val bytes = read.sumOf { it.second.bytes }
+        val swapMs = timedSwap(read, "whole page")
+        Log.i(TAG, "whole-page read of ${layerNames(read)}: $bytes bytes in $readMs ms")
+        val rect = read[0].second.rect
+        lastEvent = "page swap: ${read.size} layers (${layerNames(read)}) " +
+            "${rect.width()}×${rect.height()}, read $readMs ms, swap $swapMs ms"
+        refreshStatus()
+    }
+
+    /**
+     * **Render the flatten to a PNG before a panel sees it** — this project's standing
+     * rule, and the door that keeps it (0.1.39). `renderToBitmap` is the only call that
+     * hands back the picture rather than a layer of it, so this is where a two-raster page
+     * can be *looked at* off the device: pull the file, magnify it at 1× and at 3×, and
+     * check that graphite and ink sit on the paper as one drawing before the artist is
+     * asked. The render is wall-clocked because the flatten is a second full-page blit
+     * per re-record and that is a number, not a feeling.
+     */
+    private fun dumpFlatten() {
+        val t0 = System.nanoTime()
+        val bitmap = paper.renderToBitmap()
+        val ms = (System.nanoTime() - t0) / 1_000_000.0
+        if (bitmap == null) {
+            lastEvent = "nothing to dump — the view has no size yet"
+            refreshStatus()
+            return
+        }
+        val renderMs = String.format(Locale.US, "%.1f", ms)
+        Log.i(TAG, "flatten render: ${bitmap.width}x${bitmap.height} in $renderMs ms")
+        val file = File(getExternalFilesDir(null), "flatten-${System.currentTimeMillis()}.png")
+        lastEvent = try {
+            FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            Log.i(TAG, "flatten written to ${file.absolutePath}")
+            "flatten: ${bitmap.width}×${bitmap.height} in $renderMs ms → ${file.name}"
+        } catch (e: IOException) {
+            Log.w(TAG, "flatten dump failed", e)
+            "flatten dump failed: ${e.message}"
+        }
         refreshStatus()
     }
 
@@ -764,6 +887,7 @@ class MainActivity : Activity() {
     private lateinit var transformButton: TextView
     private lateinit var lockButton: TextView
     private lateinit var rasterButton: TextView
+    private lateinit var rasterPenButton: TextView
     private var transformLocked = false
 
     /** Chrome that belongs to a stroke page only — hidden while the page is pixels
@@ -870,6 +994,19 @@ class MainActivity : Activity() {
         val undoButton = toolbarButton("Undo") { rasterUndo() }
         val redoButton = toolbarButton("Redo") { rasterRedo() }
         val swapPageButton = toolbarButton("Swap pg") { swapWholePage() }
+        val dumpButton = toolbarButton("Dump") { dumpFlatten() }
+
+        // The gel pen (0.1.39): a toggle, not a third entry in a style cycler — the raster
+        // page has two tools and the question on a walk is only which one is in the hand.
+        // Re-tapping it gives the pencil back with whatever the cyclers hold now.
+        rasterPenButton = toolbarButton("Pen (ink)") { }
+        rasterPenButton.setOnClickListener {
+            rasterPenArmed = !rasterPenArmed
+            applyRasterTool()
+            styleButton(rasterPenButton, selected = rasterPenArmed)
+            lastEvent = "raster tool: ${rasterToolSummary()}"
+            refreshStatus()
+        }
 
         // The pencil's shade and lead (0.1.36) — arc 44's walk surface. Each tap steps one
         // and wraps, like the stroke page's cyclers, and the face carries the current value
@@ -877,21 +1014,27 @@ class MainActivity : Activity() {
         // push straight into the live pen: `penColor` / `penWidth` re-arm the firmware on
         // Ratta, so a pick takes effect on the very next mark without a tool boundary.
         // The lead cycler runs to 96 px since 0.1.37 — see `rasterLeads`.
+        // Both belong to the pencil (0.1.39): while the gel pen is armed they go on
+        // stepping and go on showing what they hold, but nothing is pushed into the live
+        // pen until the pencil is back — a 96 px black gel pen is not a thing this page
+        // offers, and a cycler that silently did nothing would read as broken.
         val shadeButton = toolbarButton("Shade $rasterShade ${shadeHex(rasterShade)}") { }
         shadeButton.setOnClickListener {
             rasterShadeIndex = (rasterShadeIndex + 1) % rasterShadeLevels.size
-            paper.penColor = shadeColor(rasterShade)
+            if (!rasterPenArmed) paper.penColor = shadeColor(rasterShade)
             shadeButton.text = "Shade $rasterShade ${shadeHex(rasterShade)}"
-            lastEvent = "pencil ${rasterPencilSummary()}"
+            lastEvent = "pencil ${rasterPencilSummary()}" +
+                (if (rasterPenArmed) " (pen armed — takes effect when the pencil returns)" else "")
             refreshStatus()
         }
 
         val leadButton = toolbarButton("Lead ${leadLabel(rasterLead)}") { }
         leadButton.setOnClickListener {
             rasterLeadIndex = (rasterLeadIndex + 1) % rasterLeads.size
-            paper.penWidth = rasterLead
+            if (!rasterPenArmed) paper.penWidth = rasterLead
             leadButton.text = "Lead ${leadLabel(rasterLead)}"
-            lastEvent = "pencil ${rasterPencilSummary()}"
+            lastEvent = "pencil ${rasterPencilSummary()}" +
+                (if (rasterPenArmed) " (pen armed — takes effect when the pencil returns)" else "")
             refreshStatus()
         }
 
@@ -899,9 +1042,12 @@ class MainActivity : Activity() {
             lassoButton, styleButton, widthButton, colorButton,
             smartLassoButton, scribbleButton, transformButton, lockButton,
         )
-        rasterOnlyButtons += listOf(shadeButton, leadButton, undoButton, redoButton, swapPageButton)
+        rasterOnlyButtons += listOf(
+            rasterPenButton, shadeButton, leadButton, undoButton, redoButton, swapPageButton,
+            dumpButton,
+        )
 
-        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, smartLassoButton, scribbleButton, clearButton, transformButton, lockButton, rasterButton, shadeButton, leadButton, undoButton, redoButton, swapPageButton, notesButton)) {
+        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, smartLassoButton, scribbleButton, clearButton, transformButton, lockButton, rasterButton, rasterPenButton, shadeButton, leadButton, undoButton, redoButton, swapPageButton, dumpButton, notesButton)) {
             bar.addView(b, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginEnd = dp(6) })
@@ -997,7 +1143,10 @@ class MainActivity : Activity() {
 
     private fun applyStatusText() {
         val head = if (rasterMode) {
-            "engine:${paper.engineId} · RASTER · undo:$rasterCursor/${rasterHistory.size} · " +
+            // Which of the two tools is armed, because on a two-raster page that is also
+            // which raster the next mark lands on — and whether the rubber will take it.
+            val armed = if (rasterPenArmed) "PEN/ink" else "PENCIL/graphite"
+            "engine:${paper.engineId} · RASTER $armed · undo:$rasterCursor/${rasterHistory.size} · " +
                 "penLifts:$penLifts · raw:$rawEvents"
         } else {
             "engine:${paper.engineId} · strokes:${paper.getStrokes().size} · " +

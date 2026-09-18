@@ -28,10 +28,15 @@ import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
  * - **In:** [loadStrokes] (replace all — page load, undo/redo replay), [addStrokes] /
  *   [removeStrokes] (targeted undo/redo and paste), [ContentRenderer]s +
  *   [notifyContentChanged] for non-ink content.
- * - **Raster pages (0.1.25):** with [pageMode] = [PageMode.RASTER] the page is one image
- *   rather than a list of strokes. Out: [PaperListener.onRasterWillChange] /
- *   [PaperListener.onRasterChanged] around every change, plus [getPageRaster] /
- *   [copyPageRaster]. In: [loadPageRaster]. Stroke pages are unaffected.
+ * - **Raster pages (0.1.25):** with [pageMode] = [PageMode.RASTER] the page is images
+ *   rather than a list of strokes — **two of them since 0.1.39** ([RasterLayer]): graphite
+ *   for the pencil, ink for everything else, seen as the two flattened with `DARKEN`,
+ *   because the rubber must lift graphite and leave ink and a pixel cannot say which tool
+ *   laid it. Out: [PaperListener.onRasterWillChange] / [PaperListener.onRasterChanged]
+ *   around every change, each naming its layer, plus [getPageRaster] / [copyPageRaster].
+ *   In: [loadPageRaster]. Every raster call has a layered form and an un-layered one that
+ *   means [RasterLayer.GRAPHITE], so a host written against 0.1.38 is unaffected — as are
+ *   stroke pages.
  *
  * ### "Pages"
  * The component has no page concept. A page turn is:
@@ -236,12 +241,16 @@ interface PaperView {
     var pageMode: PageMode
 
     /**
-     * Replace the page image with a copy of [bitmap] and re-render — the raster twin of
-     * [loadStrokes]. Null is a blank page. The image is page-space: its top-left is the
-     * page's, and it is expected to be the page's size ([setPageSize]); a different size
-     * is copied at 1:1 from the origin, never stretched, because a page image that no
+     * Replace [layer]'s page image with a copy of [bitmap] and re-render — the raster twin
+     * of [loadStrokes]. Null is a blank layer. The image is page-space: its top-left is
+     * the page's, and it is expected to be the page's size ([setPageSize]); a different
+     * size is copied at 1:1 from the origin, never stretched, because a page image that no
      * longer registers with the page it was drawn on is a host bug worth seeing rather
      * than hiding.
+     *
+     * The other layer is untouched, so a two-raster page is loaded with two calls — and
+     * a host that persists only one of them leaves the other as it found it, which is why
+     * a page turn goes through [clearForContentSwap] first.
      *
      * **Fires nothing on the listener (0.1.33)**, as [swapPageRaster] never has: a
      * change the host made itself — this load, that swap — is the host's own news, and
@@ -253,39 +262,58 @@ interface PaperView {
      *
      * A no-op in [PageMode.STROKE].
      */
-    fun loadPageRaster(bitmap: Bitmap?)
+    fun loadPageRaster(layer: RasterLayer, bitmap: Bitmap?)
+
+    /** The 0.1.38 form — [RasterLayer.GRAPHITE], the page a pencil-only host always had. */
+    fun loadPageRaster(bitmap: Bitmap?) = loadPageRaster(RasterLayer.GRAPHITE, bitmap)
 
     /**
-     * A **copy** of the page image — never the live bitmap — or null when the page is
-     * blank or the mode is [PageMode.STROKE]. The raster twin of [getStrokes], and like it
-     * the host's save-all: a save encodes the copy off the main thread while the artist
+     * A **copy** of [layer]'s page image — never the live bitmap — or null when that layer
+     * is blank or the mode is [PageMode.STROKE]. The raster twin of [getStrokes], and like
+     * it the host's save-all: a save encodes the copy off the main thread while the artist
      * keeps drawing into the live one, which is only sound because this is a copy. Main
      * thread only; the copy costs about as long as a `memcpy` of the page.
+     *
+     * This is one layer, not the picture. What the artist sees is the two flattened with
+     * `DARKEN`, which is what [renderToBitmap] renders; a host saving a page it means to
+     * reload and keep drawing on saves both layers and reloads both, because a flatten
+     * cannot be taken apart again.
      */
-    fun getPageRaster(): Bitmap?
+    fun getPageRaster(layer: RasterLayer): Bitmap?
+
+    /** The 0.1.38 form — [RasterLayer.GRAPHITE]. */
+    fun getPageRaster(): Bitmap? = getPageRaster(RasterLayer.GRAPHITE)
 
     /**
-     * A copy of the page image inside [rect] (page space, clipped to the page), or null
-     * when the rect misses the page, the page is blank, or the mode is [PageMode.STROKE].
-     * Sized for the host's undo: called from [PaperListener.onRasterWillChange] with the
-     * rect it was given, it is the before-image of exactly what is about to change.
+     * A copy of [layer]'s page image inside [rect] (page space, clipped to the page), or
+     * null when the rect misses the page, that layer is blank, or the mode is
+     * [PageMode.STROKE]. Sized for the host's undo: called from
+     * [PaperListener.onRasterWillChange] with the layer and rect it was given, it is the
+     * before-image of exactly what is about to change.
      */
-    fun copyPageRaster(rect: Rect): Bitmap?
+    fun copyPageRaster(layer: RasterLayer, rect: Rect): Bitmap?
+
+    /** The 0.1.38 form — [RasterLayer.GRAPHITE]. */
+    fun copyPageRaster(rect: Rect): Bitmap? = copyPageRaster(RasterLayer.GRAPHITE, rect)
 
     /**
-     * The pixels inside [rect] (page space, clipped to the page) as a [RasterPatch], or
-     * null when the rect misses the page or the mode is [PageMode.STROKE] (0.1.29). The
-     * before-image for a host's undo, in the form the undo will hand back: call it from
-     * [PaperListener.onRasterWillChange] with the rect it was given. A page that has no
-     * image yet reads as transparent — the honest before-image of a first mark, which an
-     * undo must be able to take back to nothing. Main thread only.
+     * The pixels of [layer] inside [rect] (page space, clipped to the page) as a
+     * [RasterPatch], or null when the rect misses the page or the mode is
+     * [PageMode.STROKE] (0.1.29). The before-image for a host's undo, in the form the undo
+     * will hand back: call it from [PaperListener.onRasterWillChange] with the layer and
+     * rect it was given. A layer that has no image yet reads as transparent — the honest
+     * before-image of a first mark, which an undo must be able to take back to nothing.
+     * Main thread only.
      */
-    fun readPageRaster(rect: Rect): RasterPatch?
+    fun readPageRaster(layer: RasterLayer, rect: Rect): RasterPatch?
+
+    /** The 0.1.38 form — [RasterLayer.GRAPHITE]. */
+    fun readPageRaster(rect: Rect): RasterPatch? = readPageRaster(RasterLayer.GRAPHITE, rect)
 
     /**
-     * Swap [patches] into the page image and repaint what they cover (0.1.29). Each
-     * patch's pixels replace the page's inside its rect, and **the patch's array is left
-     * holding what the page held there** — so an undo that swaps a before-image in
+     * Swap [patches] into [layer]'s page image and repaint what they cover (0.1.29). Each
+     * patch's pixels replace that layer's inside its rect, and **the patch's array is left
+     * holding what the layer held there** — so an undo that swaps a before-image in
      * turns that same patch into the redo, with no second copy and no second call
      * shape. Patches whose rects overlap must be swapped in the reverse of the order
      * they were read to undo, and in reading order to redo; disjoint patches can go in
@@ -294,8 +322,16 @@ interface PaperView {
      * read from is a host bug worth seeing. Fires nothing on the listener: the host made
      * this change and already holds its history. Repaints once for all the patches — on
      * e-ink, only the region they cover. A no-op in [PageMode.STROKE]. Main thread only.
+     *
+     * **A patch carries no layer of its own** ([RasterPatch] is a rect and pixels), so the
+     * layer is this call's parameter and a patch read from one layer must be swapped back
+     * into that same one. A host whose undo entry spans both groups its patches by layer
+     * and makes one call per layer.
      */
-    fun swapPageRaster(patches: List<RasterPatch>)
+    fun swapPageRaster(layer: RasterLayer, patches: List<RasterPatch>)
+
+    /** The 0.1.38 form — [RasterLayer.GRAPHITE]. */
+    fun swapPageRaster(patches: List<RasterPatch>) = swapPageRaster(RasterLayer.GRAPHITE, patches)
 
     // ── Template & page geometry ─────────────────────────────────────────────
 
@@ -456,6 +492,10 @@ interface PaperView {
      * Render the current content (template + committed layer) into a new [Bitmap] —
      * for host thumbnails/covers. Independent of the screen state and safe to call
      * while the EPD overlay is live. Returns null if the view is not laid out yet.
+     *
+     * On a raster page this is the **flatten**: both [RasterLayer]s through the same
+     * `DARKEN` composite the panel shows, over the white and the template. It is the only
+     * call that hands back the picture rather than a layer of it.
      */
     fun renderToBitmap(): Bitmap?
 

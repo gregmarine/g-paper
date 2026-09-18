@@ -863,6 +863,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     //    the undone mark, the swap having run) is re-recorded, THEN clearAll drops the
     //    overlay, THEN the frame presents and the ladder arms. The overlay ink of the
     //    undone mark goes with it and nothing of it survives on the panel.
+    //
+    // Two rasters (0.1.39) change neither reason: a layer is which bitmap the call writes,
+    // and both arguments above are about when the overlay is dropped relative to the
+    // re-record, which the flatten in drawCommittedContent does not touch.
 
     override fun releaseRender() {
         // Host chrome touch — the Ratta analogue of releasing the EPD overlay: bake

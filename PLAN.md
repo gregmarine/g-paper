@@ -1719,7 +1719,8 @@ release host + `NSE · Sketch` installed, the 96 px lead drawn by hand: *"Sooooo
 `graphite-tooth` merged to `main` (`--no-ff`) the same day and deleted.
 
 ### Phase 26 — Two rasters: graphite and ink (post-v0.1.0)
-**Status:** ⬜ Planned (2026-09-17) · **Publishes:** 0.1.39 · branch `two-rasters` ·
+**Status:** ✅ Complete (2026-09-17, the artist's hand on the Nomad) · **Publishes:** 0.1.39 ·
+branch `two-rasters` ·
 Opened 2026-09-17 by the artist's decision for NSE · Sketch's arc 45 "Ink" (Notesprout
 `extensions/sketch/INK_PLAN.md`): *"in the real world, ink is more permanent than pencil"* — the
 gel pen must not lift under the rubber. The page held one ARGB bitmap and a pixel does not know
@@ -1745,9 +1746,58 @@ picture.**
 - Demo: the raster page draws pencil + pen + rubs, and renders the flatten to a PNG before a panel
   sees it (this file's standing rule). `docs/api.md` + `CLAUDE.md` in the same commit.
 
+**Landed (built 2026-09-17, awaiting the gate)**
+- **`RasterLayer { GRAPHITE, INK }`** in `gpaper-core`, with `RasterLayer.of(style)` the one
+  place the routing is decided (`PENCIL` → graphite, every other style → ink). Pure Kotlin.
+- **`CanvasPaperView`** holds `graphiteRaster` + `inkRaster`, each allocated lazily on its
+  own first mark — so a pencil-only page costs what it always did. `compositeIntoRaster`
+  makes one `Canvas` per layer anything actually lands in; every drop site
+  (`loadStrokes`, `clear`, `clearForContentSwap`, `release`) drops both.
+- **The flatten is one added blit**: `drawCommittedContent` paints graphite as before and
+  ink over it through a single reused `Paint` carrying `PorterDuff.Mode.DARKEN`.
+  `renderToBitmap` goes through the same method, so the picture and the panel agree.
+- **`eraseRasterAlong` names `graphiteRaster`** — the artist's rule held by construction,
+  not by a test on pixels. `RasterRub` / `RasterRubbing` / the pass mask / the cadence seam
+  are untouched, and an erase never reads, allocates or announces the ink image.
+- **Layered API + un-layered defaults**: `loadPageRaster` / `getPageRaster` /
+  `copyPageRaster` / `readPageRaster` / `swapPageRaster` and both
+  `PaperListener` raster callbacks take a `RasterLayer`; the 0.1.38 forms are interface
+  defaults meaning `GRAPHITE`. The engine calls **only** the layered forms, and the
+  un-layered listener default is deliberately **silent for ink** — a legacy listener's
+  `readPageRaster(rect)` reads graphite, so forwarding an ink change would hand it the
+  wrong before-image.
+- **`OnyxPaperView`**'s two overrides moved to the layered forms; nothing else on Onyx
+  changed. **`RattaPaperView`** still needs no override, and its comment now says why two
+  rasters do not disturb either reason.
+- **Demo**: a `Pen (ink)` toggle beside Shade/Lead (the SN gel pen — `PEN`, 5 px, black;
+  the cyclers keep stepping while it is armed and take effect when the pencil returns), an
+  undo history keyed by `(layer, tile)` that swaps per layer, `Swap pg` reading and swapping
+  **both** rasters, a **`Dump`** button that wall-clocks `renderToBitmap()` and writes the
+  flatten to `getExternalFilesDir(null)/flatten-<epoch>.png` (`flatten render: WxH in N ms`)
+  — the "render it to a PNG before a panel sees it" door — and the armed raster tool in the
+  status head.
+- **220 core / 18 ratta green** (+3 core: `RasterLayerTest` walks `StrokeStyle.entries` so a
+  new style cannot fall through the routing, and `LegacyRasterHostTest` is a 0.1.38 host
+  whose *compiling* is the source-compatibility guard); `:demo:assembleDebug` builds.
+- `docs/api.md` (raster section rewritten: the two rasters, the `DARKEN` flatten, the
+  layered calls, the graphite-only rubber, the silent-ink rule for legacy listeners) and
+  `CLAUDE.md` (one new standing bullet in the raster block) in the same commit.
+
 **Gate:** `./gradlew test` green (core + ratta + onyx); Paintsprout Onyx green on its pin; the
 Nomad demo by the artist's hand — pen over pencil, pencil over pen, rub each way: graphite lifts,
 ink stays; flatten redraw ms vs. 0.1.38 and demo PSS recorded here; 0.1.39 to mavenLocal.
+
+**Gate — passed (the artist's hand, Nomad, 2026-09-17):** 220 core / 18 ratta green; Paintsprout
+Onyx compiled against a throwaway 0.1.39 re-pin with no source change (`:app:compileDebugKotlin`
+green, pin reverted); the demo walk — pencil shading, gel pen across it, rubbed both ways, pencil
+over ink and rubbed again, undo/redo of a mark, a pen line and a rub — *"Nothing feels off."*
+The flatten dumped from the demo and inspected at 1× and 3×: ink solid through the rubbed
+graphite, the rub corridors only in the graphite, no fringe at a crossing. **Measured:**
+`renderToBitmap()` of the 1404×1711 flatten **37 ms** (a new instrument — there is no 0.1.38
+`Dump` to set beside it; a pencil-only page skips the second blit entirely); demo PSS **48.8 MB
+at launch → 70.9 MB** after the walk with both rasters live (each ~9.6 MB on the Nomad); undo
+swaps 7–20 ms for 6–9 graphite tiles; a pen line's entry 33 tiles on ink alone, every rub entry
+on graphite alone. 0.1.39 published to mavenLocal.
 
 ## Standing Open Questions (ask as they become relevant)
 

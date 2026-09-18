@@ -81,6 +81,29 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   callbacks (`loadingRaster` in Paintsprout's `SketchbookActivity` and SN's `SketchActivity`)
   only worked because these calls happen to be synchronous — a correctness argument resting on
   an implementation detail nobody promised is a bug waiting for the day the detail changes.
+- **Two rasters, one picture — because a pixel does not know which tool laid it (Phase 26,
+  0.1.39).** The page was one ARGB bitmap and the rubber lifts alpha wherever it sweeps, so
+  a gel pen came up under it exactly as graphite did. No colour key could have fixed that
+  honestly: a black pen and a black pencil are the same pixel, and a rule read off the
+  pixels would have been a guess about history dressed as a fact. The artist's rule is the
+  physical one — *"in the real world, ink is more permanent than pencil"* — so the fix is
+  the page's **data model**: `graphiteRaster` and `inkRaster`, routed once in
+  `RasterLayer.of(style)` (`PENCIL` → graphite, everything else → ink). **The rubber rubs
+  graphite and only graphite** — `eraseRasterAlong` names that bitmap, so the rule holds by
+  construction rather than by a test that could be got wrong; the ink image is never read,
+  never allocated and never announced by an erase. **The flatten is `DARKEN`**, not an
+  over-draw, because these are not user-facing layers: `min` per channel is commutative, so
+  there is no top and no bottom to get wrong, it is the right answer for a coloured ink
+  later, and on white paper it is pixel-identical to `SRC_OVER` — so the pencil page the
+  artist already approved does not move. **One contact announces exactly one layer** (a
+  mark's runs are all its style's; a sweep is all graphite); a load or a clear announces
+  both, graphite first, even when one is empty, because a host undoing a load needs the
+  before-image of both. And **the un-layered calls mean graphite** — every raster call and
+  both callbacks have a layered form the engine uses and an un-layered default that routes
+  to `GRAPHITE`, so a 0.1.38 host compiles and behaves unchanged. A listener that overrides
+  only the un-layered half hears **nothing** of ink on purpose: its `readPageRaster(rect)`
+  reads graphite, so forwarding an ink change would hand it the wrong before-image and its
+  undo would paint graphite where ink was. Silence beats a corrupted history.
 - **The raster eraser's mid-sweep cadence is PER ENGINE, because a redraw does not cost the
   same thing on two panels (Phase 19, 0.1.32).** `rasterEraseRedrawIntervalMs` is a
   `protected open val` the base reads in `throttledEraseRedraw`; `RASTER_ERASE_REDRAW_END_ONLY`

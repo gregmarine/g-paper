@@ -108,17 +108,33 @@ interface PaperListener {
     }
 
     /**
-     * The page image is about to change inside [rect] (page space) — [PageMode.RASTER]
-     * only (0.1.25). Fires on the main thread immediately before the pixels are touched,
-     * for every change the pen or a bake makes: a mark composited at pen-up, a
-     * [PaperView.loadStrokes] or [PaperView.addStrokes] bake, a [PaperView.clear], and
-     * (from 0.1.26) each batch of an eraser sweep. This is the host's one chance at a
-     * before-image for undo — [PaperView.readPageRaster] with this rect, now, holds
-     * exactly the pixels the change will overwrite, in the shape
-     * [PaperView.swapPageRaster] takes back (0.1.29; [PaperView.copyPageRaster] is the
-     * bitmap form). The engine keeps no history in either mode. The rect is
-     * generous by design (the run's bounds pushed out by the mark's width and a margin,
-     * clipped to the page), so a before-image taken from it always covers the change.
+     * [layer]'s page image is about to change inside [rect] (page space) —
+     * [PageMode.RASTER] only (0.1.25; the layer since 0.1.39). Fires on the main thread
+     * immediately before the pixels are touched, for every change the pen or a bake
+     * makes: a mark composited at pen-up, a [PaperView.loadStrokes] or
+     * [PaperView.addStrokes] bake, a [PaperView.clear], and (from 0.1.26) each batch of
+     * an eraser sweep. This is the host's one chance at a before-image for undo —
+     * [PaperView.readPageRaster] with this layer and this rect, now, holds exactly the
+     * pixels the change will overwrite, in the shape [PaperView.swapPageRaster] takes
+     * back (0.1.29; [PaperView.copyPageRaster] is the bitmap form). The engine keeps no
+     * history in either mode. The rect is generous by design (the run's bounds pushed out
+     * by the mark's width and a margin, clipped to the page), so a before-image taken
+     * from it always covers the change.
+     *
+     * **This is the form the engine calls** — the un-layered [onRasterWillChange] never
+     * fires on its own. Overriding only that one is still a working 0.1.38 host: the
+     * default below forwards [RasterLayer.GRAPHITE] to it and says **nothing** about ink.
+     * That silence is the safe answer, not a gap. Such a host's
+     * `readPageRaster(rect)` reads graphite, so handing it an ink change would have it
+     * take the *wrong* before-image and put graphite back where ink was — a corrupted
+     * undo is worse than an undo that does not cover the pen. A host that draws with
+     * anything but a pencil overrides this method and keys its history by
+     * `(layer, rect)`.
+     *
+     * **One contact announces exactly one layer**: a mark's runs are all its style's
+     * layer, and a rubbing sweep is all [RasterLayer.GRAPHITE]. A [PaperView.loadStrokes]
+     * or [PaperView.clear] announces **both**, graphite first, whole-page — even when a
+     * layer is empty, because a host undoing a load needs the before-image of both.
      *
      * **A change the host made itself is not announced (0.1.33).**
      * [PaperView.loadPageRaster] and [PaperView.swapPageRaster] both replace page pixels
@@ -137,19 +153,39 @@ interface PaperListener {
      * told into one entry per contact — closing it at [onPenLifted] — already handles
      * this; one that assumed a mark was one rect does not.
      */
+    fun onRasterWillChange(layer: RasterLayer, rect: Rect) {
+        if (layer == RasterLayer.GRAPHITE) onRasterWillChange(rect)
+    }
+
+    /**
+     * The 0.1.38 form: the same call for [RasterLayer.GRAPHITE] only. Never called by the
+     * engine — the layered [onRasterWillChange] is, and its default forwards graphite
+     * here. Kept so a host written before two rasters existed keeps working unchanged
+     * (it drew a pencil, and graphite is the page it had); see that method for why ink
+     * is deliberately silent here rather than forwarded.
+     */
     fun onRasterWillChange(rect: Rect) {}
 
     /**
-     * The page image changed inside [rect] (page space) — the closing half of
-     * [onRasterWillChange], the same rects in the same order, after the pixels were
-     * touched. The host's dirty
-     * flag: a raster page has no per-mark rows to write, so this is what schedules its
-     * save. It is silent for the same changes [onRasterWillChange] is silent for — a
-     * page the host itself loaded or swapped in. In [PageMode.RASTER] a composited mark
-     * still reports through
-     * [onStrokeCommitted] as well (the host keeps its timestamps and edit counts from
-     * one place in both modes) — the stroke it carries is the one just composited, and
-     * a raster host must not store it as a row.
+     * [layer]'s page image changed inside [rect] (page space) — the closing half of
+     * [onRasterWillChange], the same layer and rects in the same order, after the pixels
+     * were touched. The host's dirty flag: a raster page has no per-mark rows to write,
+     * so this is what schedules its save. It is silent for the same changes
+     * [onRasterWillChange] is silent for — a page the host itself loaded or swapped in.
+     * In [PageMode.RASTER] a composited mark still reports through [onStrokeCommitted] as
+     * well (the host keeps its timestamps and edit counts from one place in both modes) —
+     * the stroke it carries is the one just composited, and a raster host must not store
+     * it as a row.
+     */
+    fun onRasterChanged(layer: RasterLayer, rect: Rect) {
+        if (layer == RasterLayer.GRAPHITE) onRasterChanged(rect)
+    }
+
+    /**
+     * The 0.1.38 form: the closing half for [RasterLayer.GRAPHITE] only, reached through
+     * the layered [onRasterChanged]'s default. A host that saves the page on this call
+     * and has since started drawing ink must move to the layered form, or the ink half of
+     * the picture will never mark the page dirty.
      */
     fun onRasterChanged(rect: Rect) {}
 

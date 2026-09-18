@@ -51,29 +51,46 @@ fun turnPage(next: PageId) {
 
 ### Raster pages (0.1.25)
 
-A raster page (`pageMode = PageMode.RASTER`) has no rows: the whole page is one image. Persist
-it as one blob per page, overwritten on save, never per stroke:
+A raster page (`pageMode = PageMode.RASTER`) has no rows: the whole page is an image —
+**two images since 0.1.39** (`RasterLayer.GRAPHITE` for the pencil, `RasterLayer.INK` for
+every other style, seen flattened with `DARKEN`). Persist a blob per layer per page,
+overwritten on save, never per stroke:
 
 ```kotlin
-override fun onRasterChanged(rect: Rect) { dirty = true; scheduleSave() }   // debounce it
+override fun onRasterChanged(layer: RasterLayer, rect: Rect) { dirty += layer; scheduleSave() }
 
 fun save() {
-    val copy = paper.getPageRaster() ?: return   // main thread; a copy, so the pen can keep going
-    dirty = false
-    io.launch { db.putPageImage(pageId, encodePng(copy)) }
+    // main thread; copies, so the pen can keep going
+    val images = dirty.associateWith { paper.getPageRaster(it) }
+    dirty = emptySet()
+    io.launch { images.forEach { (layer, bmp) -> db.putPageImage(pageId, layer, bmp?.let(::encodePng)) } }
 }
 
 fun turnPage(next: PageId) {
-    if (dirty) save()
+    if (dirty.isNotEmpty()) save()
     paper.clearForContentSwap()
     paper.setPageSize(w, h)
-    paper.loadPageRaster(db.loadPageImage(next))   // decoded on IO first; null = blank
+    for (layer in RasterLayer.entries) {                   // decoded on IO first; null = blank
+        paper.loadPageRaster(layer, db.loadPageImage(next, layer))
+    }
 }
 ```
 
-Take the copy while the pen is idle (`isPenActive`): the live image is mutated at pen-up. And
-size-check a decoded image against the page before loading it — the engine copies at 1:1
+Take the copies while the pen is idle (`isPenActive`): the live images are mutated at pen-up.
+And size-check a decoded image against the page before loading it — the engine copies at 1:1
 and will not stretch a wrong-sized one.
+
+**A pencil-only host needs none of this.** Every raster call and both callbacks keep an
+un-layered form meaning `GRAPHITE`, so the 0.1.38 code above (one blob, `getPageRaster()`,
+`loadPageRaster(bitmap)`, `onRasterChanged(rect)`) compiles and behaves unchanged. The
+moment you offer a second tool, move to the layered forms: the un-layered `onRasterChanged`
+is **silent for ink** on purpose — it pairs with an un-layered `readPageRaster` that reads
+graphite, and forwarding an ink change to it would hand you the wrong before-image. And
+`getPageRaster(layer)` is one layer, never the picture: the flatten is `renderToBitmap()`,
+and it cannot be taken apart again, so save both layers if you mean to keep drawing.
+
+**The rubber rubs graphite only.** An eraser sweep never reads, allocates or announces the
+ink image, which is the whole of *"in the real world, ink is more permanent than pencil"*.
 
 ## Undo / redo
 
@@ -89,12 +106,19 @@ history. Keep an operation stack and replay:
 | Moved a selection | `onSelectionMoved(m)` | `removeStrokes` + `addStrokes(translated back)` — or `loadStrokes` the page | re-apply the delta |
 | Cleared the page | your own clear action | `loadStrokes(saved)` | `clear()` |
 
-On a **raster page** the entries are before-images, not ids. `onRasterWillChange(rect)` fires
-before the pixels move — `readPageRaster(rect)` there (0.1.29) is exactly what the change
-overwrites, as a `RasterPatch`. Undo is `swapPageRaster(patches)`: the patch goes onto the page
-and comes back holding what was there, so the **same entry serves redo** with no second copy
-and no second call shape. Bound such a stack by **bytes** (`RasterPatch.bytes`), not count: a
-page-wide erase's before-image is the whole page.
+On a **raster page** the entries are before-images, not ids. `onRasterWillChange(layer, rect)`
+fires before the pixels move — `readPageRaster(layer, rect)` there (0.1.29) is exactly what the
+change overwrites, as a `RasterPatch`. Undo is `swapPageRaster(layer, patches)`: the patch goes
+onto that layer and comes back holding what was there, so the **same entry serves redo** with no
+second copy and no second call shape. Bound such a stack by **bytes** (`RasterPatch.bytes`), not
+count: a page-wide erase's before-image is the whole page.
+
+**Key an entry by `(layer, rect)`, not by rect (0.1.39).** A `RasterPatch` carries no layer
+of its own, so a patch read from graphite must be swapped back into graphite; group an
+entry's patches by layer and make one call per layer. One contact only ever announces one
+layer — a mark's runs are all its style's, a sweep is all graphite — so in practice an entry
+is single-layered; `loadStrokes` and `clear` are the exception and announce both, whole-page,
+graphite first, even when one of them is empty.
 
 **An undo builder must accept several will-change calls per contact.** An eraser sweep (0.1.26;
 a rubbing lift rather than a clear since 0.1.30, same calls) fires the pair **once per batch** —
