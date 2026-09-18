@@ -298,6 +298,19 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
 - **When a rendering fault survives redesigning the renderer, the renderer is not the problem** — the
   input, or the frame the output is placed in, is. Three releases of grain work changed nothing the
   artist could see, because the grain was never wrong.
+- **An angular error is multiplied by the lever arm, so a texture tuned on a narrow lead is untested
+  on a wide one (Phase 25, 0.1.38).** Two degrees of direction wobble is nothing at a mark's
+  centre line and two station pitches at the rim of a 96 px lead — the combs piled up and the mark
+  became "a series of tiny lines". Nothing in the grain had changed since it was approved at 12 px;
+  the lever arm had. Any constant that scales with half-width (`LEVER_JITTER`) or with an angle must
+  be looked at again at the widest lead a host offers. The way to look: dump `GraphiteGrain.of` from a
+  JVM test and render it offline — the pure-Kotlin promise exists so a texture fault can be
+  reproduced and *measured* (a histogram along the tangent found this one) without a panel.
+- **Independent coin tosses are white noise, and white noise is not paper (Phase 25).** Once the
+  comb was gone the mark was an even spray. A sheet's tooth comes in patches, and the same patches
+  under every stroke — so the field is in **page** coordinates and seeded by a constant, never by
+  the stroke. Anything that modulates coverage must leave total ink where the hand approved it;
+  measure before and after.
 - **Inspect a texture at the size it will be looked at.** This defect is invisible at 10× pixel zoom,
   where one bristle reads as ordinary speckle, and obvious at 1×. Every wrong diagnosis in that
   sequence came from magnifying past the scale the defect lives at.

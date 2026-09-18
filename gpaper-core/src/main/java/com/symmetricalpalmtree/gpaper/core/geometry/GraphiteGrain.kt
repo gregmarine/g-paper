@@ -35,9 +35,15 @@ import kotlin.math.sqrt
  * own tooth, which matters because the paper it draws on may be plain white with no surface
  * model behind it at all.
  *
+ * **The sheet is in here too.** The tooth is not only a pitch: it has peaks and hollows in
+ * patches, the same patches under every stroke, and the mark is mottled by them — see
+ * [TOOTH_CELL_PX]. Without it a mark is an even spray of independent flecks, which is static,
+ * not paper.
+ *
  * **Pure Kotlin, no Android.** That is not tidiness — it is what lets the determinism below
- * be *proved* by a JVM test rather than asserted. The renderer's job is only to put ink where
- * this says.
+ * be *proved* by a JVM test rather than asserted, and what lets a texture fault be reproduced
+ * and measured offline (dump `of` from a JVM test, render it, histogram it) without a panel.
+ * The renderer's job is only to put ink where this says.
  *
  * ## Determinism, and why it is the hard constraint
  *
@@ -157,9 +163,18 @@ object GraphiteGrain {
      * The skate. A lead riding over tooth catches and lifts in runs longer than a single
      * peak, which is what gives a pencil line its along-the-stroke streakiness; without it a
      * mark is evenly speckled and reads as spray. [SKATE_LEN_PX] is the length of one such
-     * run and [SKATE_DEPTH] how much coverage it can steal at its lightest.
+     * run, [SKATE_WIDTH_PX] how broad it is, and [SKATE_DEPTH] how much coverage it can steal
+     * at its lightest.
+     *
+     * **A run is a streak, not a band.** The skate was first a function of arc alone, so it lifted
+     * and dropped a whole cross-section at once — on a fine lead that *is* a streak, because the
+     * lead is narrower than a run is long; on a 96 px lead it is a bar across the mark every 26 px,
+     * and a mark made of bars across it looks manufactured. Real graphite streaks *along* the
+     * stroke: a facet of the lead, a groove in the sheet, each a few pixels wide. So the field is
+     * two-dimensional, long along the travel and short across it.
      */
     private const val SKATE_LEN_PX = 26f
+    private const val SKATE_WIDTH_PX = 5f
     private const val SKATE_DEPTH = 0.16f
 
     /**
@@ -170,8 +185,61 @@ object GraphiteGrain {
      */
     private const val PRESSURE_GAMMA = 0.75f
 
-    /** Fleck displacement from its lattice site, as a fraction of the pitch. Breaks the grid. */
-    private const val JITTER = 0.62f
+    /**
+     * Fleck displacement from its lattice site, as a fraction of the pitch — in **both** directions.
+     *
+     * At 0.62 the lattice showed through. Each station's comb of lanes was slid sideways as one
+     * rigid unit, which broke the along-the-stroke chains, but the comb itself stayed a comb: lanes
+     * at an exact pitch, flecks wider than that pitch, and each fleck free to wander only a quarter
+     * of a pixel. So every cross-section was a short solid line *across* the mark. On a 5 px lead
+     * there is nothing to see — the line is three flecks long. On a 96 px lead it is a hundred
+     * flecks long and the mark is a stack of them: the artist called it "a series of tiny lines"
+     * rather than graphite, and it was. A full cell of freedom in both axes leaves no direction for
+     * a fleck to line up along.
+     */
+    private const val JITTER = 1f
+
+    /**
+     * Extra along-the-stroke freedom a fleck gets per px of its distance from the centre line.
+     *
+     * A cross-section is a rigid comb turned to the travelled direction, and the travelled
+     * direction wobbles — a couple of degrees after smoothing, as [TANGENT_SMOOTH_PX] says. Two
+     * degrees at the centre line is nothing. Two degrees on a fleck 48 px out is 1.7 px of
+     * movement *along* the stroke, twice the station pitch: consecutive combs pile onto each other
+     * there and part again a few stations later. Measured on a 96 px lead, the centre of the mark
+     * was evenly laid and the rim came in bunches with a ~4 px period, every bunch a short bar
+     * across the mark — the "series of tiny lines".
+     *
+     * Smoothing the direction harder would need a window of a thousand px to hold that lever arm
+     * still, which would drag every curve. So the flecks are let loose instead, by an amount that
+     * grows with the lever arm that shakes them: a fleck at the rim may land a few px ahead of or
+     * behind its station, which is more than the wobble can move it, and the bunching averages
+     * out. A fleck at the centre keeps its cell. The flank of a real lead deposits with exactly this
+     * looseness — the mark's edge is its least precise part.
+     */
+    private const val LEVER_JITTER = 0.08f
+
+    /**
+     * The sheet's tooth, as a field over the page: where its peaks and hollows are.
+     *
+     * Every constant above decides *how much* graphite lands. None of them decided *where*, beyond
+     * the lattice — each site caught or not on its own coin toss, independent of its neighbours,
+     * and a mark built that way is white noise: an even spray that reads as static, not as a lead
+     * dragged over paper. Real tooth is not independent site to site. The hollows and peaks of a
+     * sheet come in patches a few tenths of a millimetre across — the fibres, the calendering —
+     * and a mark laid over them is mottled at that scale, darker where the lead rode a ridge and
+     * bare in the hollows beside it. And because the tooth belongs to the *sheet*, two strokes over
+     * the same spot share the same hollows: a crossing stays bare where the paper is bare.
+     *
+     * So the field lives in **page** coordinates, seeded by a constant rather than the stroke —
+     * one sheet under everything drawn on it — and a site's catch is a blend of its own coin toss
+     * and the tooth height under it, [TOOTH_WEIGHT] deciding how much the sheet gets to say.
+     * Two octaves, [TOOTH_CELL_PX] and three times that: fibre and patch. At full coverage the
+     * field is overruled and the mark goes solid, which is what a hard press does to any paper.
+     */
+    private const val TOOTH_CELL_PX = 3.5f
+    private const val TOOTH_WEIGHT = 0.55f
+    private const val TOOTH_SEED = 0x5ee7
 
     /** A stroke narrower than this still gets one lane of flecks rather than none. */
     private const val MIN_WIDTH_PX = 1f
@@ -695,7 +763,6 @@ object GraphiteGrain {
         val nx = -ty
         val ny = tx
         val press = pressure.coerceIn(0f, 1f).pow(PRESSURE_GAMMA)
-        val skate = skate(arc, seed)
         // Slide this cross-section's whole comb of lanes sideways by a random fraction of a lane.
         // Without it, the same lane recurs at the same offset station after station, and since a
         // fleck is wider than the pitch that spaces them, consecutive flecks in a lane fuse — the
@@ -705,18 +772,18 @@ object GraphiteGrain {
         val phase = unit(hash(seed, station, 0x1f7))
         for (lane in 0 until lanes) {
             val u = laneOffset(lane, lanes, phase)
-            val cover = coverage(press, u) * skate * lean
+            val site = u * half
+            val cover = coverage(press, u) * skate(arc, site, seed) * lean
             if (cover <= 0f) continue
-            if (unit(hash(seed, station, lane xor 0x2af1)) >= cover) continue
-            val alongJitter = (unit(hash(seed, station, lane)) - 0.5f) * JITTER * TOOTH_PITCH_PX
+            val alongJitter = (unit(hash(seed, station, lane)) - 0.5f) *
+                (JITTER * TOOTH_PITCH_PX + 2f * LEVER_JITTER * abs(site))
             val acrossJitter =
                 (unit(hash(seed, station, lane xor 0x5bf0)) - 0.5f) * JITTER * TOOTH_PITCH_PX
-            val across = u * half + acrossJitter
-            out.add(
-                cx + tx * alongJitter + nx * across,
-                cy + ty * alongJitter + ny * across,
-                levelOf(press, hash(seed, station, lane xor 0x11d7)),
-            )
+            val across = site + acrossJitter
+            val x = cx + tx * alongJitter + nx * across
+            val y = cy + ty * alongJitter + ny * across
+            if (!catches(cover, x, y, hash(seed, station, lane xor 0x2af1))) continue
+            out.add(x, y, levelOf(press, hash(seed, station, lane xor 0x11d7)))
         }
     }
 
@@ -734,14 +801,13 @@ object GraphiteGrain {
                 val r = sqrt(u * u + v * v)
                 if (r > 1f) continue
                 val cover = coverage(press, r) * lean
-                if (unit(hash(seed, row, lane xor 0x2af1)) >= cover) continue
+                if (cover <= 0f) continue
                 val jx = (unit(hash(seed, row, lane)) - 0.5f) * JITTER * TOOTH_PITCH_PX
                 val jy = (unit(hash(seed, row, lane xor 0x5bf0)) - 0.5f) * JITTER * TOOTH_PITCH_PX
-                out.add(
-                    p.x + u * half + jx,
-                    p.y + v * half + jy,
-                    levelOf(press, hash(seed, row, lane xor 0x11d7)),
-                )
+                val x = p.x + u * half + jx
+                val y = p.y + v * half + jy
+                if (!catches(cover, x, y, hash(seed, row, lane xor 0x2af1))) continue
+                out.add(x, y, levelOf(press, hash(seed, row, lane xor 0x11d7)))
             }
         }
         return out.grain()
@@ -780,16 +846,51 @@ object GraphiteGrain {
         return (d * (LEVELS - 1)).roundToInt().coerceIn(0, LEVELS - 1)
     }
 
-    /** Smooth value noise along the path: the runs where the lead lifts and catches again. */
-    private fun skate(arc: Float, seed: Int): Float {
-        val cell = arc / SKATE_LEN_PX
-        val i = floor(cell).toInt()
-        val f = cell - i
-        val a = unit(hash(seed, i, 0x7d1))
-        val b = unit(hash(seed, i + 1, 0x7d1))
-        val e = f * f * (3f - 2f * f)
-        return 1f - SKATE_DEPTH * (a + (b - a) * e)
+    /**
+     * Whether the site at page position ([x], [y]) catches graphite at this [cover], given the
+     * site's own coin toss [h]. The toss and the sheet's tooth under the site are blended by
+     * [TOOTH_WEIGHT]; a hollow needs more coverage to fill than a peak does, and at full coverage
+     * everything fills.
+     */
+    private fun catches(cover: Float, x: Float, y: Float, h: Int): Boolean {
+        val draw = unit(h) * (1f - TOOTH_WEIGHT) + (1f - tooth(x, y)) * TOOTH_WEIGHT
+        return draw < cover
     }
+
+    /**
+     * The sheet's tooth height at page position ([x], [y]), `0` a hollow to `1` a peak — see
+     * [TOOTH_CELL_PX]. A property of the page, so the same under every stroke on it.
+     */
+    private fun tooth(x: Float, y: Float): Float {
+        val fine = valueNoise(x / TOOTH_CELL_PX, y / TOOTH_CELL_PX, TOOTH_SEED)
+        val coarse = valueNoise(x / (TOOTH_CELL_PX * 3f), y / (TOOTH_CELL_PX * 3f), TOOTH_SEED + 1)
+        return fine * 0.6f + coarse * 0.4f
+    }
+
+    /** Smooth value noise on a unit lattice: bilinear over four hashed corners, `0`..`1`. */
+    private fun valueNoise(u: Float, v: Float, seed: Int): Float {
+        val i = floor(u).toInt()
+        val j = floor(v).toInt()
+        val fu = u - i
+        val fv = v - j
+        val eu = fu * fu * (3f - 2f * fu)
+        val ev = fv * fv * (3f - 2f * fv)
+        val a = unit(hash(seed, i, j))
+        val b = unit(hash(seed, i + 1, j))
+        val c = unit(hash(seed, i, j + 1))
+        val d = unit(hash(seed, i + 1, j + 1))
+        val top = a + (b - a) * eu
+        val bottom = c + (d - c) * eu
+        return top + (bottom - top) * ev
+    }
+
+    /**
+     * Smooth value noise over the mark — [arc] px along it, [across] px out from its centre
+     * line: the runs where the lead lifts and catches again. Long cells along, short across, so
+     * the runs are streaks in the direction of travel — see [SKATE_WIDTH_PX].
+     */
+    private fun skate(arc: Float, across: Float, seed: Int): Float =
+        1f - SKATE_DEPTH * valueNoise(arc / SKATE_LEN_PX, across / SKATE_WIDTH_PX, seed xor 0x7d1)
 
     // ── Deterministic noise ──────────────────────────────────────────────────
 
