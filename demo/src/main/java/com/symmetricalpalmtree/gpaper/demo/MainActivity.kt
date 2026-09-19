@@ -605,11 +605,14 @@ class MainActivity : Activity() {
                 |  Barrel-button / eraser-end: firmware suppressed from hover;
                 |  software erase does the work. Lasso: firmware dash trail.
                 |  Colors map to nearest firmware grey live; true ARGB on bake.
-                |  Raster pencil (0.1.41): previewed by painting /dev/ebc
-                |  directly — 16 greys, pressure and tilt, no flash, daemon
-                |  off while it is armed. Which path this session got is one
-                |  logcat line: GPaperRatta "panel: direct" / "panel: needle".
-                |  The pen and the rubber are the firmware's as before.
+                |  Raster page (0.1.43): the WHOLE page is previewed by
+                |  painting /dev/ebc directly — pencil, gel pen and rubber —
+                |  with the daemon disabled across it, and the mark that
+                |  bakes IS the live layer, so nothing moves at pen-up.
+                |  Two logcat lines say which behaviour you have: the
+                |  session's (GPaperRatta "panel: direct" / "panel: needle")
+                |  and the page's ("direct: pencil+pen+rubber").
+                |  Stroke-mode pages are the firmware's exactly as before.
             """.trimMargin()
             else -> """
                 |GENERIC ENGINE

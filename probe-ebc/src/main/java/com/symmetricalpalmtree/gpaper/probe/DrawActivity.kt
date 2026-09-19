@@ -79,7 +79,10 @@ class DrawActivity : Activity() {
     enum class Mirror { OFF, UP, LIVE }
 
     private inner class DrawView(c: Context, var mirror: Mirror) : View(c) {
-        private val buttons = listOf("Clean", "Mode", "Dab", "Flag", "Mirror", "Clear", "Exit")
+        private val buttons = listOf("Refresh", "Clean", "Mode", "Dab", "Flag", "Mirror", "Clear", "Exit")
+        /** EinkManager.screenRefresh(hide, n) variants, cycled per tap: (false,0) (false,1) (false,2) (false,3) (true,0) (true,1). */
+        private val refreshVariants = listOf(false to 0, false to 1, false to 2, false to 3, true to 0, true to 1)
+        private var refreshIndex = 0
         /** Idle clean pass: 1.5 s after the last pen-up, re-display everything drawn since the
          *  last clean in mode 4 (levels × 4) — a full-waveform drive of every pixel in the rect. */
         var cleanOn = intent.getBooleanExtra("clean", true)
@@ -99,7 +102,7 @@ class DrawActivity : Activity() {
         private var levels = ByteArray(0)          // screen-space truth, one 4-bit level per pixel, 15 = paper
         private var bitmap: Bitmap? = null
         private val paint = Paint()
-        private val label = Paint().apply { color = Color.BLACK; textSize = 28f }
+        private val label = Paint().apply { color = Color.BLACK; textSize = 22f }
         private var samples = 0; private var events = 0; private var latencyUs = 0L; private var maxUs = 0L
 
         override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
@@ -111,19 +114,29 @@ class DrawActivity : Activity() {
             bitmap?.let { cv.drawBitmap(it, 0f, 0f, paint) }
             // Finger buttons along the top (Supernote has no Back key): 200 px wide, 80 px tall.
             for ((i, name) in buttons.withIndex()) {
-                val x = width - (buttons.size - i) * 210f
+                val x = width - (buttons.size - i) * 172f
                 paint.color = Color.BLACK; paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f
-                cv.drawRect(x, 10f, x + 200f, 90f, paint)
+                cv.drawRect(x, 10f, x + 166f, 90f, paint)
                 paint.style = Paint.Style.FILL
-                cv.drawText(when (name) { "Mirror" -> "Mirror: $mirror"; "Flag" -> "Flag: $flag"; "Dab" -> if (flecks) "Dab: flecks" else "Dab: solid"; "Mode" -> "Mode: $mode"; "Clean" -> "Clean: ${if (cleanOn) "on" else "off"}"; else -> name }, x + 16f, 62f, label)
+                cv.drawText(when (name) { "Mirror" -> "Mirror: $mirror"; "Flag" -> "Flag: $flag"; "Dab" -> if (flecks) "Dab: flecks" else "Dab: solid"; "Mode" -> "Mode: $mode"; "Refresh" -> "Refresh #$refreshIndex"; "Clean" -> "Clean: ${if (cleanOn) "on" else "off"}"; else -> name }, x + 16f, 62f, label)
             }
-            cv.drawText("EBC live stroke", 20f, 62f, label)
         }
 
         private fun fingerTap(x: Float, y: Float): Boolean {
             if (y > 90f) return false
-            val i = buttons.indices.firstOrNull { x >= width - (buttons.size - it) * 210f && x < width - (buttons.size - it) * 210f + 200f } ?: return false
+            val i = buttons.indices.firstOrNull { x >= width - (buttons.size - it) * 172f && x < width - (buttons.size - it) * 172f + 200f } ?: return false
             when (buttons[i]) {
+                "Refresh" -> {
+                    val (hide, n) = refreshVariants[refreshIndex % refreshVariants.size]
+                    val r = runCatching {
+                        val sm = Class.forName("android.os.ServiceManager")
+                        val binder = sm.getMethod("getService", String::class.java).invoke(null, "eink") as android.os.IBinder
+                        val mgr = Class.forName("android.os.IEinkManager\$Stub").getMethod("asInterface", android.os.IBinder::class.java).invoke(null, binder)
+                        mgr.javaClass.getMethod("screenRefresh", java.lang.Boolean.TYPE, Integer.TYPE).invoke(mgr, hide, n); "ok"
+                    }.getOrElse { "FAILED ${it.cause?.message ?: it.message}" }
+                    Log.i(TAG, "screenRefresh(hide=$hide, n=$n) #$refreshIndex -> $r")
+                    refreshIndex++
+                }
                 "Clean" -> { cleanOn = !cleanOn; Log.i(TAG, "clean=$cleanOn") }
                 "Mode" -> { mode = if (mode == 7) 4 else 7; Log.i(TAG, "mode=$mode") }
                 "Dab" -> { flecks = !flecks; Log.i(TAG, "flecks=$flecks") }

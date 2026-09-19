@@ -729,8 +729,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     /**
      * [layer]'s page image for a device engine that has to flatten the page itself —
-     * **read-only**, null when nothing has landed on that layer, and never to be held
-     * across a content swap (the images are dropped, not erased; see [graphiteRaster]).
+     * **read-only** (an engine laying a mark writes through [rasterForWrite]), null when
+     * nothing has landed on that layer, and never to be held across a content swap (the
+     * images are dropped, not erased; see [graphiteRaster]).
      *
      * It exists for Ratta's direct panel preview (Phase 28), which must work out the grey a
      * pixel is about to show — white, then graphite, then the live flecks, then ink through
@@ -738,6 +739,18 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * Everything else asks [drawCommittedContent] for the page and lets Canvas do it.
      */
     protected fun rasterFor(layer: RasterLayer): Bitmap? = raster(layer)
+
+    /**
+     * [layer]'s page image **to write into**, allocated if this is its first mark — the
+     * twin of [rasterFor] for the one engine that lays a mark itself
+     * ([bakeCapturedStroke], Phase 29).
+     *
+     * Null when there is no page to size an image by (before layout and before
+     * [setPageSize]), which is logged once by [ensureRaster] and is the same answer the
+     * base's own composite gets. An engine writing through this owes the page the pixels
+     * the base would have left — see [bakeCapturedStroke].
+     */
+    protected fun rasterForWrite(layer: RasterLayer): Bitmap? = ensureRaster(layer)
 
     /**
      * The page's size in pixels: the rect the host set with [setPageSize] if it did, else
@@ -1581,7 +1594,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             val layer = RasterLayer.of(stroke.style)
             val dirty = rasterDirtyAlong(stroke)
             for (r in dirty) paperListener?.onRasterWillChange(layer, r)
-            compositeIntoRaster(listOf(stroke), dirty)
+            if (bakeCapturedStroke(stroke, dirty)) {
+                // The engine laid this mark itself (Phase 29: its live layer *is* the bake,
+                // so there is no second rendering of it to do). Everything else about this
+                // path is unchanged — including the news, which goes out here exactly as
+                // [compositeIntoRaster] would have sent it, per run and in one call.
+                val rects = dirty.filter { !it.isEmpty }
+                if (rects.isNotEmpty()) onRasterPixelsChanged(rects)
+            } else {
+                compositeIntoRaster(listOf(stroke), dirty)
+            }
             bakeAfterCommit()
             paperListener?.onStrokeCommitted(stroke)
             for (r in dirty) paperListener?.onRasterChanged(layer, r)
@@ -1625,6 +1647,21 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         width: Float,
     ) {
         StrokeRenderer.drawPencilFlecks(canvas, grain, from, ink, width, scratchPaint)
+    }
+
+    /**
+     * Draw [points] onto [canvas] as the pen lays it — [StrokeRenderer]'s own uniform-width
+     * round-capped path, the bake's rasteriser, for an engine painting a live ink preview
+     * of its own (Ratta's direct panel path, Phase 29).
+     *
+     * [points] may be **one segment of a stroke rather than the whole of it**: the caps are
+     * round, so a segment drawn now and the next one drawn later join exactly where a
+     * single path would have, which is what lets a live layer be built up a MotionEvent at
+     * a time and then *be* the bake. That is a property of this style and not of the
+     * renderer — a dashed or textured style has no such seam, and none of them come here.
+     */
+    protected fun drawPenInk(canvas: Canvas, points: List<StrokePoint>, color: Int, width: Float) {
+        StrokeRenderer.draw(canvas, points, color, width, StrokeStyle.PEN, scratchPaint)
     }
 
     // ── Pen-gesture recognizers (smart lasso / scribble erase) ───────────────
@@ -1785,6 +1822,28 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected open fun bakeAfterCommit() {
         redrawCommitted()
     }
+
+    /**
+     * Give a device engine the chance to lay [stroke] into the raster page **itself**,
+     * over the runs [dirty] names, instead of the base compositing it (Phase 29). False
+     * here, and false on every engine but Supernote's direct path: the base lays the mark
+     * exactly as it always has.
+     *
+     * It exists because on that path the mark is *already on the page* — the panel was
+     * painted fleck by fleck while the pen was down, from a live alpha layer, and
+     * compositing that layer into the page image is a few hundred kilobytes of integer
+     * `SRC_OVER` where re-deriving the whole stroke's grain and rasterising it again is a
+     * second opinion about what the mark looks like and, on a dense scribble, most of a
+     * second of the artist's time.
+     *
+     * The contract for an engine answering true is the whole of it: **the pixels it leaves
+     * must be the pixels the base would have left**, on the layer [RasterLayer.of] routes
+     * the style to, and it must have laid them by the time it returns — the will-change
+     * halves have already gone out and the news goes out immediately after. Nothing else
+     * moves: [bakeAfterCommit], `onStrokeCommitted` and the changed halves all fire in the
+     * order and with the rects they always did.
+     */
+    protected open fun bakeCapturedStroke(stroke: Stroke, dirty: List<Rect>): Boolean = false
 
     /**
      * Append captured pen points, splitting the stroke around the host's exclusion
@@ -1974,6 +2033,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         )
         if (changed) target.setPixels(rubPixels, 0, w, dirty.left, dirty.top, w, h)
         rubPassRect = rubPassRect?.apply { union(dirty) } ?: Rect(dirty)
+        // The engine's chance to show the rub **as it happens** — before the listener, and
+        // long before the throttled redraw, which on a panel the engine paints itself may
+        // not run at all until the sweep ends (see [rasterEraseRedrawIntervalMs]).
+        if (changed) onRasterErasedBatch(dirty)
         paperListener?.onRasterChanged(RasterLayer.GRAPHITE, dirty)
         // The engine seam takes the rub as it happens rather than at the redraw: the
         // pixels have moved now, and the mid-sweep redraw is throttled while the artist's
@@ -2016,6 +2079,30 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * is why the seam stays rather than collapsing back into a constant.
      */
     protected open val rasterEraseRedrawIntervalMs: Long get() = RASTER_ERASE_REDRAW_INTERVAL_MS
+
+    /**
+     * The [rasterEraseRedrawIntervalMs] value meaning **never mid-sweep**: nothing is
+     * presented until [finalizeEraseRedraw]. For an engine that shows the rub some other
+     * way (Ratta paints the rubbed corridor straight into the panel from
+     * [onRasterErasedBatch]) — the window frames a cadence buys would be a second, later
+     * opinion about pixels the artist can already see.
+     */
+    protected val rasterEraseRedrawEndOnly: Long get() = RASTER_ERASE_REDRAW_END_ONLY
+
+    /**
+     * One batch of a rubbing sweep has just landed in the graphite image, over [rect]
+     * (page coordinates, which are the view's) — the pixels have moved, and nothing has
+     * been presented yet.
+     *
+     * A no-op here. It exists for an engine that paints the panel itself (Phase 29's
+     * Supernote direct path): there the rub is shown by writing the rubbed corridor
+     * straight into the driver, which is why that engine's [rasterEraseRedrawIntervalMs]
+     * is end-only — the throttled window redraw would be a second, later opinion about the
+     * same pixels, and the mid-sweep frame it costs buys nothing the panel does not
+     * already have. Fires per batch and only when something actually came up, exactly like
+     * the listener's own half; it must not present anything itself.
+     */
+    protected open fun onRasterErasedBatch(rect: Rect) {}
 
     private fun throttledEraseRedraw() {
         val interval = if (pageMode == PageMode.RASTER) rasterEraseRedrawIntervalMs

@@ -771,9 +771,10 @@ object GraphiteGrain {
      * `of(points, width, seed, prefix = true)` on the final list — element for element,
      * whatever sizes the points arrived in — which is pinned by `GraphiteGrainIncrementalTest`.
      *
-     * Semantics are prefix mode's, unchanged: nothing at all until the path has settled past
-     * [SEED_WINDOW_PX], and never the end cap. There is no `finish` — a committed stroke is
-     * baked by [of] on the whole path, as it always was.
+     * Semantics are prefix mode's while the pen is down: nothing at all until the path has
+     * settled past [SEED_WINDOW_PX], and never the end cap. [finish] is what turns the
+     * sweep into the whole mark — the remainder, cap and all — so that
+     * `extend…` + `finish` **is** `of(points, width, seed)`, element for element.
      *
      * Not thread-safe, and not meant to be: it belongs to one contact.
      */
@@ -785,6 +786,9 @@ object GraphiteGrain {
             density = density.coerceIn(0f, 1f),
         )
 
+        /** Set by [finish]: the mark is complete and there is nothing further to lay. */
+        private var finished = false
+
         /** How many flecks this sweep has handed out since it began. */
         val count: Int get() = state.laid
 
@@ -794,11 +798,60 @@ object GraphiteGrain {
          * new has arrived at all, and while the mark is still too young to be decidable.
          */
         fun extend(points: List<StrokePoint>): Grain {
-            if (points.size < 2) return EMPTY
+            if (finished || points.size < 2) return EMPTY
             val out = Sink()
             out.carried = state.laid
             if (!advance(state, points, out, prefix = true)) return EMPTY
             if (out.count == 0) return EMPTY
+            state.laid += out.count
+            return out.grain()
+        }
+
+        /**
+         * The rest of the mark, given the finished stroke in [points]: whatever stations
+         * the last [extend] did not reach, and then the **end cap** — the dome at the
+         * lifting end, which prefix mode never lays because until the pen leaves the paper
+         * that end is still the tip of the lead and still travelling.
+         *
+         * With it, the concatenation of every [extend] and this is exactly
+         * `of(points, width, seed, density)` on the whole list, which is what lets a live
+         * layer *be* the bake (Phase 29): the flecks already on the panel plus this are the
+         * mark, so nothing has to be re-derived and nothing moves at pen-up.
+         *
+         * Two shapes that are not sweeps at all are answered the way [of] answers them,
+         * because a caller finishing a contact must get the mark whatever the hand did:
+         * a stroke too short to have reached a station is its **tap** (a disc of grit), and
+         * so is a single point. That also covers the mark that was never decidable — a
+         * prefix's gate is a statement about what can be *previewed*, never about what
+         * commits.
+         *
+         * Idempotent: the sweep is spent afterwards, and a further [extend] or [finish]
+         * lays nothing.
+         */
+        fun finish(points: List<StrokePoint>): Grain {
+            if (finished) return EMPTY
+            finished = true
+            if (points.isEmpty()) return EMPTY
+            if (points.size == 1) {
+                return if (state.laid > 0) EMPTY
+                else tap(points[0], state.base, state.seed, state.density)
+            }
+            val out = Sink()
+            out.carried = state.laid
+            // prefix = false: the stroke is complete, so the decidability gate has nothing
+            // left to protect — every window it guards is now as long as it will ever be.
+            advance(state, points, out, prefix = false)
+            // Not one station reached: the whole mark is a tap, exactly as [of] says.
+            if (state.station == 0) {
+                return tap(points[state.from], state.base, state.seed, state.density)
+            }
+            if (!state.full) {
+                cap(
+                    out, state.lastCx, state.lastCy, state.travelX, state.travelY,
+                    state.lastPress, state.lastLean, state.lastArc, state.lastHalf,
+                    state.seed, state.station + 1, 1f, state.density,
+                )
+            }
             state.laid += out.count
             return out.grain()
         }

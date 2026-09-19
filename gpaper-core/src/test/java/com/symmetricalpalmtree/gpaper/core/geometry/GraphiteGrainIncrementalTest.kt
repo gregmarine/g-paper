@@ -154,11 +154,51 @@ class GraphiteGrainIncrementalTest {
         assertTrue("$what: the sweep laid nothing at all", whole.count > 0)
     }
 
+    /**
+     * The same run, finished: every [GraphiteGrain.Sweep.extend] in [cuts] and then
+     * [GraphiteGrain.Sweep.finish] on the whole list, asserted to be
+     * `of(points, width, seed)` — the **committed** mark, end cap and all.
+     *
+     * This is the property Phase 29 rests on. The live layer the panel was painted with
+     * plus the cap *is* the bake, so nothing is re-derived at pen-up and no fleck moves;
+     * if this ever stopped holding, a mark would quietly change the instant the pen left
+     * the paper, which is the one failure the direct path exists to prevent.
+     */
+    private fun assertFinishAgrees(
+        points: List<StrokePoint>,
+        width: Float,
+        seed: Int,
+        cuts: List<Int>,
+        what: String,
+    ) {
+        val whole = GraphiteGrain.of(points, width, seed)
+        val sweep = GraphiteGrain.begin(width, seed)
+        val laid = Laid()
+        for (k in cuts) laid.add(sweep.extend(points.subList(0, k)))
+        val previewed = laid.level.size
+        laid.add(sweep.finish(points))
+        assertEquals("$what: fleck count once finished", whole.count, laid.level.size)
+        assertEquals("$what: the sweep's own count", whole.count, sweep.count)
+        assertTrue("$what: the cap should have added something", laid.level.size > previewed)
+        for (i in 0 until whole.count) {
+            assertEquals("$what: x[$i]", whole.xy[i * 2], laid.xy[i * 2], 0f)
+            assertEquals("$what: y[$i]", whole.xy[i * 2 + 1], laid.xy[i * 2 + 1], 0f)
+            assertEquals("$what: level[$i]", whole.level[i], laid.level[i])
+        }
+        // Spent: a finished sweep is a finished mark.
+        assertEquals("$what: extending a finished sweep", 0, sweep.extend(points).count)
+        assertEquals("$what: finishing twice", 0, sweep.finish(points).count)
+        assertEquals("$what: count after the spent calls", whole.count, sweep.count)
+    }
+
     /** Every chunking a stroke can arrive in: sample by sample, in random bites, and whole. */
     private fun assertEveryChunkingAgrees(points: List<StrokePoint>, width: Float, seed: Int, name: String) {
         val n = points.size
         assertChunkingAgrees(points, width, seed, (2..n).toList(), "$name, one sample at a time")
         assertChunkingAgrees(points, width, seed, listOf(n), "$name, all at once")
+        assertFinishAgrees(points, width, seed, (2..n).toList(), "$name, finished one at a time")
+        assertFinishAgrees(points, width, seed, listOf(n), "$name, finished after one extend")
+        assertFinishAgrees(points, width, seed, emptyList(), "$name, finished with no extend at all")
         val rng = Random(name.hashCode())
         repeat(6) { round ->
             val cuts = ArrayList<Int>()
@@ -168,9 +208,11 @@ class GraphiteGrainIncrementalTest {
                 cuts.add(at)
             }
             assertChunkingAgrees(points, width, seed, cuts, "$name, random bites #$round")
+            assertFinishAgrees(points, width, seed, cuts, "$name, finished after random bites #$round")
         }
         // And the same stroke fed in two halves, which is the shortest resume there is.
         assertChunkingAgrees(points, width, seed, listOf(n / 2, n), "$name, two halves")
+        assertFinishAgrees(points, width, seed, listOf(n / 2, n), "$name, finished after two halves")
     }
 
     @Test
@@ -262,6 +304,65 @@ class GraphiteGrainIncrementalTest {
         assertEquals(0, sweep.extend(emptyList()).count)
         assertEquals(0, sweep.extend(listOf(StrokePoint(100f, 100f, 0.6f))).count)
         assertEquals(0, sweep.count)
+    }
+
+    @Test
+    fun `a sweep of a tap finishes to the tap's own grain`() {
+        // A tap is not a prefix of a sweep, so nothing previews it — but it still commits,
+        // and what commits is the disc of grit [GraphiteGrain.of] makes of one point.
+        val point = StrokePoint(100f, 140f, 0.6f)
+        val whole = GraphiteGrain.of(listOf(point), 6f, 11)
+        assertTrue("a tap should lay graphite", whole.count > 0)
+        val sweep = GraphiteGrain.begin(6f, 11)
+        assertEquals(0, sweep.extend(listOf(point)).count)
+        val finished = sweep.finish(listOf(point))
+        assertEquals(whole.count, finished.count)
+        for (i in 0 until whole.count) {
+            assertEquals(whole.xy[i * 2], finished.xy[i * 2], 0f)
+            assertEquals(whole.xy[i * 2 + 1], finished.xy[i * 2 + 1], 0f)
+            assertEquals(whole.level[i], finished.level[i])
+        }
+        // And an empty contact is an empty mark.
+        assertEquals(0, GraphiteGrain.begin(6f, 11).finish(emptyList()).count)
+    }
+
+    @Test
+    fun `a stroke too short to reach a station finishes to its tap`() {
+        // Under one tooth pitch of travel there is no station and no cap — [of] answers
+        // with the tap at the landing, and so must a sweep that was never decidable.
+        val points = listOf(
+            StrokePoint(300f, 300f, 0.5f),
+            StrokePoint(300.3f, 300f, 0.5f),
+        )
+        val whole = GraphiteGrain.of(points, 8f, 99)
+        assertTrue("a short mark still lays graphite", whole.count > 0)
+        val sweep = GraphiteGrain.begin(8f, 99)
+        assertEquals(0, sweep.extend(points).count)
+        val finished = sweep.finish(points)
+        assertEquals(whole.count, finished.count)
+        for (i in 0 until whole.count) {
+            assertEquals(whole.xy[i * 2], finished.xy[i * 2], 0f)
+            assertEquals(whole.xy[i * 2 + 1], finished.xy[i * 2 + 1], 0f)
+            assertEquals(whole.level[i], finished.level[i])
+        }
+    }
+
+    @Test
+    fun `a stroke that never became decidable still finishes whole`() {
+        // The prefix gate is a statement about what can be *previewed* — a mark shorter
+        // than the landing window previews nothing and commits in full, cap and all.
+        val points = (0 until 9).map { StrokePoint(200f + it * 1.4f, 260f, 0.6f, deg(15f)) }
+        val sweep = GraphiteGrain.begin(5f, 31)
+        for (k in 2..points.size) assertEquals(0, sweep.extend(points.subList(0, k)).count)
+        val whole = GraphiteGrain.of(points, 5f, 31)
+        val finished = sweep.finish(points)
+        assertEquals(whole.count, finished.count)
+        assertTrue("this stroke should have reached stations", whole.count > 0)
+        for (i in 0 until whole.count) {
+            assertEquals("x[$i]", whole.xy[i * 2], finished.xy[i * 2], 0f)
+            assertEquals("y[$i]", whole.xy[i * 2 + 1], finished.xy[i * 2 + 1], 0f)
+            assertEquals("level[$i]", whole.level[i], finished.level[i])
+        }
     }
 
     @Test
