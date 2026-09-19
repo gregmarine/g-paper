@@ -76,6 +76,14 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   bigger rect, never a dropped one. Every `onRasterWillChange` of a mark fires before any of its
   pixels move and every `onRasterChanged` after, in the same order; the eraser has reported per
   batch since 0.1.26, so a host that accumulates one entry per contact already handles it.
+  **The ENGINE seam pays for the announced area too (2026-09-19).** `onRasterPixelsChanged`
+  announced one union rect per composite batch, on the reasoning that a second image of the
+  page costs only a repaint of empty pixels — and Ratta's dither rebuilds every pixel inside
+  it, so the pen-up of one long pencil stroke held a Nomad's main thread for **848 ms**
+  (`slow touch ACTION_UP: … base 848 ms`, measured through NSE · Sketch). It takes the same
+  runs now, the caller's own list rather than a second computation of it. **A bounding box
+  is a bad model of a line wherever somebody pays per pixel for it** — and the second place
+  that was true went unnoticed for six releases because it was reasoned about as free.
   **And `loadPageRaster` is now silent, as `swapPageRaster` always was**: a page the host
   replaced is the host's own news, and the flag every host carried to swallow the load's
   callbacks (`loadingRaster` in Paintsprout's `SketchbookActivity` and SN's `SketchActivity`)
@@ -162,6 +170,13 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   for pixel): the blue-noise row fetched once per row, the gamma a table, an absent layer a
   flag rather than a page-sized zero-fill, and the page's own rows landed with one
   `copyPixelsFromBuffer` instead of two and a half million `Int`s through `setPixels`.
+  **And how the bytes reach the bitmap is a SIZE decision, not a whole-or-rect one
+  (2026-09-19).** The byte array is the page's rows permanently and every rebuild fills it
+  before anything reaches the bitmap, so a rect from an eighth of the page upward takes the
+  same one-memcpy copy the page does — past that share the fixed copy beats the per-pixel
+  expansion `setPixels` wants (`DitherCost`, pure). The invariant that makes it legal is
+  that the array is never behind the bitmap; it is allocated and dropped *with* the image,
+  because one left over from the previous page would be landed whole onto a fresh one.
 - **A live preview may lay a fleck only where the bake will put one — which makes
   `GraphiteGrain`'s PREFIX the contract, not the whole (Phase 28).** `of(points, …,
   prefix = true)` returns an exact ordered prefix of the finished stroke's grain, so a

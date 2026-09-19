@@ -178,6 +178,24 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         const val DITHER_OFF: Byte = 0
 
         /**
+         * From what share of the page a rect rebuild lands through one whole-bitmap
+         * `copyPixelsFromBuffer` instead of a `setPixels` of itself — see [DitherCost].
+         *
+         * An eighth, which is a starting value and not a measurement: the copy is a
+         * single memcpy of about 2.6 MB on a Nomad page and the `setPixels` path is an
+         * expansion loop plus Skia reading one byte in four, so the crossing is
+         * somewhere well below half a page and nothing has been profiled on a device to
+         * say where. The log line in [regenDither] is what a walk judges it by.
+         */
+        const val DITHER_WHOLE_COPY_FRACTION = 0.125f
+
+        /** How long a *rect* rebuild has to take before it is worth a log line. A page
+         *  turn is always logged; a rect is the ordinary cost of a mark landing, and only
+         *  one that a hand could feel is news. Raised from 5 ms once per-run announcement
+         *  made the ordinary rect small (2026-09-19). */
+        const val DITHER_SLOW_RECT_MS = 20L
+
+        /**
          * Overlay-clear retry ladder (overlay law 2): a clear issued in the wake of a
          * pen-lift lands inside the daemon's stroke-finalization window and is eaten,
          * and the window's length varies by device and moment (450 ms reliable on the
@@ -291,9 +309,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 // to put in its place. Dropped, never cleared in place — the committed
                 // display list is still holding it, and the panel keeps those pixels until
                 // the host loads the page the new mode understands (see [ditherDisplay]).
-                ditherDisplay = null
-                ditherW = 0
-                ditherH = 0
+                dropDither()
                 // Anything posted against the old page goes with it: a rebuild of pixels
                 // that are gone.
                 removeCallbacks(ditherRebuild)
@@ -998,15 +1014,28 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private var ditherW = 0
     private var ditherH = 0
 
-    /** Dither scratch: one band's worth of each page image and of the alpha written out. */
+    /** Dither scratch: one band's worth of each page image, and of the `Int` alpha the
+     *  small-rect path hands `setPixels`. */
     private var bandGraphite = IntArray(0)
     private var bandInk = IntArray(0)
     private var bandOut = IntArray(0)
-    private var bandBytes = ByteArray(0)
     private val bandRect = Rect()
 
-    /** The page's own rows for a whole-page rebuild, and the buffer that lands them in the
-     *  bitmap in one call rather than a million `Int`s through `setPixels`. */
+    /**
+     * **The page's dither as bytes — the truth, and [ditherDisplay] is its copy.**
+     *
+     * Every rebuild, whole page or rect, flattens into these rows first (the bitmap's own
+     * layout: `rowBytes` to a row, padding and all), and only then lands them in the
+     * bitmap — by one `copyPixelsFromBuffer` of the whole thing where the rect is a large
+     * share of the page, or by a `setPixels` of just the rect where it is not
+     * ([DitherCost]). That ordering is what makes the whole-bitmap copy legal after a
+     * rect rebuild: the array is never behind the bitmap, so copying all of it can never
+     * undo a rect somebody else wrote.
+     *
+     * Lives and dies with [ditherDisplay] — allocated with it in [ensureDither] and
+     * dropped with it in [dropDither], because an array left over from the previous page
+     * would be landed whole onto a fresh bitmap the first time a large rect arrived.
+     */
     private var ditherBytes: ByteArray? = null
     private var ditherBuffer: java.nio.ByteBuffer? = null
 
@@ -1056,9 +1085,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             if (rasterFor(RasterLayer.GRAPHITE) == null && rasterFor(RasterLayer.INK) == null) {
                 ditherCoalescer.onPageGone()
                 removeCallbacks(ditherRebuild)
-                ditherDisplay = null
-                ditherW = 0
-                ditherH = 0
+                dropDither()
                 return
             }
             // Deferred, and coalesced: a two-raster page is two of these calls back to
@@ -1072,10 +1099,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // A rect stays synchronous: it precedes a present that is already on its way, and
         // one deferred would be a mark that appears a frame late.
         if (ditherCoalescer.onRect() == DitherCoalescer.Action.REBUILD_RECT) {
-            val t0 = System.nanoTime()
             regenDither(rect)
-            val ms = (System.nanoTime() - t0) / 1_000_000
-            if (ms >= 5) Log.i(TAG, "dither: rect $rect in $ms ms")
         }
     }
 
@@ -1094,20 +1118,24 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * than the page's own four: a band at a time is also how the cost stays predictable on
      * the one call that has a deadline — a page turn, where the artist is waiting.
      *
-     * **The whole page is the path that had to be fast** (2026-09-19): 494–551 ms measured
-     * on a Nomad, and two of them per page open. *Where* that half-second went has not been
-     * measured — no profile of this loop on a device exists, and the split between the
-     * arithmetic and Skia is a guess until one does. What could be said is that four things
-     * around it were doing avoidable work: a call per pixel into [DitherFlatten], a
-     * blue-noise lookup per pixel, a page-sized zero-fill for an ink layer that does not
-     * exist on a pencil page, and `setPixels`, which hands Skia two and a half million
-     * `Int`s to take one alpha byte from each. All four are gone — the per-pixel work is
-     * [DitherFlatten.band]'s and the whole-page pass writes the bitmap's **own rows** as
-     * bytes and lands them with a single `copyPixelsFromBuffer` — and the same flatten costs
-     * 4.4 ms on a desktop JVM, which bounds the arithmetic without settling anything about
-     * ART. **The log line above is what says by how much**, and the target it is judged
-     * against is 100 ms. A rect still goes through `setPixels`: `ALPHA_8` has no sub-rect
-     * byte entry, and a stroke's bounds is not where the half-second was.
+     * **Two costs, and the rect is now the one that bites** (2026-09-19). The whole page
+     * was 494–551 ms on a Nomad and two of them per page open; the per-pixel work is
+     * [DitherFlatten.band]'s since, and the rows land in one `copyPixelsFromBuffer`
+     * rather than two and a half million `Int`s through `setPixels`. What that left
+     * behind was a *rect* path several times dearer per pixel than the whole-page one —
+     * invisible while the rects were a rubbed corridor's, and **848 ms on the pen-up of
+     * one pencil stroke** once a mark announced its bounding box (measured through
+     * NSE · Sketch; the core seam now announces per run, which is the other half of this
+     * fix). So the two paths are chosen between rather than assigned: every rebuild
+     * flattens into [ditherBytes] — the page's own rows, always the truth — and a rect
+     * from [DITHER_WHOLE_COPY_FRACTION] of the page upward lands through the same
+     * whole-bitmap copy the page uses, because past that share one memcpy beats the
+     * expansion ([DitherCost]). Below it, `setPixels` of just the rect, since `ALPHA_8`
+     * has no sub-rect byte entry and a short mark's bounds is not worth a page-wide copy.
+     *
+     * **The log line is what a walk judges this by**: the whole page always, a rect when
+     * it cost 20 ms or more. A page turn's target is under 100 ms; a pen-up should not be
+     * visible at all.
      */
     private fun regenDither(rect: Rect?) {
         val bitmap = ensureDither() ?: return
@@ -1117,32 +1145,44 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         val t0 = System.nanoTime()
         val whole = area == full
         val w = area.width()
+        val stride = bitmap.rowBytes
+        val out = ditherBytes ?: return
         val bandH = (DITHER_BAND_PX / w).coerceIn(1, area.height())
         ensureBandScratch(w * bandH)
-        val stride = if (whole) bitmap.rowBytes else w
-        val out = (if (whole) ensureDitherBytes(stride * bitmap.height) else ensureBandBytes(w * bandH))
-            ?: return
+        // Large enough that one memcpy of the whole page beats expanding this rect into
+        // `Int`s for Skia? The page itself always is.
+        val wholeCopy = DitherCost.preferWholeCopy(
+            w, area.height(), bitmap.width, bitmap.height, DITHER_WHOLE_COPY_FRACTION,
+        )
         var top = area.top
         while (top < area.bottom) {
             val bottom = minOf(top + bandH, area.bottom)
             val h = bottom - top
-            ditherBand(area, top, bottom, out, if (whole) top * stride else 0, stride)
-            if (!whole) {
-                val n = w * h
-                for (i in 0 until n) bandOut[i] = if (out[i] != DITHER_OFF) DITHER_INK else 0
+            // Into the page's own rows, at this band's place in them — so the array is
+            // right about the whole page whichever way the bytes are landed below.
+            ditherBand(area, top, bottom, out, top * stride + area.left, stride)
+            if (!wholeCopy) {
+                var i = 0
+                for (y in 0 until h) {
+                    var src = (top + y) * stride + area.left
+                    for (x in 0 until w) {
+                        bandOut[i++] = if (out[src++] != DITHER_OFF) DITHER_INK else 0
+                    }
+                }
                 bitmap.setPixels(bandOut, 0, w, area.left, top, w, h)
             }
             top = bottom
         }
-        if (whole) {
+        if (wholeCopy) {
             val buffer = ditherBuffer ?: return
             buffer.rewind()
             bitmap.copyPixelsFromBuffer(buffer)
-            Log.i(
-                TAG,
-                "dither: whole page ${bitmap.width}x${bitmap.height} in " +
-                    "${(System.nanoTime() - t0) / 1_000_000} ms",
-            )
+        }
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        if (whole) {
+            Log.i(TAG, "dither: whole page ${bitmap.width}x${bitmap.height} in $ms ms")
+        } else if (ms >= DITHER_SLOW_RECT_MS) {
+            Log.i(TAG, "dither: rect $area in $ms ms (${if (wholeCopy) "page copy" else "setPixels"})")
         }
     }
 
@@ -1178,36 +1218,40 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         }
     }
 
-    /** One band's worth of flattened bytes — the rect path's target, before it is expanded
-     *  into `Int` alpha for `setPixels`. */
-    private fun ensureBandBytes(n: Int): ByteArray {
-        if (bandBytes.size < n) bandBytes = ByteArray(n)
-        return bandBytes
-    }
-
-    /** The page's own rows, and the buffer that lands them in the bitmap in one call. Sized
-     *  from `rowBytes`, not from the width, because an `ALPHA_8` row may be padded and
-     *  `copyPixelsFromBuffer` copies the bitmap's bytes, padding and all. */
-    private fun ensureDitherBytes(n: Int): ByteArray? {
-        if (n <= 0) return null
-        val existing = ditherBytes
-        if (existing != null && existing.size == n) return existing
-        val bytes = ByteArray(n)
-        ditherBytes = bytes
-        ditherBuffer = java.nio.ByteBuffer.wrap(bytes)
-        return bytes
-    }
-
-    /** The dither image at the page's size, re-made when the page changes shape. */
+    /**
+     * The dither image at the page's size, re-made when the page changes shape — with
+     * [ditherBytes] beside it, sized from `rowBytes` rather than from the width, because
+     * an `ALPHA_8` row may be padded and `copyPixelsFromBuffer` copies the bitmap's bytes,
+     * padding and all.
+     *
+     * The two are allocated together and only together: a fresh bitmap is blank, and the
+     * array that claims to be its truth has to be blank with it.
+     */
     private fun ensureDither(): Bitmap? {
         val w = rasterPageWidth
         val h = rasterPageHeight
         if (w <= 0 || h <= 0) return null
         val existing = ditherDisplay
-        if (existing != null && ditherW == w && ditherH == h) return existing
+        if (existing != null && ditherW == w && ditherH == h && ditherBytes != null) return existing
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8)
+        val bytes = ByteArray(bitmap.rowBytes * h)
+        ditherDisplay = bitmap
+        ditherBytes = bytes
+        ditherBuffer = java.nio.ByteBuffer.wrap(bytes)
         ditherW = w
         ditherH = h
-        return Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8).also { ditherDisplay = it }
+        return bitmap
+    }
+
+    /** Let the dither go — the image and the bytes that are its truth, together. Dropped,
+     *  never cleared in place: the committed display list is still holding the bitmap (see
+     *  [ditherDisplay]). */
+    private fun dropDither() {
+        ditherDisplay = null
+        ditherBytes = null
+        ditherBuffer = null
+        ditherW = 0
+        ditherH = 0
     }
 
     /** Rebuild the whole dither and present it — for the moments the *representation*
@@ -1797,11 +1841,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         batchBitmap = null
         // No redraw: this runs at detach and at release, where the view has nothing left
         // to show anyone. The dither simply stops being what [drawRasterLayers] answers.
-        ditherDisplay = null
-        ditherW = 0
-        ditherH = 0
-        ditherBytes = null
-        ditherBuffer = null
+        dropDither()
     }
 
     override fun onAttachedToWindow() {

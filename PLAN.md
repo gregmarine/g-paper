@@ -2162,8 +2162,10 @@ provisional 50 px start replaced by a landing-free grain. 0.1.41 to mavenLocal b
 merge on the user's word.
 
 **Maintenance (2026-09-19) — the first walk inside NSE · Sketch, and the two things it
-found.** Publishes **0.1.42**, branch `ebc-maint`. One half — the page-turn cost — stands;
-the other — an idle clean pass for the halo — was built, walked and taken out again.
+found — and a third the walk after it.** Publishes **0.1.42**, branch `ebc-maint`. One —
+the page-turn cost — stands; one — an idle clean pass for the halo — was built, walked and
+taken out again; and the walk that judged the first found a **pen-up** holding the main
+thread for most of a second, which is the third and last section below.
 
 *The pencil first and the ink a moment later.* A page open cost **two** whole-page dither
 rebuilds — the host loads graphite and ink as two back-to-back `loadPageRaster` calls, each
@@ -2210,6 +2212,36 @@ eraser and page flips, not while drawing."* So it was aimed at the wrong mechani
 lives, and that is an open question for a later phase** — neither is the live pencil's
 partial update, and nothing has been measured about either yet.
 
+*A pen-up that held the main thread for most of a second.* The first walk of the
+coalesced page turn inside NSE · Sketch put a temporary timer on `onTouchEvent` and on
+the firmware transactions, and the pen-up of one direct pencil contact came back
+**`slow touch ACTION_UP: before 0 ms, base 848 ms, after 0 ms (direct=true)`** on a Nomad,
+with another at 411 ms — entirely inside the base's commit, where a whole-page dither
+rebuild is 160–200 ms and a rubbed corridor's rect is about 6. Two things multiplied.
+`compositeIntoRaster` announced **one union rect for the whole mark** (the maintenance
+deviation 5 above, reasoned as "a repaint of empty pixels"), so a long or diagonal stroke
+named a large fraction of the page; and `regenDither` sent every non-whole rect down the
+`IntArray` + `setPixels` path, which is several times dearer per pixel than the whole-page
+`copyPixelsFromBuffer` one — so a page-spanning stroke would have cost about two seconds,
+which is the stall the artist first saw. **Both halves are fixed.** The core seam now
+announces **per run** — the same rects `rasterDirtyAlong` already computes for the host,
+0.1.33's answer arrived at a second time from the engine's side, so a mark costs its ink's
+area on both seams or on neither (`strokeBounds` and its union go with it; `compositeIntoRaster`
+takes the caller's rect list, which is what makes "the same rects" true by construction
+rather than by two call sites agreeing). And the two landing paths are now **chosen between
+rather than assigned**: `ditherBytes` is the page's own rows permanently and is always the
+truth — every rebuild, whole page or rect, flattens into it before anything reaches the
+bitmap — and a rect from `DITHER_WHOLE_COPY_FRACTION` (an eighth, a starting value)
+of the page upward lands through the same one-memcpy `copyPixelsFromBuffer` the page uses,
+because past that share the fixed copy beats the per-pixel expansion (`DitherCost`, pure,
+8 tests). Below it, `setPixels` of just the rect, as before. The separate band byte scratch
+is gone with it, and the image and its bytes are now allocated and dropped together
+(`ensureDither` / `dropDither`) — an array left over from a previous page would otherwise
+be landed whole onto a fresh bitmap the first time a large rect arrived. The per-rect log
+line is raised to **20 ms** (a page turn is still always logged), and the temporary
+`slow touch` / `slow firmware transact` timers **stay for one more walk** — they are
+temporary by construction and come out when the measuring stops.
+
 **Deviations from the brief, and why**
 
 1. **`copyPixelsFromBuffer` is one call for the page, not one per band.** It copies the
@@ -2217,9 +2249,21 @@ partial update, and nothing has been measured about either yet.
    whole-page pass therefore fills the page's own rows — sized from `rowBytes`, not from the
    width, because an `ALPHA_8` row may be padded and the call copies the bitmap's bytes,
    padding and all — and lands them in one call at the end. A rect keeps `setPixels`.
+   **Superseded by the per-run fix below**: every rebuild now fills those same page rows,
+   and how the bytes land is a size decision rather than a whole-or-rect one.
+2. **There is no JVM test of the per-run announcement.** `compositeIntoRaster` is private
+   on a `View`, and `onRasterPixelsChanged` — `protected open`, so observable in principle
+   — can only be reached by constructing one: the unit-test classpath is the `android.jar`
+   stub whose every method throws, and Robolectric would be a new dependency. What is
+   pinned instead is the arithmetic on either side of it: `RasterDirtyTest` already holds
+   *a corner-to-corner hairline covers itself for a fraction of the page*, which is the
+   whole saving, and `DitherCostTest` holds the landing rule. The wiring between them —
+   that the seam passes the caller's rects rather than a union — is read, not asserted.
 
 **Still unwalked:** whether the page turn is now under a page turn's budget on a Nomad and a
-Manta — the ms is still logged, and the target it is judged against is 100 ms.
+Manta — the ms is still logged, and the target it is judged against is 100 ms — and whether
+a pen-up of a long stroke is now invisible, which is what the per-rect log line at 20 ms and
+the kept `slow touch` timer are there to answer.
 
 ## Standing Open Questions (ask as they become relevant)
 
