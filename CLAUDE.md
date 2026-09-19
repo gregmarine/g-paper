@@ -147,25 +147,7 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   the one knob and is 1 until a hand says otherwise. `PencilInk` and `GraphiteGrain`'s density
   dial stay as an unused seam; the stroke's stored colour never moved through any of this, and
   BOOX, the generic engine and Paintsprout were never touched.
-  **(5) Partial updates leave a halo nothing comes back for, so an IDLE CLEAN drives the
-  ground they covered properly (0.1.42).** The live path updates only the pixels that
-  changed and the pen-up mirror finds them already right and drives nothing — that *is* the
-  mirror working, and it is also why the e-ink halo around every small update accumulates
-  where the bake this path replaced re-drove the whole stroke area in one post (the artist,
-  first walk of 0.1.41 inside NSE · Sketch: *more ghosting than before*). So `RattaPaperView`
-  keeps a union of every rect it has posted and, `EbcClean.IDLE_MS` after the last pen-up,
-  re-flattens it from the page images **through the same `DitherFlatten.band` the display
-  rebuild uses** — the panel must be driven to exactly the picture the window is showing, or
-  the clean becomes a second opinion — and `EbcPanel.clean` sends it on the **0…60 scale**
-  with **mode 4**, a full waveform over every pixel. **It may never run while the pen is
-  down**: that ioctl blocks ~40 ms and the rect would fight the live path for the same
-  pixels, so pen-down cancels it, every contact re-arms it, and a `post` landing between the
-  queue and the ioctl stands it down. Frame 0 goes **back** to 0…15 afterwards, because
-  `drain` unions two rects into one display call and the pixels between them are shown from
-  whatever the frame holds. The mode, the scale and the idle time live together in
-  `EbcClean`: the first two are the probe's measurement, the third is a guess, and all three
-  are the artist's to move.
-  **(6) A whole-page rebuild is DEFERRED and the present waits for it (0.1.42).** A
+  **(5) A whole-page rebuild is DEFERRED and the present waits for it (0.1.42).** A
   two-raster page is two `loadPageRaster` calls, each announcing the whole page and each
   presenting after — two ~500 ms rebuilds on a Nomad with a frame between them showing
   graphite and no ink (*the pencil first and the ink a moment later*). So `rect == null`

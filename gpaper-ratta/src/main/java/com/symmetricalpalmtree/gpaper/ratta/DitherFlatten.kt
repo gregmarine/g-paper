@@ -120,7 +120,7 @@ internal object DitherFlatten {
      *
      * [out] is written at `outOffset + y · outStride + x`, so it may be a band of a
      * page-sized buffer (a whole-page rebuild filling the bitmap's own rows) or a
-     * standalone `w × h` block (a rect, or the levels an idle clean sends the panel).
+     * standalone `w × h` block (a rect).
      *
      * There is **no live layer** here, deliberately: this is the display half, where a
      * mark is already in the graphite image. The live half stays on [black] — it works a

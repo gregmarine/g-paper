@@ -20,8 +20,8 @@ class DitherFlattenTest {
 
     private val transparent = 0
 
-    /** The two bytes the band kernel writes — the display rebuild uses `ALPHA_8`'s own
-     *  opaque/clear, the idle clean the panel's black/white levels. */
+    /** The two bytes the band kernel writes — the display rebuild passes `ALPHA_8`'s own
+     *  opaque/clear. */
     private val ON: Byte = -1
     private val OFF: Byte = 0
     private val black = 0xFF000000.toInt()
