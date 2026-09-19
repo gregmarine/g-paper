@@ -14,6 +14,7 @@ import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
+import com.symmetricalpalmtree.gpaper.core.RasterLayer
 import com.symmetricalpalmtree.gpaper.core.RasterPatch
 import com.symmetricalpalmtree.gpaper.core.RawAction
 import com.symmetricalpalmtree.gpaper.core.RawInputEvent
@@ -853,16 +854,22 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     // image lands in the committed layer and needs the same render-off → repaint →
     // re-arm handoff, or the new page stays invisible under the overlay. The pen-up
     // composite needs nothing here — it runs through commitCapturedStroke like a stroke.
-    override fun loadPageRaster(bitmap: Bitmap?) = epdRepaintHandoff { super.loadPageRaster(bitmap) }
+    //
+    // The override is on the LAYERED form (0.1.39) and nothing else is needed: the
+    // un-layered call is the interface's default and routes through here, and either
+    // layer's load changes the same flattened picture on the same panel.
+    override fun loadPageRaster(layer: RasterLayer, bitmap: Bitmap?) =
+        epdRepaintHandoff { super.loadPageRaster(layer, bitmap) }
 
     // A raster undo (0.1.29) is a content change like a load, so it needs the same
     // render-off → repaint → re-arm handoff — but only over the patches it touched. The
-    // page image sits at the view origin, so a page-space rect is a view-space rect.
-    override fun swapPageRaster(patches: List<RasterPatch>) {
+    // page image sits at the view origin, so a page-space rect is a view-space rect, and
+    // the region a patch covers is the same region whichever layer it belongs to.
+    override fun swapPageRaster(layer: RasterLayer, patches: List<RasterPatch>) {
         if (patches.isEmpty()) return
         val region = Rect(patches[0].rect)
         for (i in 1 until patches.size) region.union(patches[i].rect)
-        epdRepaintHandoff(region) { super.swapPageRaster(patches) }
+        epdRepaintHandoff(region) { super.swapPageRaster(layer, patches) }
     }
 
     /** The union of raster-erase patches waiting for the panel, so several throttled

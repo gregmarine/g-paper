@@ -7,6 +7,8 @@ import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.RenderNode
@@ -16,6 +18,7 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import com.symmetricalpalmtree.gpaper.core.PageMode
+import com.symmetricalpalmtree.gpaper.core.RasterLayer
 import com.symmetricalpalmtree.gpaper.core.RasterRubbing
 import com.symmetricalpalmtree.gpaper.core.PaperListener
 import com.symmetricalpalmtree.gpaper.core.RasterPatch
@@ -67,9 +70,12 @@ import java.util.UUID
  *   same [StrokeRenderer] as the bake, so live and committed appearance always agree on
  *   this engine.
  * - **Raster pages (0.1.25)** — in [PageMode.RASTER] the committed layer's stroke loop is
- *   replaced by one blit of [pageRaster], a page-sized transparent bitmap the marks are
+ *   replaced by a blit of the page image, a page-sized transparent bitmap the marks are
  *   composited into at pen-up through the very same [StrokeRenderer]. Everything before
  *   pen-up is shared with stroke mode; only what is *kept* differs. See [pageMode].
+ *   **Two images since 0.1.39** ([RasterLayer]): [graphiteRaster] and [inkRaster],
+ *   routed by style, flattened with `DARKEN` — so the rubber can lift graphite and leave
+ *   ink, which one bitmap could never do because a pixel does not know what laid it.
  *
  * Input is stylus-only: finger events are never consumed, so host gestures work above and
  * around the paper. The pen-activity gate ([isPenActive]) tracks every captured stylus
@@ -170,9 +176,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var pageHeight = 0
 
     /**
-     * The page image, raster mode only: page-sized, transparent where nothing has been
-     * drawn, allocated the first time raster content needs somewhere to land and
-     * dropped on every content swap.
+     * The graphite page image, raster mode only: page-sized, transparent where nothing has
+     * been drawn, allocated the first time raster content needs somewhere to land and
+     * dropped on every content swap. [StrokeStyle.PENCIL] bakes here, and this is the only
+     * image the rubber ever reads or writes.
      *
      * It is a layer *over* the paper and never the paper itself. White and the template
      * still draw underneath it in [drawCommittedContent], so a mark is graphite on the
@@ -189,7 +196,45 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * [clearForContentSwap] makes for strokes. Erasing it in place would blank the
      * screen at the next frame, before the new page arrived.
      */
-    private var pageRaster: Bitmap? = null
+    private var graphiteRaster: Bitmap? = null
+
+    /**
+     * The ink page image (0.1.39): [graphiteRaster]'s twin in every respect — same size,
+     * same format, same lazy allocation, same dropped-not-erased rule — holding every
+     * style that is not the pencil.
+     *
+     * It is a second bitmap rather than a flag on the first because **a pixel does not
+     * know which tool laid it**: the rubber lifts alpha wherever it sweeps, so one image
+     * meant a gel pen came up exactly as graphite did, and no colour key can separate a
+     * black pen from a black pencil honestly. The artist's rule is the physical one — ink
+     * is more permanent than pencil — so the answer is the page's data model. The two are
+     * flattened with `DARKEN` wherever the page is seen ([drawCommittedContent]), which is
+     * order-independent: there is no top layer here and nothing for a host to z-order.
+     *
+     * The cost is a second page-sized bitmap **only once ink lands** — a pencil-only page
+     * never allocates it, and neither does an erase, which never reads this image at all.
+     */
+    private var inkRaster: Bitmap? = null
+
+    /**
+     * The flatten (0.1.39): the ink image goes over the graphite one through
+     * `PorterDuff.Mode.DARKEN` — the darker of the two per channel.
+     *
+     * `DARKEN` rather than the ordinary over-draw because a flatten must not have a top
+     * and a bottom. Neither raster is "above" the other in anything the artist did: they
+     * are two media on one sheet, and `min` is commutative, so the picture is the same
+     * whichever is painted first. It is also the right answer for a coloured ink later
+     * (two transparent media overlaid darken each channel independently), and on white
+     * paper with grey marks it is pixel-identical to `SRC_OVER`, so nothing about the
+     * pencil-only page the artist already approved moves.
+     *
+     * Allocated once and reused; a `Paint` per frame is a page's worth of garbage on a
+     * panel that re-records whenever anything changes.
+     */
+    private val flattenPaint = Paint().apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DARKEN)
+    }
+
     private val contentRenderers = ArrayList<ContentRenderer>()
 
     // ── Input state ──────────────────────────────────────────────────────────
@@ -468,13 +513,22 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         clearSelection()
         if (pageMode == PageMode.RASTER) {
             // The one-way bake: a stroke page's rows land as pixels, then the objects go.
-            // A load replaces, so the image starts blank — the whole page changes.
+            // A load replaces, so both images start blank — the whole page changes, on
+            // both layers. Both are announced even when one of them is empty: a host
+            // undoing a load has to be able to put back what each layer held, and "it
+            // held nothing" is a before-image like any other.
             val dirty = RasterDirty.wholePage(pageWidth, pageHeight)?.toRectOut()
-            dirty?.let { paperListener?.onRasterWillChange(it) }
-            pageRaster = null
+            dirty?.let {
+                paperListener?.onRasterWillChange(RasterLayer.GRAPHITE, it)
+                paperListener?.onRasterWillChange(RasterLayer.INK, it)
+            }
+            dropRasters()
             compositeIntoRaster(strokes)
             redrawCommitted()
-            dirty?.let { paperListener?.onRasterChanged(it) }
+            dirty?.let {
+                paperListener?.onRasterChanged(RasterLayer.GRAPHITE, it)
+                paperListener?.onRasterChanged(RasterLayer.INK, it)
+            }
             return
         }
         strokeList.clear()
@@ -488,14 +542,19 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         clearSelection()
         if (pageMode == PageMode.RASTER) {
             if (strokes.isEmpty()) return
-            // Every mark announces itself as its own run of rects (0.1.33), and the
-            // strokes go in as one composite — so all the will-changes first, in the
-            // order the runs will be laid down, then the pixels, then all the changed.
-            val dirty = strokes.flatMap { rasterDirtyAlong(it) }
-            for (r in dirty) paperListener?.onRasterWillChange(r)
+            // Every mark announces itself as its own run of rects (0.1.33) on its own
+            // layer (0.1.39), and the strokes go in as one composite — so all the
+            // will-changes first, in the order the runs will be laid down, then the
+            // pixels, then all the changed in that same order.
+            val dirty = strokes.map { RasterLayer.of(it.style) to rasterDirtyAlong(it) }
+            for ((layer, rects) in dirty) {
+                for (r in rects) paperListener?.onRasterWillChange(layer, r)
+            }
             compositeIntoRaster(strokes)
             redrawCommitted()
-            for (r in dirty) paperListener?.onRasterChanged(r)
+            for ((layer, rects) in dirty) {
+                for (r in rects) paperListener?.onRasterChanged(layer, r)
+            }
             return
         }
         strokeList.addAll(strokes)
@@ -524,11 +583,19 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         strokeList.clear()
         modelChanged()
         if (pageMode == PageMode.RASTER) {
+            // Both layers go, and both are announced, graphite first — a page cleared
+            // to blank paper changed everything the artist can see.
             val dirty = RasterDirty.wholePage(pageWidth, pageHeight)?.toRectOut()
-            dirty?.let { paperListener?.onRasterWillChange(it) }
-            pageRaster = null
+            dirty?.let {
+                paperListener?.onRasterWillChange(RasterLayer.GRAPHITE, it)
+                paperListener?.onRasterWillChange(RasterLayer.INK, it)
+            }
+            dropRasters()
             redrawCommitted()
-            dirty?.let { paperListener?.onRasterChanged(it) }
+            dirty?.let {
+                paperListener?.onRasterChanged(RasterLayer.GRAPHITE, it)
+                paperListener?.onRasterChanged(RasterLayer.INK, it)
+            }
             return
         }
         redrawCommitted()
@@ -537,18 +604,18 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     override fun clearForContentSwap() {
         // Model drops now; pixels stay — no re-record, no invalidate. The next
         // loadStrokes() (or other content call) swaps the screen in one repaint.
-        // The page image goes the same way: dropped, not erased (see [pageRaster]).
+        // Both page images go the same way: dropped, not erased (see [graphiteRaster]).
         endActiveTransform()
         clearSelection()
         activePoints.clear()
         strokeList.clear()
         modelChanged()
-        pageRaster = null
+        dropRasters()
     }
 
     // ── PaperView: the raster page (0.1.25) ──────────────────────────────────
 
-    override fun loadPageRaster(bitmap: Bitmap?) {
+    override fun loadPageRaster(layer: RasterLayer, bitmap: Bitmap?) {
         if (pageMode != PageMode.RASTER) return
         endActiveTransform()
         clearSelection()
@@ -556,23 +623,27 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         // news — as it already was for swapPageRaster. Announcing it made every host
         // carry a "we are loading, ignore the callbacks" flag, which only ever worked
         // because these calls happen to be synchronous.
-        pageRaster = null
+        //
+        // One layer at a time: the other is left exactly as it was, so a host loading a
+        // two-raster page makes two calls and one that only ever drew a pencil makes the
+        // one it always did.
+        dropRaster(layer)
         if (bitmap != null) {
             // Copied in, at 1:1 from the origin. The host keeps the bitmap it handed us
             // (it may be the decode it is about to recycle, or the undo image it is about
             // to reuse), and we keep one that nothing but this view writes to.
-            ensurePageRaster()?.let { Canvas(it).drawBitmap(bitmap, 0f, 0f, null) }
+            ensureRaster(layer)?.let { Canvas(it).drawBitmap(bitmap, 0f, 0f, null) }
         }
         redrawCommitted()
     }
 
-    override fun getPageRaster(): Bitmap? {
-        val src = pageRaster ?: return null
+    override fun getPageRaster(layer: RasterLayer): Bitmap? {
+        val src = raster(layer) ?: return null
         return src.copy(Bitmap.Config.ARGB_8888, false)
     }
 
-    override fun copyPageRaster(rect: Rect): Bitmap? {
-        val src = pageRaster ?: return null
+    override fun copyPageRaster(layer: RasterLayer, rect: Rect): Bitmap? {
+        val src = raster(layer) ?: return null
         val clipped = Rect(rect)
         if (!clipped.intersect(0, 0, src.width, src.height)) return null
         if (clipped.isEmpty) return null
@@ -584,16 +655,17 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         return out
     }
 
-    override fun readPageRaster(rect: Rect): RasterPatch? {
+    override fun readPageRaster(layer: RasterLayer, rect: Rect): RasterPatch? {
         if (pageMode != PageMode.RASTER) return null
         val w = if (pageWidth > 0) pageWidth else width
         val h = if (pageHeight > 0) pageHeight else height
         val clipped = Rect(rect)
         if (!clipped.intersect(0, 0, w, h) || clipped.isEmpty) return null
         val pixels = IntArray(clipped.width() * clipped.height())
-        // A page with no image yet is transparent everywhere, and a fresh IntArray is
-        // exactly that: the before-image of the first mark is nothing, read for free.
-        pageRaster?.getPixels(
+        // A layer with no image yet is transparent everywhere, and a fresh IntArray is
+        // exactly that: the before-image of the first mark is nothing, read for free —
+        // which is also why the ink layer costs a pencil-only page nothing to read.
+        raster(layer)?.getPixels(
             pixels, 0, clipped.width(), clipped.left, clipped.top, clipped.width(), clipped.height(),
         )
         return RasterPatch(clipped, pixels)
@@ -605,14 +677,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      */
     private var swapRow = IntArray(0)
 
-    override fun swapPageRaster(patches: List<RasterPatch>) {
+    override fun swapPageRaster(layer: RasterLayer, patches: List<RasterPatch>) {
         if (pageMode != PageMode.RASTER || patches.isEmpty()) return
         endActiveTransform()
         clearSelection()
-        // The page is allocated if it is not there: swapping a before-image onto a blank
+        // The layer is allocated if it is not there: swapping a before-image onto a blank
         // page is the redo of a first mark that was undone back to nothing, and the
         // pixels have to land somewhere.
-        val target = ensurePageRaster() ?: return
+        val target = ensureRaster(layer) ?: return
         var swapped = false
         for (patch in patches) {
             val r = patch.rect
@@ -639,33 +711,69 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (swapped) redrawCommitted()
     }
 
+    /** [layer]'s page image as it stands, or null when nothing has landed on it yet. */
+    private fun raster(layer: RasterLayer): Bitmap? =
+        if (layer == RasterLayer.GRAPHITE) graphiteRaster else inkRaster
+
     /**
-     * The page image, allocated if it is not there yet, or null when there is no page
-     * to size it by: the page rect if the host set one, else the laid-out view. A view
-     * asked to keep raster content before either is known has nowhere to put it, and
+     * [layer]'s page image, allocated if it is not there yet, or null when there is no
+     * page to size it by: the page rect if the host set one, else the laid-out view. A
+     * view asked to keep raster content before either is known has nowhere to put it, and
      * says so in the log rather than guessing a size the page will not turn out to be.
+     *
+     * Lazy per layer, not per page: a page drawn only in pencil never allocates the ink
+     * image, and the second bitmap is the price of the first mark made with a pen.
      */
-    private fun ensurePageRaster(): Bitmap? {
-        pageRaster?.let { return it }
+    private fun ensureRaster(layer: RasterLayer): Bitmap? {
+        raster(layer)?.let { return it }
         val w = if (pageWidth > 0) pageWidth else width
         val h = if (pageHeight > 0) pageHeight else height
         if (w <= 0 || h <= 0) {
             Log.w(TAG, "raster page has no size yet (setPageSize or layout first); content dropped")
             return null
         }
-        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { pageRaster = it }
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        when (layer) {
+            RasterLayer.GRAPHITE -> graphiteRaster = bitmap
+            RasterLayer.INK -> inkRaster = bitmap
+        }
+        return bitmap
+    }
+
+    /** Let go of one layer's image — dropped, not erased (see [graphiteRaster]). */
+    private fun dropRaster(layer: RasterLayer) {
+        when (layer) {
+            RasterLayer.GRAPHITE -> graphiteRaster = null
+            RasterLayer.INK -> inkRaster = null
+        }
+    }
+
+    /** Let go of the whole page: every call that drops one image drops both. */
+    private fun dropRasters() {
+        graphiteRaster = null
+        inkRaster = null
     }
 
     /**
-     * Lay [strokes] into the page image through the same renderer that bakes them in
+     * Lay [strokes] into the page images through the same renderer that bakes them in
      * stroke mode, seeded by the same ids, so the pixels are the ones the artist approved
      * on paper — fleck for fleck what [StrokeRasterizer] would make of the same rows.
+     *
+     * Each stroke goes to the layer its style routes to ([RasterLayer.of]) — one `Canvas`
+     * per layer anything actually lands in, so a page of pencil never touches the ink
+     * image and never allocates it.
      */
     private fun compositeIntoRaster(strokes: List<Stroke>) {
         if (strokes.isEmpty()) return
-        val target = ensurePageRaster() ?: return
-        val canvas = Canvas(target)
+        val canvases = HashMap<RasterLayer, Canvas>(2)
         for (s in strokes) {
+            val layer = RasterLayer.of(s.style)
+            val canvas = canvases[layer] ?: run {
+                // No page size yet: ensureRaster has logged it, and there is nowhere for
+                // any of these strokes to land. Stop rather than log once per stroke.
+                val target = ensureRaster(layer) ?: return
+                Canvas(target).also { canvases[layer] = it }
+            }
             StrokeRenderer.draw(
                 canvas, bakePoints(s), s.color, s.width, s.style, scratchPaint, s.id.hashCode(),
             )
@@ -868,7 +976,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         modelChanged()
         contentRenderers.clear()
         templateBitmap = null
-        pageRaster = null
+        dropRasters()
         committedNode.discardDisplayList()
     }
 
@@ -1208,10 +1316,13 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             }
         }
         if (pageMode == PageMode.RASTER) {
-            // One blit where the stroke loop would run: the page image sits at the page
+            // Two blits where the stroke loop would run: the page images sit at the page
             // origin, over the paper and under the host's above-strokes content, exactly
-            // where the baked strokes would have been.
-            pageRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+            // where the baked strokes would have been. The ink goes on through DARKEN —
+            // the darker of the two per channel — so the pair flattens with no top and no
+            // bottom (see [flattenPaint]); a page with only one of them is one blit.
+            graphiteRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+            inkRaster?.let { canvas.drawBitmap(it, 0f, 0f, flattenPaint) }
         } else {
             for (stroke in strokeList) {
                 // Mid-drag, the selected strokes live in the translated drag layer instead.
@@ -1330,13 +1441,15 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             // two raster halves come once per run of the mark (0.1.33), not once per
             // mark, so a long diagonal costs its host the ink's area and not the page's.
             // Every will-change first: the host must hold the before-image of the whole
-            // mark before any of it lands.
+            // mark before any of it lands. One contact is one style, so every one of
+            // those halves names the same layer (0.1.39).
+            val layer = RasterLayer.of(stroke.style)
             val dirty = rasterDirtyAlong(stroke)
-            for (r in dirty) paperListener?.onRasterWillChange(r)
+            for (r in dirty) paperListener?.onRasterWillChange(layer, r)
             compositeIntoRaster(listOf(stroke))
             bakeAfterCommit()
             paperListener?.onStrokeCommitted(stroke)
-            for (r in dirty) paperListener?.onRasterChanged(r)
+            for (r in dirty) paperListener?.onRasterChanged(layer, r)
             return true
         }
         strokeList.add(stroke)
@@ -1636,9 +1749,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * touched — a page-sized zeroing per contact would be five megabytes for nothing.
      *
      * A page that has never been drawn on has no image, and rubbing it is nothing.
+     *
+     * **The rubber rubs graphite and only graphite (0.1.39).** The ink image is never
+     * read, never allocated and never announced here — that is the whole of the artist's
+     * rule ("in the real world, ink is more permanent than pencil") in the one place it
+     * has to hold, and it is a property of which bitmap this method names rather than a
+     * test performed on pixels. Whether a firm rub should lift ink *a little* is a
+     * decision nobody has made; until someone does, it lifts none.
      */
     private fun eraseRasterAlong(sweep: List<StrokePoint>) {
-        val target = pageRaster ?: return
+        val target = graphiteRaster ?: return
         val dirty = RasterErase.batchRect(sweep, eraserRadius, target.width, target.height)
             ?.toRectOut() ?: return
         val pass = rubPassFor(target.width, target.height)
@@ -1646,7 +1766,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             if (RasterRub.isReversal(rubDirection, next)) dropRubPass()
             rubDirection = next
         }
-        paperListener?.onRasterWillChange(dirty)
+        paperListener?.onRasterWillChange(RasterLayer.GRAPHITE, dirty)
         val w = dirty.width()
         val h = dirty.height()
         if (rubPixels.size < w * h) rubPixels = IntArray(w * h)
@@ -1661,7 +1781,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         )
         if (changed) target.setPixels(rubPixels, 0, w, dirty.left, dirty.top, w, h)
         rubPassRect = rubPassRect?.apply { union(dirty) } ?: Rect(dirty)
-        paperListener?.onRasterChanged(dirty)
+        paperListener?.onRasterChanged(RasterLayer.GRAPHITE, dirty)
         rasterErasePending = rasterErasePending?.apply { union(dirty) } ?: Rect(dirty)
         throttledEraseRedraw()
     }

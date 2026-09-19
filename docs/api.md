@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.22**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.39**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -28,7 +28,7 @@ changes into its own storage, keyed by stroke id.
 | Contract | `PaperView` (interface every engine implements) |
 | Data model | `Stroke`, `StrokePoint`, `StrokeStyle`, `Bounds`, `Selection`, `SelectionMove`, `OrientedBox` — pure Kotlin, zero Android deps |
 | Tools | `Tool` — `NONE` / `PEN` / `ERASER` / `LASSO` / `LASSO_ERASER` (0.1.28) |
-| Page mode (0.1.25) | `PageMode` — `STROKE` (default) / `RASTER`; `pageMode`, `loadPageRaster`, `getPageRaster`, `copyPageRaster`; `RasterPatch`, `readPageRaster`, `swapPageRaster` (0.1.29) |
+| Page mode (0.1.25) | `PageMode` — `STROKE` (default) / `RASTER`; `pageMode`, `loadPageRaster`, `getPageRaster`, `copyPageRaster`; `RasterPatch`, `readPageRaster`, `swapPageRaster` (0.1.29); `RasterLayer` — `GRAPHITE` / `INK` (0.1.39), a first parameter on all five and on both raster callbacks |
 | Transform mode (0.1.27) | `beginTransform` / `endTransform` / `setTransformAspectLocked`, `transformingContentId`, `transformBox`; `OrientedBox`; `TransformGeometry` + `TransformGrab` (pure) |
 | Events | `PaperListener` (all default no-op), `RawInputListener` + `RawInputEvent` |
 | Host content | `ContentRenderer`, `ContentLayer`, `HitTarget` |
@@ -97,24 +97,25 @@ override fun onDestroy() { paper.release(); super.onDestroy() }
 
 ### Raster pages (0.1.25)
 
-`pageMode = PageMode.RASTER` makes the page **one image** instead of a list of strokes.
-Everything up to pen-up is shared with stroke mode — live ink, palm gate, EPD handoffs, the
-committed renderer — and only what is *kept* differs: the mark is composited into a
-page-sized transparent bitmap through the same renderer and seed, and the object is dropped.
+`pageMode = PageMode.RASTER` makes the page **an image** instead of a list of strokes —
+**two of them since 0.1.39** (`RasterLayer`, below). Everything up to pen-up is shared with
+stroke mode — live ink, palm gate, EPD handoffs, the committed renderer — and only what is
+*kept* differs: the mark is composited into a page-sized transparent bitmap through the same
+renderer and seed, and the object is dropped.
 Set the mode on an empty page (it drops content like `clearForContentSwap()`), before the
 content loads; it is never flipped under ink, and a host that never mentions it gets the
 engine it always had.
 
 | Direction | API | Notes |
 |---|---|---|
-| In | `loadPageRaster(bitmap?)` | Page load; copied in at 1:1 from the page origin, null = blank. Handles the EPD handoff. **Fires nothing on the listener (0.1.33)** — like `swapPageRaster`, this is a change the host made itself |
-| In | `loadStrokes` / `addStrokes` | Composite into the image — the **one-way bake** of a stroke page. `removeStrokes` does nothing; `getStrokes()` is empty |
-| Out | `onRasterWillChange(rect)` → change → `onRasterChanged(rect)` | Around every change **the pen or a bake makes**, page space, rect generous and page-clipped. The first is the host's before-image moment (`readPageRaster(rect)` / `copyPageRaster(rect)`), the second its dirty flag. **One mark may fire the pair several times (0.1.33)** — once per run of the polyline, every will-change before any pixel moves and every changed after, in the same order. `onStrokeCommitted` still fires for a composited mark (timestamps and counts from one place) — don't store that stroke as a row |
-| Out | `getPageRaster()` | A **copy**, or null when blank — encode it off the main thread for a save |
-| Out | `copyPageRaster(rect)` | A copy of a patch as a bitmap |
-| Out | `readPageRaster(rect)` (0.1.29) | The pixels inside a rect as a `RasterPatch` (page-space rect + row-major ARGB `IntArray`) — **the before-image for undo**, in the shape `swapPageRaster` takes back. A page with no image yet reads as transparent, so the first mark's before-image is nothing, read for free |
-| In | `swapPageRaster(patches)` (0.1.29) | Each patch's pixels go onto the page and **its array is left holding what was there** — one entry serves undo and redo, no second copy. Overlapping patches: reverse read order to undo, read order to redo. One repaint; on Onyx only the region covered. Fires nothing on the listener, as `loadPageRaster` has not since 0.1.33. A rect not wholly on the page is skipped and logged, never clipped |
-| — | Eraser (0.1.26, rubbing since 0.1.30) | The same sweep as stroke mode, but it **rubs pixels**: within `eraserRadius` of the sweep the alpha is lifted by a fraction per pass — `rasterRubbing` sets the light and firm lift and the feathered edge — once per pixel per pass, again on each reversal of travel, so a light pass softens a line and a few firm passes take it out. Each batch fires `onRasterWillChange(rect)` → lift → `onRasterChanged(rect)` (accumulate the tiles into one undo entry, closed at `onPenLifted`); `onStrokesErased` never fires. The Onyx engine repaints the changed region per throttled batch so rubbing reads live on the panel |
+| In | `loadPageRaster(layer, bitmap?)` | Page load, one layer; copied in at 1:1 from the page origin, null = blank, the other layer untouched. Handles the EPD handoff. **Fires nothing on the listener (0.1.33)** — like `swapPageRaster`, this is a change the host made itself |
+| In | `loadStrokes` / `addStrokes` | Composite into the images — the **one-way bake** of a stroke page. Each stroke goes to the layer its style routes to. `removeStrokes` does nothing; `getStrokes()` is empty |
+| Out | `onRasterWillChange(layer, rect)` → change → `onRasterChanged(layer, rect)` | Around every change **the pen or a bake makes**, page space, rect generous and page-clipped. The first is the host's before-image moment (`readPageRaster(layer, rect)` / `copyPageRaster(layer, rect)`), the second its dirty flag. **One mark may fire the pair several times (0.1.33)** — once per run of the polyline, every will-change before any pixel moves and every changed after, in the same order — but always on **one** layer (0.1.39). `onStrokeCommitted` still fires for a composited mark (timestamps and counts from one place) — don't store that stroke as a row |
+| Out | `getPageRaster(layer)` | A **copy** of that layer, or null when it is blank — encode it off the main thread for a save. One layer, not the picture: the flatten is `renderToBitmap()` |
+| Out | `copyPageRaster(layer, rect)` | A copy of a patch of that layer as a bitmap |
+| Out | `readPageRaster(layer, rect)` (0.1.29) | The pixels inside a rect as a `RasterPatch` (page-space rect + row-major ARGB `IntArray`) — **the before-image for undo**, in the shape `swapPageRaster` takes back. A layer with no image yet reads as transparent, so the first mark's before-image is nothing, read for free |
+| In | `swapPageRaster(layer, patches)` (0.1.29) | Each patch's pixels go onto that layer and **its array is left holding what was there** — one entry serves undo and redo, no second copy. Overlapping patches: reverse read order to undo, read order to redo. One repaint; on Onyx only the region covered. Fires nothing on the listener, as `loadPageRaster` has not since 0.1.33. A rect not wholly on the page is skipped and logged, never clipped. A `RasterPatch` carries no layer of its own, so a patch read from one layer must go back to that one |
+| — | Eraser (0.1.26, rubbing since 0.1.30) | The same sweep as stroke mode, but it **rubs pixels**, and **only graphite** (0.1.39): within `eraserRadius` of the sweep the alpha is lifted by a fraction per pass — `rasterRubbing` sets the light and firm lift and the feathered edge — once per pixel per pass, again on each reversal of travel, so a light pass softens a line and a few firm passes take it out. The ink layer is never read, never allocated and never announced by an erase. Each batch fires `onRasterWillChange(GRAPHITE, rect)` → lift → `onRasterChanged(GRAPHITE, rect)` (accumulate the tiles into one undo entry, closed at `onPenLifted`); `onStrokesErased` never fires. The Onyx engine repaints the changed region per throttled batch so rubbing reads live on the panel |
 
 **A mark says where it landed, not where its corners are (0.1.33).** Until then a composited
 mark announced one rect — its bounding box — so a corner-to-corner hairline announced the whole
@@ -128,6 +129,44 @@ pixels move, and **every** `onRasterChanged` after, in the same order. A host th
 what it is told into one undo entry per contact — which the eraser has required since 0.1.26,
 because a sweep reports per batch — needs no change at all. A mark short enough never to reach
 the span is still exactly one rect.
+
+**Two rasters, one picture (0.1.39).** A raster page is two page-sized images, not one:
+`RasterLayer.GRAPHITE` holds the `PENCIL` and `RasterLayer.INK` holds every other style,
+and `RasterLayer.of(style)` is the whole of the routing. The reason is the rubber. The page
+was one ARGB bitmap, the rubber lifts alpha wherever it sweeps, and **a pixel does not know
+which tool laid it** — so a gel pen came up under the rubber exactly as graphite did, and a
+colour key could not have told them apart honestly (a black pen and a black pencil are the
+same pixel). The artist's rule is the physical one: *in the real world, ink is more
+permanent than pencil.* So the fix is the page's data model. **The rubber reads and writes
+graphite only**; the ink image is never read, never allocated and never announced by an
+erase, and whether a firm rub should lift ink a little is a decision nobody has taken.
+
+**They flatten with `DARKEN`** — the darker of the two per channel — wherever the page is
+seen, which includes `renderToBitmap()`. `DARKEN` rather than an over-draw because these
+are not user-facing layers: there is no z-order to pick and no visibility to toggle, and
+`min` is commutative, so the picture is the same whichever image is painted first. It is
+also the right answer for a coloured ink later, and on white paper with grey marks it is
+pixel-identical to `SRC_OVER`, so nothing about a pencil-only page moves. **A flatten
+cannot be taken apart again**: a host that means to reload a page and keep drawing on it
+saves and reloads both layers, and uses `renderToBitmap()` for a cover or a share.
+
+**The un-layered calls mean graphite, and that is a promise, not a default.** Every raster
+call and both raster callbacks have a layered form the engine uses and an un-layered form
+that means `RasterLayer.GRAPHITE` — `loadPageRaster(bitmap)`, `getPageRaster()`,
+`copyPageRaster(rect)`, `readPageRaster(rect)`, `swapPageRaster(patches)`,
+`onRasterWillChange(rect)`, `onRasterChanged(rect)`. A host written against 0.1.38 drew a
+pencil and nothing else, so graphite is the page it already had; it compiles and behaves
+unchanged against a re-pin. **A listener that overrides only the un-layered halves hears
+graphite and nothing of ink** — deliberately. Its `readPageRaster(rect)` reads graphite, so
+forwarding an ink change to it would hand it the wrong before-image and its undo would put
+graphite back where ink was; silence is the safe default and a corrupted history is not. A
+host that draws with anything but a pencil overrides the layered pair and keys its history
+by `(layer, rect)`.
+
+**One contact announces exactly one layer** — a mark's runs are all its style's layer, a
+rubbing sweep is all graphite. `loadStrokes` and `clear` announce **both**, whole-page,
+graphite first, even when a layer is empty: a host undoing a load needs the before-image of
+both, and "it held nothing" is a before-image like any other.
 
 **A change the host made itself is not announced (0.1.33).** `loadPageRaster` and
 `swapPageRaster` both replace page pixels and neither fires the pair: the host put those pixels
@@ -175,10 +214,16 @@ and the baked stroke keeps its true ARGB value. **The ladder's boundaries were s
 artist's hand on a Nomad (2026-09-17)**: a grey up to `#222222` arms black, up to `#666666`
 dark grey, anything paler grey. The palest leads preview a shade darker than they bake; the
 lightest code was trialled for them and rejected, because the line could not be followed.
+**A white lead is the one exception (0.1.40):** `penColor` white arms the lightest code, because
+a white pencil lays nothing on bare paper and pales the graphite under it — flecks go down over
+the raster — so the faintest trail is the honest preview of a lightener, and a grey trail that
+vanished at pen-lift would have said the opposite.
 
-The image is a layer *over* the paper (white + template still draw under it), so the eraser
-clears to transparent rather than painting white. Format is ARGB_8888; about
-18 MB at a 1860 × 2480 page — one per view, for the life of the page.
+The images are a layer *over* the paper (white + template still draw under them), so the
+eraser clears to transparent rather than painting white. Format is ARGB_8888; about
+18 MB at a 1860 × 2480 page — and each layer is allocated **lazily, on its first mark**, so
+a pencil-only page costs exactly what it always did and the second bitmap is the price of
+the first stroke made with a pen.
 
 **Undo/redo is host-owned**: the host keeps its history and replays via
 the load/add/remove calls (patterns in [host-responsibilities.md](host-responsibilities.md)).

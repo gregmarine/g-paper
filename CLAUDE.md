@@ -81,6 +81,29 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   callbacks (`loadingRaster` in Paintsprout's `SketchbookActivity` and SN's `SketchActivity`)
   only worked because these calls happen to be synchronous — a correctness argument resting on
   an implementation detail nobody promised is a bug waiting for the day the detail changes.
+- **Two rasters, one picture — because a pixel does not know which tool laid it (Phase 26,
+  0.1.39).** The page was one ARGB bitmap and the rubber lifts alpha wherever it sweeps, so
+  a gel pen came up under it exactly as graphite did. No colour key could have fixed that
+  honestly: a black pen and a black pencil are the same pixel, and a rule read off the
+  pixels would have been a guess about history dressed as a fact. The artist's rule is the
+  physical one — *"in the real world, ink is more permanent than pencil"* — so the fix is
+  the page's **data model**: `graphiteRaster` and `inkRaster`, routed once in
+  `RasterLayer.of(style)` (`PENCIL` → graphite, everything else → ink). **The rubber rubs
+  graphite and only graphite** — `eraseRasterAlong` names that bitmap, so the rule holds by
+  construction rather than by a test that could be got wrong; the ink image is never read,
+  never allocated and never announced by an erase. **The flatten is `DARKEN`**, not an
+  over-draw, because these are not user-facing layers: `min` per channel is commutative, so
+  there is no top and no bottom to get wrong, it is the right answer for a coloured ink
+  later, and on white paper it is pixel-identical to `SRC_OVER` — so the pencil page the
+  artist already approved does not move. **One contact announces exactly one layer** (a
+  mark's runs are all its style's; a sweep is all graphite); a load or a clear announces
+  both, graphite first, even when one is empty, because a host undoing a load needs the
+  before-image of both. And **the un-layered calls mean graphite** — every raster call and
+  both callbacks have a layered form the engine uses and an un-layered default that routes
+  to `GRAPHITE`, so a 0.1.38 host compiles and behaves unchanged. A listener that overrides
+  only the un-layered half hears **nothing** of ink on purpose: its `readPageRaster(rect)`
+  reads graphite, so forwarding an ink change would hand it the wrong before-image and its
+  undo would paint graphite where ink was. Silence beats a corrupted history.
 - **The raster eraser's mid-sweep cadence is PER ENGINE, because a redraw does not cost the
   same thing on two panels (Phase 19, 0.1.32).** `rasterEraseRedrawIntervalMs` is a
   `protected open val` the base reads in `throttledEraseRedraw`; `RASTER_ERASE_REDRAW_END_ONLY`
@@ -148,13 +171,16 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   **second ladder beside `firmwareColorFor`, with its own thresholds** — because a scatter of
   flecks baked at constant pressure reads lighter than a solid line of the same colour, so the
   nearest-grey question has a different answer for a pencil, and bending the shared thresholds to
-  fit would have broken every other style's pen-lift handoff to fix one. It tops out at GRAY and
-  never answers LIGHT_GRAY: a mark that is invisible *while it is being drawn* is worse than one
-  that previews a shade off, because the hand aims with it. **Its rungs are the artist's
-  hand on the Nomad (2026-09-17): 0–2 BLACK, 3–6 DARK_GRAY, 7–14 GRAY** — the first guess put
-  7–9 on DARK_GRAY and they previewed darker than they baked; LIGHT_GRAY was trialled for 12–14
-  and rejected by the same hand, so the pale end previews a shade dark and stays visible.
-  DARK_GRAY still carries `#505050`/`#555555`, Phase 19's pairing.
+  fit would have broken every other style's pen-lift handoff to fix one. For every grey it tops
+  out at GRAY and never answers LIGHT_GRAY: a mark that is invisible *while it is being drawn*
+  is worse than one that previews a shade off, because the hand aims with it. **Its rungs are
+  the artist's hand on the Nomad (2026-09-17): 0–2 BLACK, 3–6 DARK_GRAY, 7–14 GRAY** — the
+  first guess put 7–9 on DARK_GRAY and they previewed darker than they baked; LIGHT_GRAY was
+  trialled for 12–14 and rejected by the same hand, so the pale end previews a shade dark and
+  stays visible. DARK_GRAY still carries `#505050`/`#555555`, Phase 19's pairing. **A white
+  lead is the one LIGHT_GRAY (Phase 27, 0.1.40)**: it lays nothing on bare paper and pales
+  graphite under it (flecks go down `SRC_OVER` on the raster), so the faintest panel tone is the
+  truthful preview and a GRAY trail vanishing at pen-lift would have said the opposite.
 - **A hairline needs a lower firmware floor than a pen does (Phase 19, 0.1.32).** `RattaEmr`
   (pure, JVM-tested) clamps `px * 100` to 200…9600 for every style but `PENCIL`, whose floor is
   `EMR_MIN_HAIRLINE` (120, the Nomad's answer — see Phase 24 for the ceiling). The general floor exists
