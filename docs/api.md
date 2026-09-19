@@ -214,6 +214,10 @@ and the baked stroke keeps its true ARGB value. **The ladder's boundaries were s
 artist's hand on a Nomad (2026-09-17)**: a grey up to `#222222` arms black, up to `#666666`
 dark grey, anything paler grey. The palest leads preview a shade darker than they bake; the
 lightest code was trialled for them and rejected, because the line could not be followed.
+**A white lead is the one exception (0.1.40):** `penColor` white arms the lightest code, because
+a white pencil lays nothing on bare paper and pales the graphite under it — flecks go down over
+the raster — so the faintest trail is the honest preview of a lightener, and a grey trail that
+vanished at pen-lift would have said the opposite.
 
 The images are a layer *over* the paper (white + template still draw under them), so the
 eraser clears to transparent rather than painting white. Format is ARGB_8888; about

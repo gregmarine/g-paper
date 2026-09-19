@@ -93,6 +93,15 @@ internal object RattaInkMap {
     private const val PENCIL_DARK_GRAY_MAX_LUMA = 110.5f
 
     /**
+     * Ceiling for [SupernoteInk.Color.GRAY] on the pencil ladder — the midpoint between shade
+     * level 14 (`#EEEEEE`, luma 238) and white (luma 255), so **only a white lead** reaches
+     * LIGHT_GRAY (Phase 27, 0.1.40). Every pale grey the hand rejected LIGHT_GRAY for on the
+     * 2026-09-17 walk (levels 12–14) still previews GRAY; white is the one lead whose bake is
+     * paler than every panel tone, so a near-invisible trail is the honest preview of it.
+     */
+    private const val PENCIL_GRAY_MAX_LUMA = 246.5f
+
+    /**
      * The firmware colour code `PENCIL`'s **live preview** is armed as for a lead of
      * colour [argb] — the nearest *usable* firmware tone, which is not the same thing
      * as the nearest tone.
@@ -118,29 +127,33 @@ internal object RattaInkMap {
      * exactly one tone per arming — that has not changed and cannot be worked around —
      * so what a ladder buys is agreement *between* shades, not within one.
      *
-     * **Never LIGHT_GRAY.** That code renders around `#F0F0F0` (luma ~240) and is
+     * **LIGHT_GRAY only for white.** That code renders around `#F0F0F0` (luma ~240) and is
      * near-invisible on the panel. For a solid line that is consistent — near-white baked
      * ink is equally invisible — but a pencil is drawn *to be watched while it is drawn*,
-     * and the palest lead must still show a line under the hand even if the bake is faint.
-     * So this ladder tops out at GRAY and a lead lighter than every shade still previews
-     * as GRAY.
+     * and a pale grey lead must still show a line under the hand even if the bake is faint.
+     * So every grey on the ladder tops out at GRAY. The one exception (Phase 27, 0.1.40) is
+     * a **white** lead: it lays nothing on bare paper and exists to lighten graphite already
+     * there (flecks go down over the raster, so white ones pale what is under them), and a
+     * GRAY trail that vanished at pen-lift would preview the opposite of what it does. It
+     * takes LIGHT_GRAY — the faintest tone the panel has, which is the truthful one.
      *
      * **The rungs, as the hand settled them (Nomad, 2026-09-17).** Levels 0–2 → BLACK,
-     * 3–6 → DARK_GRAY, 7–14 (and anything lighter) → GRAY, with the thresholds at the
+     * 3–6 → DARK_GRAY, 7–14 → GRAY, white → LIGHT_GRAY, with the thresholds at the
      * midpoints between adjacent shades so a level never sits on a boundary. DARK_GRAY
      * stays on the default `#555555` (level 5) and on arc 43's `#505050`, so the pairing
      * Phase 19 settled is unchanged. The walk also reported levels 12–14 previewing
      * darker as GRAY than they bake, and **LIGHT_GRAY was trialled for them and
      * rejected by the same hand** — the line could not be followed while it was drawn —
      * so the pale end's mismatch is the accepted cost of a preview that can be seen, and
-     * "never LIGHT_GRAY" is now a measurement as well as an argument.
+     * "never LIGHT_GRAY for a grey" is a measurement as well as an argument.
      */
     fun pencilPreviewFor(argb: Int): Int {
         val luma = luma(argb)
         return when {
             luma <= PENCIL_BLACK_MAX_LUMA -> SupernoteInk.Color.BLACK
             luma <= PENCIL_DARK_GRAY_MAX_LUMA -> SupernoteInk.Color.DARK_GRAY
-            else -> SupernoteInk.Color.GRAY
+            luma <= PENCIL_GRAY_MAX_LUMA -> SupernoteInk.Color.GRAY
+            else -> SupernoteInk.Color.LIGHT_GRAY
         }
     }
 }

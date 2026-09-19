@@ -1807,6 +1807,26 @@ Bring in ink then rub then undo — *"Clean!"* Face PSS 67.7 MB with both raster
 at one; an ink lattice's undo entry costs exactly what the same graphite lattice's does (368 tiles
 / 6 029 312 B each). Merge of `two-rasters` to `main` pending the user's word.
 
+### Phase 27 — A white lead previews LIGHT_GRAY (post-v0.1.0)
+**Status:** ✅ Complete (2026-09-18) · **Publishes:** 0.1.40 · branch `two-rasters` ·
+Opened 2026-09-18 by the artist's decision for NSE · Sketch, before arc 45 merges: the pencil
+palette narrows to **the four tones the firmware has** — black, grey, light grey (ladder levels
+0 / 5 / 9, the three the preview hits exactly) and **white** (level 15), the white lead being a
+*lightener*: flecks go down `SRC_OVER` on the graphite raster, so a white one pales the graphite
+under it — the precision the rubber does not give — and lays nothing on bare paper under the
+`DARKEN` flatten.
+
+**Scope.** One rung on `RattaInkMap.pencilPreviewFor`: `PENCIL_GRAY_MAX_LUMA` = 246.5 (the midpoint
+of level 14 and white), above which the preview arms LIGHT_GRAY. Every grey the hand rejected
+LIGHT_GRAY for (12–14) still previews GRAY — a grey lead is watched while it is drawn; a white
+lead's honest preview is the faintest tone the panel has, since a GRAY trail that vanished at
+pen-lift would say the opposite of what the lead does. `firmwareColorFor` untouched. The ratta test
+"never answers LIGHT_GRAY" becomes "for white and for nothing greyer". No demo change, no API
+change; `penColor` = `0xFFFFFFFF` is the whole host-side ask.
+
+**Gate:** `./gradlew test` green; the white lead on the artist's Nomad through NSE · Sketch (the
+consumer walk stands in for a demo walk — the demo's Shade cycler never reaches white).
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

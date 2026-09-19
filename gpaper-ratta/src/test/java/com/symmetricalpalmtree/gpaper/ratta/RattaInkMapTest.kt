@@ -143,13 +143,18 @@ class RattaInkMapTest {
     }
 
     @Test
-    fun `the pencil ladder never answers LIGHT_GRAY`() {
-        // LIGHT_GRAY renders near-invisibly (~#F0F0F0). A pale lead's bake may be faint,
-        // but the line under the hand while it is being drawn may not be — so no input
-        // reaches that code, not white, not a paler-than-white-is-possible overflow.
-        assertEquals(SupernoteInk.Color.GRAY, RattaInkMap.pencilPreviewFor(argb(255, 255, 255)))
+    fun `the pencil ladder answers LIGHT_GRAY for white and for nothing greyer`() {
+        // LIGHT_GRAY renders near-invisibly (~#F0F0F0). A pale grey lead's bake may be
+        // faint, but the line under the hand while it is being drawn may not be — so no
+        // grey reaches that code, not #EEEEEE, not #F0F0F0. White does (0.1.40): it lays
+        // nothing on bare paper and lightens graphite, so the faintest tone is the true one.
+        assertEquals(SupernoteInk.Color.LIGHT_GRAY, RattaInkMap.pencilPreviewFor(argb(255, 255, 255)))
         assertEquals(SupernoteInk.Color.GRAY, RattaInkMap.pencilPreviewFor(argb(0xF0, 0xF0, 0xF0)))
-        for (v in 0..255) {
+        assertEquals(SupernoteInk.Color.GRAY, RattaInkMap.pencilPreviewFor(shade(14)))
+        // 246.5 is an inclusive ceiling on the luma scale.
+        assertEquals(SupernoteInk.Color.GRAY, RattaInkMap.pencilPreviewFor(argb(246, 246, 246)))
+        assertEquals(SupernoteInk.Color.LIGHT_GRAY, RattaInkMap.pencilPreviewFor(argb(247, 247, 247)))
+        for (v in 0..246) {
             assertNotEquals(
                 "grey $v",
                 SupernoteInk.Color.LIGHT_GRAY,

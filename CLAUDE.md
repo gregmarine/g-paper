@@ -171,13 +171,16 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   **second ladder beside `firmwareColorFor`, with its own thresholds** — because a scatter of
   flecks baked at constant pressure reads lighter than a solid line of the same colour, so the
   nearest-grey question has a different answer for a pencil, and bending the shared thresholds to
-  fit would have broken every other style's pen-lift handoff to fix one. It tops out at GRAY and
-  never answers LIGHT_GRAY: a mark that is invisible *while it is being drawn* is worse than one
-  that previews a shade off, because the hand aims with it. **Its rungs are the artist's
-  hand on the Nomad (2026-09-17): 0–2 BLACK, 3–6 DARK_GRAY, 7–14 GRAY** — the first guess put
-  7–9 on DARK_GRAY and they previewed darker than they baked; LIGHT_GRAY was trialled for 12–14
-  and rejected by the same hand, so the pale end previews a shade dark and stays visible.
-  DARK_GRAY still carries `#505050`/`#555555`, Phase 19's pairing.
+  fit would have broken every other style's pen-lift handoff to fix one. For every grey it tops
+  out at GRAY and never answers LIGHT_GRAY: a mark that is invisible *while it is being drawn*
+  is worse than one that previews a shade off, because the hand aims with it. **Its rungs are
+  the artist's hand on the Nomad (2026-09-17): 0–2 BLACK, 3–6 DARK_GRAY, 7–14 GRAY** — the
+  first guess put 7–9 on DARK_GRAY and they previewed darker than they baked; LIGHT_GRAY was
+  trialled for 12–14 and rejected by the same hand, so the pale end previews a shade dark and
+  stays visible. DARK_GRAY still carries `#505050`/`#555555`, Phase 19's pairing. **A white
+  lead is the one LIGHT_GRAY (Phase 27, 0.1.40)**: it lays nothing on bare paper and pales
+  graphite under it (flecks go down `SRC_OVER` on the raster), so the faintest panel tone is the
+  truthful preview and a GRAY trail vanishing at pen-lift would have said the opposite.
 - **A hairline needs a lower firmware floor than a pen does (Phase 19, 0.1.32).** `RattaEmr`
   (pure, JVM-tested) clamps `px * 100` to 200…9600 for every style but `PENCIL`, whose floor is
   `EMR_MIN_HAIRLINE` (120, the Nomad's answer — see Phase 24 for the ceiling). The general floor exists
