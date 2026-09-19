@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.Point
 import android.graphics.PorterDuff
 import android.graphics.Rect
@@ -20,7 +21,6 @@ import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 import kotlin.math.ceil
 import kotlin.math.floor
-import kotlin.math.min
 
 /**
  * The Supernote (Ratta) engine: live strokes are painted by the firmware's ink daemon
@@ -151,12 +151,26 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
          */
         const val PENCIL_BAKE_PRESSURE = 0.5f
 
-        /** Paper, as the flatten starts from it: `0xRRGGBB`, no alpha. */
-        const val WHITE_RGB = 0xFFFFFF
+        /**
+         * The two panel levels the direct path ever sends: `0x00` black and `0x0f` white.
+         *
+         * Nothing in between, on purpose (Phase 28, the third walk). Both of these land on
+         * the panel's **first** frame, where every grey between them arrives by way of black
+         * and lightens out of it over the next second — so a dither of the page is the one
+         * picture this panel can show truthfully while the pen is moving, and a pencil is
+         * exactly the thing that survives being dithered.
+         */
+        const val LEVEL_BLACK: Byte = 0x00
+        const val LEVEL_WHITE: Byte = 0x0f
 
-        /** The alpha the flattened pixel is handed to the tone table with — it is a colour
-         *  on paper by then, never a translucent one. */
-        const val OPAQUE = 0xFF000000.toInt()
+        /** How many pixels one band of a dither rebuild covers — a megabyte of `Int`
+         *  scratch, three times over. A whole 1404 × 1872 page is then about eight bands
+         *  and allocates nothing after the first one. */
+        const val DITHER_BAND_PX = 262144
+
+        /** An inked pixel of the dither image: opaque, and only the alpha is read
+         *  (`ALPHA_8` takes its colour from the paint). */
+        const val DITHER_INK = 0xFF000000.toInt()
 
         /**
          * Overlay-clear retry ladder (overlay law 2): a clear issued in the wake of a
@@ -266,10 +280,20 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         set(value) {
             val changed = super.pageMode != value
             super.pageMode = value
-            // The page's mode is one of [directPencil]'s preconditions — a host switching a
-            // pencil page between raster and stroke changes which thing draws the live ink,
-            // and the base's setter (a content swap) knows nothing of the firmware.
-            if (changed && firmware) rearmPenIfLive()
+            if (changed) {
+                // The base's setter is a content swap: the page is empty on both sides of
+                // the flip, so the dither of the old one is stale and there is nothing yet
+                // to put in its place. Dropped, never cleared in place — the committed
+                // display list is still holding it, and the panel keeps those pixels until
+                // the host loads the page the new mode understands (see [ditherDisplay]).
+                ditherDisplay = null
+                ditherW = 0
+                ditherH = 0
+                // The page's mode is one of [directPencil]'s preconditions — a host
+                // switching a pencil page between raster and stroke changes which thing
+                // draws the live ink, and the base's setter knows nothing of the firmware.
+                if (firmware) rearmPenIfLive()
+            }
         }
 
     override var eraserRadius: Float
@@ -538,32 +562,28 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun bakeTilt(style: StrokeStyle, tilt: Float): Float =
         if (style == StrokeStyle.PENCIL && firmware) 0f else tilt
 
-    /**
-     * On the direct panel path a pencil shade is a **density of black flecks**, for the bake
-     * and the live preview alike ([RattaPencilInk], whose KDoc holds the read-back and the
-     * fit). The panel's 16-grey waveform lands a black pixel on its first frame but reaches a
-     * grey only by passing through black, so alpha-graded flecks trailed the nib on the first
-     * walk and opaque grey ones trailed it on the second — Atelier, read back off the panel,
-     * sends level 0 and nothing else for every shade it has.
-     *
-     * The needle fallback keeps 0.1.40's behaviour exactly: the lead's own colour,
-     * alpha-graded, at full density, previewed by the firmware's nearest grey.
-     */
-    override fun pencilInk(color: Int): PencilInk =
-        if (firmware && panel.isOpen) RattaPencilInk.of(color)
-        else PencilInk(color, opaque = false, density = 1f)
-
     // ── The direct pencil: graphite painted onto the panel (Phase 28, 0.1.41) ──
     //
-    // What the firmware needle could never do: sixteen greys, pressure, tilt, and no change
+    // What the firmware needle could never do: the lead's own shade, pressure, and no change
     // at pen-up. The mark is [GraphiteGrain]'s flecks — the *same* flecks the bake will lay,
     // from the same call with the same seed — rasterised by the same renderer into a live
     // alpha layer, flattened against the page images exactly as `drawCommittedContent`
-    // flattens them, toned through [RattaPanelTone] and written straight into the panel
+    // flattens them, **dithered** ([DitherFlatten]) and written straight into the panel
     // driver's frame 0. At pen-up the stroke bakes into the page image as it always did and
-    // the window presents it: the compositor rewrites the same pixels, the tone table says
-    // they map to the levels already showing, and the panel does not move. That is the
-    // mirror, and it is why the tone table has to be the measured one.
+    // the window presents it — dithered the same way, by the same function, at the same page
+    // coordinates ([drawRasterLayers]), so the compositor's rewrite lands on the pixels that
+    // are already there and the panel does not move. That is the mirror.
+    //
+    // **Why the display is dithered at all** (the third walk, 2026-09-19). This panel's
+    // 16-grey waveform reaches black on its first frame and a grey only by passing through
+    // black and lightening back out of it over the next second — so a grey pixel trails the
+    // nib and a black one does not. The second walk read that as "a shade is a density" and
+    // thinned the grain for a pale lead; it landed under the nib cleanly and was the wrong
+    // answer, because it changed the *mark*: *"Atelier uses greyscale colours; this just
+    // leaves less graphite down, so shade 13 looks like a bug."* Atelier sends the panel
+    // nothing but black pixels — that read-back was right — because it **dithers** its grey
+    // stroke into an even pattern of them. So the pencil keeps its grey everywhere it is
+    // data (the stroke, the page image, covers, exports) and only the glass sees dots.
     //
     // Three rules hold this together, each of them a measurement:
     //
@@ -575,7 +595,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     //     check if live ink starts blinking.
     //  2. **The daemon is disabled while the pencil is armed** ([applyToolToFirmware]), or
     //     its needle paints over the grain in one flat grey.
-    //  3. **Every live pixel goes through [RattaPanelTone]**, so the recompose is a no-op.
+    //  3. **Every live pixel and every displayed pixel go through the same [DitherFlatten]
+    //     at the same page coordinates**, so the recompose is a no-op. It was
+    //     [RattaPanelTone]'s measured grey → level table that did this job while the panel
+    //     was sent greys; now that nothing but black and white reaches it, agreement is a
+    //     property of one pure function instead of a table (the table stands — see there).
 
     /**
      * The alpha of every fleck laid this contact — one byte a pixel, the view's size,
@@ -621,8 +645,14 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * path latches, because the flecks already on the panel were laid with it and the flatten
      * at pen-up has to agree with them. A shade picked mid-contact is not a thing a hand can
      * do; a shade picked between contacts is, and [beginLivePreview] is where it takes.
+     *
+     * Since the third walk this is always the core's own answer — the lead's colour,
+     * alpha-graded, at full density, anti-aliased — because the panel is handed a dither of
+     * the page rather than the pencil's pixels. The seam ([pencilInk]) stays: it is how an
+     * engine says how the pencil must be drawn on its glass, and this one no longer needs to
+     * say anything.
      */
-    private var contactInk: PencilInk = PencilInk(0xFF000000.toInt(), opaque = true, density = 1f)
+    private var contactInk: PencilInk = PencilInk(Stroke.BLACK, opaque = false, density = 1f)
 
     /** How many of this stroke's flecks are already on the panel — the log's measure of the
      *  contact, and no longer an index into anything: what [liveSweep] hands back IS the new
@@ -642,10 +672,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  the screen's, and a mid-layout read lies. */
     private val contactScreenLoc = IntArray(2)
 
-    /** Flatten/tone scratch, grown as rects demand: the batch's pixels, the flattened RGB,
-     *  and the levels handed to the panel. */
+    /** Flatten/dither scratch, grown as rects demand: the two page images' pixels over the
+     *  rect, the batch's own pixels, and the levels handed to the panel. */
     private var tonePix = IntArray(0)
-    private var toneRgb = IntArray(0)
+    private var toneGraphite = IntArray(0)
+    private var toneInk = IntArray(0)
     private var toneLevels = ByteArray(0)
     private val toneRect = Rect()
     private val toneScreenRect = Rect()
@@ -800,57 +831,43 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     /**
-     * Flatten [rect] the way the page will be seen and show it: white paper, the graphite
-     * image over it, this contact's live flecks over that, and the ink image through
-     * `DARKEN` — the same order and the same operator `drawCommittedContent` uses, because
-     * anything else would be a second opinion about what the page looks like and pen-up
-     * would be where the two met.
+     * Flatten [rect] the way the page will be seen, dither it, and show it: white paper, the
+     * graphite image over it, this contact's live flecks over that, and the ink image
+     * through `DARKEN` — the same order and the same operator `drawCommittedContent` uses,
+     * because anything else would be a second opinion about what the page looks like and
+     * pen-up would be where the two met.
+     *
+     * Every pixel leaves as black (level 0) or white (level 15) and nothing in between:
+     * both land on the panel's first frame, so the mark is under the nib rather than a beat
+     * behind it, and the whole-page dither the window presents at pen-up
+     * ([regenDither]) is the same arithmetic at the same page coordinates, so it agrees
+     * pixel for pixel. [RattaPanelTone] is no longer on this path — see its KDoc.
      */
     private fun toneAndPost(rect: Rect, mask: ByteArray) {
         val w = rect.width()
         val h = rect.height()
         val n = w * h
         ensureToneScratch(n)
-        java.util.Arrays.fill(toneRgb, 0, n, WHITE_RGB)
-        if (readRaster(RasterLayer.GRAPHITE, rect)) {
-            for (i in 0 until n) {
-                val p = tonePix[i]
-                if (p ushr 24 != 0) toneRgb[i] = overWhite(p)
-            }
-        }
-        // The ink the flecks were laid in, never [penColor]: on this path a grey lead is
-        // painted as black at a lower density, and flattening its alpha with the lead's own
-        // grey would show the panel a colour no fleck on it is.
+        readRaster(RasterLayer.GRAPHITE, rect, toneGraphite)
+        readRaster(RasterLayer.INK, rect, toneInk)
+        // The lead's own colour: the flecks on the panel were laid in it, and the dither
+        // is what turns that grey into dots.
         val inkColor = contactInk.color
-        val penR = Color.red(inkColor)
-        val penG = Color.green(inkColor)
-        val penB = Color.blue(inkColor)
         for (y in 0 until h) {
             val maskRow = (rect.top + y) * liveAlphaW + rect.left
             val row = y * w
+            val pageY = rect.top + y
             for (x in 0 until w) {
-                val a = mask[maskRow + x].toInt() and 0xFF
-                if (a == 0) continue
-                val d = toneRgb[row + x]
-                val r = (penR * a + ((d ushr 16) and 0xFF) * (255 - a)) / 255
-                val g = (penG * a + ((d ushr 8) and 0xFF) * (255 - a)) / 255
-                val b = (penB * a + (d and 0xFF) * (255 - a)) / 255
-                toneRgb[row + x] = (r shl 16) or (g shl 8) or b
+                val black = DitherFlatten.black(
+                    toneGraphite[row + x],
+                    mask[maskRow + x].toInt() and 0xFF,
+                    inkColor,
+                    toneInk[row + x],
+                    rect.left + x,
+                    pageY,
+                )
+                toneLevels[row + x] = if (black) LEVEL_BLACK else LEVEL_WHITE
             }
-        }
-        if (readRaster(RasterLayer.INK, rect)) {
-            for (i in 0 until n) {
-                val p = tonePix[i]
-                if (p ushr 24 == 0) continue
-                val ink = overWhite(p)
-                val d = toneRgb[i]
-                toneRgb[i] = (min(d ushr 16 and 0xFF, ink ushr 16 and 0xFF) shl 16) or
-                    (min(d ushr 8 and 0xFF, ink ushr 8 and 0xFF) shl 8) or
-                    min(d and 0xFF, ink and 0xFF)
-            }
-        }
-        for (i in 0 until n) {
-            toneLevels[i] = RattaPanelTone.levelOf(OPAQUE or toneRgb[i]).toByte()
         }
         toneScreenRect.set(rect)
         toneScreenRect.offset(contactScreenLoc[0], contactScreenLoc[1])
@@ -858,40 +875,31 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     /**
-     * [layer]'s pixels for [rect] into [tonePix], zero-filled where the page image does not
+     * [layer]'s pixels for [rect] into [into], zero-filled where the page image does not
      * reach (a page smaller than the view, or a layer nothing has landed on). False when
      * there is no image at all — the common case for ink on a pencil page, and worth the
-     * early return: it is a page-sized bitmap that never gets allocated.
+     * early return: it is a page-sized bitmap that never gets allocated. The array is
+     * zeroed either way, so a caller may read it without asking.
      */
-    private fun readRaster(layer: RasterLayer, rect: Rect): Boolean {
-        val bitmap = rasterFor(layer) ?: return false
+    private fun readRaster(layer: RasterLayer, rect: Rect, into: IntArray): Boolean {
         val w = rect.width()
         val h = rect.height()
-        java.util.Arrays.fill(tonePix, 0, w * h, 0)
+        java.util.Arrays.fill(into, 0, w * h, 0)
+        val bitmap = rasterFor(layer) ?: return false
         val left = rect.left.coerceAtLeast(0)
         val top = rect.top.coerceAtLeast(0)
         val right = rect.right.coerceAtMost(bitmap.width)
         val bottom = rect.bottom.coerceAtMost(bitmap.height)
         if (right <= left || bottom <= top) return false
         val offset = (top - rect.top) * w + (left - rect.left)
-        bitmap.getPixels(tonePix, offset, w, left, top, right - left, bottom - top)
+        bitmap.getPixels(into, offset, w, left, top, right - left, bottom - top)
         return true
-    }
-
-    /** An unpremultiplied ARGB pixel composited over white paper, as `0xRRGGBB`. */
-    private fun overWhite(argb: Int): Int {
-        val a = argb ushr 24
-        if (a == 0) return WHITE_RGB
-        if (a == 255) return argb and 0xFFFFFF
-        val r = ((argb ushr 16 and 0xFF) * a + 255 * (255 - a)) / 255
-        val g = ((argb ushr 8 and 0xFF) * a + 255 * (255 - a)) / 255
-        val b = ((argb and 0xFF) * a + 255 * (255 - a)) / 255
-        return (r shl 16) or (g shl 8) or b
     }
 
     private fun ensureToneScratch(n: Int) {
         if (tonePix.size < n) tonePix = IntArray(n)
-        if (toneRgb.size < n) toneRgb = IntArray(n)
+        if (toneGraphite.size < n) toneGraphite = IntArray(n)
+        if (toneInk.size < n) toneInk = IntArray(n)
         if (toneLevels.size < n) toneLevels = ByteArray(n)
     }
 
@@ -920,6 +928,157 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         batchBitmap = bitmap
         batchCanvas = Canvas(bitmap)
         return bitmap
+    }
+
+    // ── The dithered display: what the WINDOW shows while the panel is ours ──
+    //
+    // The live half above paints the panel under the nib. This half is what the window
+    // presents afterwards, and the two must be the same picture — so the page is drawn to
+    // the glass as a blue-noise dither of exactly the flatten [toneAndPost] sends, through
+    // exactly the same [DitherFlatten] at exactly the same page coordinates. Then the
+    // compositor's rewrite of frame 0 is a no-op on every pixel and there is nothing to see
+    // at pen-up.
+    //
+    // It applies to the whole raster page while the panel is open, not only to the pencil:
+    // the window shows one page, and a page that were dithered under the pencil and true
+    // grey under the pen would change appearance at a tool push. Covers and exports are
+    // never dithered — that is what `forDisplay` is for.
+
+    /**
+     * The page as black-or-white, one byte a pixel — an `ALPHA_8` bitmap because the only
+     * thing being said about a pixel is whether it is inked, and a black [android.graphics.Paint]
+     * at draw time supplies the colour. A quarter of the memory of the page it mirrors.
+     *
+     * Allocated on first use and **dropped rather than cleared** when the page goes (see
+     * [onRasterPixelsChanged]): the committed display list holds its own reference to the
+     * bitmap it was recorded with, exactly as it does for the page images, and blanking one
+     * in place would wipe the panel a frame before the next page lands.
+     */
+    private var ditherDisplay: Bitmap? = null
+    private var ditherW = 0
+    private var ditherH = 0
+
+    /** Dither scratch: one band's worth of each page image and of the alpha written out. */
+    private var bandGraphite = IntArray(0)
+    private var bandInk = IntArray(0)
+    private var bandOut = IntArray(0)
+    private val bandRect = Rect()
+
+    /** Whether the window is showing the dither rather than the page images themselves. */
+    private val ditherDisplayed: Boolean
+        get() = panel.isOpen && pageMode == PageMode.RASTER
+
+    /**
+     * Draw the raster page for [forDisplay].
+     *
+     * On the glass, with the panel ours, that is the dither and **not** the page images:
+     * every displayed pixel is black or white, which is what the panel was painted with
+     * under the nib. Anywhere else — a cover, an export, the host's own data — it is the
+     * base's two blits and the artist's true greys. The dither is drawn with a black paint
+     * because an `ALPHA_8` bitmap takes its colour from the paint.
+     */
+    override fun drawRasterLayers(canvas: Canvas, forDisplay: Boolean) {
+        if (!forDisplay || !ditherDisplayed) {
+            super.drawRasterLayers(canvas, forDisplay)
+            return
+        }
+        ditherDisplay?.let { canvas.drawBitmap(it, 0f, 0f, ditherPaint) }
+    }
+
+    /** Black, aliased, no filtering — the ink an `ALPHA_8` page is drawn in. */
+    private val ditherPaint = Paint().apply {
+        color = Color.BLACK
+        isAntiAlias = false
+        isFilterBitmap = false
+    }
+
+    /**
+     * The page's pixels moved: bring the dither up to date over the same ground, before the
+     * caller presents anything.
+     *
+     * A null rect is the whole page — a load, a clear, a content swap. When it is the page
+     * *going* (both images dropped) the bitmap is let go rather than cleared, so a content
+     * swap holds the old pixels on the panel until the new page lands, which is the same
+     * courtesy the base extends to the page images themselves.
+     */
+    override fun onRasterPixelsChanged(rect: Rect?) {
+        if (!ditherDisplayed) return
+        if (rect == null) {
+            if (rasterFor(RasterLayer.GRAPHITE) == null && rasterFor(RasterLayer.INK) == null) {
+                ditherDisplay = null
+                ditherW = 0
+                ditherH = 0
+                return
+            }
+            regenDither(null)
+            return
+        }
+        regenDither(rect)
+    }
+
+    /**
+     * Rebuild the dither over [rect], or over the whole page when it is null.
+     *
+     * In horizontal bands, so the scratch a page-wide rebuild needs is a megabyte rather
+     * than the page's own four: a band at a time is also how the cost stays predictable on
+     * the one call that has a deadline — a page turn, where the artist is waiting.
+     */
+    private fun regenDither(rect: Rect?) {
+        val bitmap = ensureDither() ?: return
+        val full = Rect(0, 0, bitmap.width, bitmap.height)
+        val area = Rect(rect ?: full)
+        if (!area.intersect(full) || area.isEmpty) return
+        val t0 = System.nanoTime()
+        val w = area.width()
+        val bandH = (DITHER_BAND_PX / w).coerceIn(1, area.height())
+        if (bandGraphite.size < w * bandH) {
+            bandGraphite = IntArray(w * bandH)
+            bandInk = IntArray(w * bandH)
+            bandOut = IntArray(w * bandH)
+        }
+        var top = area.top
+        while (top < area.bottom) {
+            val bottom = minOf(top + bandH, area.bottom)
+            bandRect.set(area.left, top, area.right, bottom)
+            readRaster(RasterLayer.GRAPHITE, bandRect, bandGraphite)
+            readRaster(RasterLayer.INK, bandRect, bandInk)
+            for (y in top until bottom) {
+                val row = (y - top) * w
+                for (x in 0 until w) {
+                    // No live layer: by the time the window shows a mark it is in the
+                    // graphite image, which is the whole of the pen-up mirror.
+                    val black = DitherFlatten.black(
+                        bandGraphite[row + x], 0, 0, bandInk[row + x], area.left + x, y,
+                    )
+                    bandOut[row + x] = if (black) DITHER_INK else 0
+                }
+            }
+            bitmap.setPixels(bandOut, 0, w, area.left, top, w, bottom - top)
+            top = bottom
+        }
+        if (rect == null) {
+            Log.i(TAG, "dither: whole page ${bitmap.width}x${bitmap.height} in ${(System.nanoTime() - t0) / 1_000_000} ms")
+        }
+    }
+
+    /** The dither image at the page's size, re-made when the page changes shape. */
+    private fun ensureDither(): Bitmap? {
+        val w = rasterPageWidth
+        val h = rasterPageHeight
+        if (w <= 0 || h <= 0) return null
+        val existing = ditherDisplay
+        if (existing != null && ditherW == w && ditherH == h) return existing
+        ditherW = w
+        ditherH = h
+        return Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8).also { ditherDisplay = it }
+    }
+
+    /** Rebuild the whole dither and present it — for the moments the *representation*
+     *  changed rather than the page: the panel opening under a page already drawn on. */
+    private fun refreshDitherDisplay() {
+        if (!ditherDisplayed) return
+        regenDither(null)
+        redrawCommitted()
     }
 
     /** A direct contact begins: nothing laid yet, nothing to clear, and the view's screen
@@ -1438,7 +1597,13 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // whether to arm the needle or disable the daemon, and that answer depends on this.
         // Idempotent, and a refusal is remembered — every focus gain runs this method.
         if (isRattaDevice()) {
+            val wasOpen = panel.isOpen
             panel.open(maxOf(screenW, width), maxOf(screenH, height))
+            // Opening it changes what the window shows (true greys → the dither), not what
+            // the page holds — so unlike every other change here, this one needs the
+            // committed layer rebuilt and presented. Once per session: the call is
+            // idempotent and every focus gain comes through here.
+            if (!wasOpen && panel.isOpen) refreshDitherDisplay()
         }
         inkOwner = this // process-global claim — a predecessor's late teardown now skips
         penApproachRearmPending = true
@@ -1471,6 +1636,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         liveAlphaH = 0
         batchCanvas = null
         batchBitmap = null
+        // No redraw: this runs at detach and at release, where the view has nothing left
+        // to show anyone. The dither simply stops being what [drawRasterLayers] answers.
+        ditherDisplay = null
+        ditherW = 0
+        ditherH = 0
     }
 
     override fun onAttachedToWindow() {

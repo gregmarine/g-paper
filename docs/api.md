@@ -224,10 +224,13 @@ raster page and `PENCIL` armed, `gpaper-ratta` opens the panel driver (`/dev/ebc
 vendor's own SELinux policy lets any app open — Supernote's Atelier draws the same way) and
 paints each mark's graphite straight into the panel, **with pressure live and nothing to see
 at pen-up**: the flecks on the panel are the flecks the bake lays, so the commit changes no
-pixel. **A lead's shade renders there as a *density* of black flecks rather than as a grey**
-— this panel's greys arrive a beat late and its black arrives at once, so a pale lead lays
-fewer black specks instead of paler ones, in the live preview and in the bake alike; the
-`Stroke` a host persists keeps the colour the artist picked, exactly as on every other engine.
+pixel. **While that panel is ours the raster page is *shown* dithered** — a blue-noise dither
+of the same flatten, so every pixel on the glass is black or white. This panel's greys arrive
+a beat late and its black arrives at once, so a dither is the one picture it can show
+truthfully under a moving nib; it is how Supernote's own Atelier draws, and it is why a pale
+lead there keeps its whole shape. **It is a display decision and goes no further**: the
+`Stroke` a host persists, the page image it reads back, and every cover and export
+(`renderToBitmap`) keep the artist's true greys, exactly as on every other engine.
 The firmware ink daemon is switched off while that pencil is armed, and the constant the
 one-tone daemon forced on the bake — the pressure 0.5 above — goes back to the hand's own
 pressure on this path; it still applies wherever the daemon is what previews. (The upright
@@ -240,7 +243,8 @@ none, and the small native library it now carries for those syscalls ships insid
 geometry, a stripped `.so` — the pencil keeps the firmware needle preview and one line says
 so in logcat (`GPaperRatta`: `panel: direct …` / `panel: needle …`). Two known edges of this
 first release: a fleck laid over a *template* line previews over white and darkens a little
-at the bake, and live **rubbing** still goes through the ordinary raster path.
+at the bake, the template itself is not dithered with the page, and live **rubbing** still
+goes through the ordinary raster path.
 
 The images are a layer *over* the paper (white + template still draw under them), so the
 eraser clears to transparent rather than painting white. Format is ARGB_8888; about

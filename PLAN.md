@@ -2047,6 +2047,99 @@ to ours — what is borrowed is the *shape of the ladder*, how much paler each r
 one below, which is what a hand judges when it picks a shade. Whether our own grain at 0.51
 looks like a `#999999` lead is a question for the walk.
 
+**Third walk (2026-09-19, Nomad): the shade must stay a shade — the DISPLAY is what
+dithers.** The density landed cleanly under the nib. It was still wrong, and the artist's
+words say why in one line: *"Atelier uses greyscale colours; this just leaves less graphite
+down, so shade 13 looks like a bug."* A density is a change to the **mark**; what the second
+walk was chasing is a fault in how the panel **shows** one, and the two must not be traded
+for each other. The panel read-back was right — Atelier sends the panel nothing but black
+pixels — and the conclusion drawn from it was wrong: Atelier **dithers** a grey stroke into
+an even pattern of black dots (its own Floyd–Steinberg/Atkinson ditherers), so a light
+stroke keeps its whole shape and reads as a flat light grey. We thinned the grain instead.
+
+**The user's decision:** the pencil stays grey in the data; on the direct path **the display
+is a blue-noise dither of the flattened page**, live and at pen-up alike, so every displayed
+pixel is black or white — both of which land on the panel's first frame — and the live
+preview and the pen-up mirror agree pixel for pixel.
+
+What changed.
+
+- **Shade-as-density is reverted on Ratta.** `RattaPencilInk` and its test are gone, the
+  `pencilInk` override with them: the pencil is the core's own answer on every path — the
+  lead's colour, alpha-graded, anti-aliased, density 1 — and `contactInk` is that. The
+  `PencilInk` seam and `GraphiteGrain`'s density dial stay (tested, harmless, and unused by
+  anything shipped): the seam is how an engine says how the pencil must be drawn on its
+  glass, and this engine no longer needs to say anything. `bakePressure` / `bakeTilt` are
+  untouched, and `GraphiteGrainPinTest` never moved.
+- **`Dither` + `BlueNoise64`** (core `geometry/`, pure, 11 tests): a 64 × 64 void-and-cluster
+  threshold matrix, every value 0…255 exactly sixteen times, tiled over the page, and
+  `black(grey, x, y)`. Position-keyed and stateless, which is the whole point — two
+  renderers looking at the same grey at the same page pixel always answer the same.
+  `DITHER_GAMMA` (1.0) is the one knob for a walk, documented as such: Atelier's light
+  shades read darker than linear, so the ladder a hand judges may not be the ladder the
+  arithmetic gives, and that is not a thing to guess at from a desk.
+- **A display seam in core, nothing public.** `drawCommittedContent(canvas, forDisplay)` —
+  true from the window record and the software fallback, **false from `renderToBitmap`**, so
+  covers and exports stay the artist's true greys — splits its raster half into
+  `drawRasterLayers(canvas, forDisplay)`. And `onRasterPixelsChanged(rect)` (null = the whole
+  page) fires after **every** raster mutation and **before** the redraw that presents it:
+  the stroke bake, a `loadStrokes` or `addStrokes` bake, `loadPageRaster`, each
+  `swapPageRaster` patch, every erase batch, `clear` and `clearForContentSwap`. It is the
+  engine's own news, unlike `PaperListener.onRasterChanged`, which is deliberately silent
+  for changes the host made itself. `rasterPageWidth`/`rasterPageHeight` come out of
+  `ensureRaster` as the one definition of the page's size.
+- **`DitherFlatten`** (Ratta, pure, 7 tests): the per-pixel flatten — white paper, graphite,
+  the live alpha in the lead's colour, ink through `DARKEN` — and `Dither` over it, in **one
+  function both halves call**, because two copies of this arithmetic would drift apart on a
+  panel rather than in a test. Its last test is the mirror itself: for four leads, four page
+  greys, three inks, seven alphas and sixteen positions, the live half's answer and the
+  display half's answer (reading the graphite image the bake will have left, modelled as the
+  `SRC_OVER` the flecks composite with) are the same black-and-white picture, pixel for
+  pixel.
+- **`RattaPaperView`'s two halves.** The live one keeps its flatten and sends
+  `LEVEL_BLACK` / `LEVEL_WHITE` per pixel instead of a `RattaPanelTone` level. The display
+  one is a page-sized `ALPHA_8` `ditherDisplay`, rebuilt over exactly the rects
+  `onRasterPixelsChanged` names, in 256 K-pixel horizontal bands so a whole-page rebuild
+  allocates a megabyte rather than the page's four (the ms is logged); `drawRasterLayers`
+  draws it with a black paint **instead of** the two rasters while the panel is open on a
+  raster page, and defers to the base everywhere else. It is **dropped rather than cleared**
+  when the page goes, because the committed display list holds its own reference to it and
+  blanking one in place would wipe the panel a frame before the next page lands — the same
+  courtesy the base extends to the page images.
+- **`RattaPanelTone` stays** with its test and a KDoc saying no live pixel goes through it
+  any more. It is a measurement, and the only record of one; black and white are also the
+  two greys it maps without argument, so nothing it says has been contradicted.
+
+**Deviations from the brief, and why**
+
+1. **The dither compares `grey/255 < (threshold + 0.5)/256`, not `grey < threshold`.** The
+   matrix holds every value 0…255, so under the plain form a page of **pure black** comes out
+   with sixteen white pixels in every 64 × 64 tile — visible speckle in a black pen's ink, and
+   the one thing a dither must never do to an end. The integer form makes both ends exact and
+   leaves a flat grey within half a percent of `grey/255` white.
+2. **`onRasterPixelsChanged` takes a nullable rect** (null = the whole page), which the
+   brief's own "a null/whole-page call" allows, rather than a `Rect` plus a second entry.
+3. **The erase fires it per rubbed batch, not at the progress/finalize redraws.** The pixels
+   move in `eraseRasterAlong`; the redraw is throttled and the hand is not, and a cadence
+   that presents every fourth batch still has to present a page that is right about all four.
+   Same rects, strictly earlier.
+4. **A `pageMode` flip drops the dither but presents nothing.** The brief asks for a redraw;
+   the base's setter is a content swap, whose whole point is that the pixels hold until the
+   host loads the new page. A redraw there would blank the panel a frame early — the bug
+   0.1.25's "dropped, not erased" rule exists to prevent. The **panel opening** does
+   rebuild and present (`refreshDitherDisplay`), because that one changes how the page is
+   shown rather than what it holds.
+5. **`compositeIntoRaster` announces one rect for the batch** (the union of the marks'
+   bounds), where the *host's* news is one per run of each mark. The host's rects pay for a
+   before-image, where the diagonal matters; this one pays for a repaint of empty pixels.
+
+**What only a device can answer:** whether the dithered page reads as the greys the artist
+picked (and so whether `DITHER_GAMMA` needs bending); whether a dithered *window* under a
+dithered *panel* is as invisible at pen-up as the arithmetic says; how a page of dots looks
+on the panel's own waveform after a full refresh, next to Atelier's; whether the whole-page
+rebuild stays under a page turn's budget on a Nomad and a Manta (it is logged); and what a
+pen, a rubber and a lasso look like on a page shown this way.
+
 **Still unwalked:** every number above is a starting value. The device gate at the head of
 this phase is open.
 

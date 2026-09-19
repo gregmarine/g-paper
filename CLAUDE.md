@@ -109,35 +109,44 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   `allow appdomain rga_device chr_file { open ioctl map … }`, proved from an `untrusted_app`
   on a Nomad and a Manta), one byte per pixel of 4-bit grey in frame 0, shown by one
   `HTEINK_IOC_DISPAREA` (`0x48545701`, mode 7, flag 1 — Atelier's own call). So the raster
-  pencil paints `GraphiteGrain`'s flecks into the panel itself: sixteen greys, pressure and
-  tilt back, and **no change at pen-up**, because what the bake lays is what is already
+  pencil paints `GraphiteGrain`'s flecks into the panel itself: the lead's own shade,
+  pressure back, and **no change at pen-up**, because what the bake lays is what is already
   there. **(1) The window is never invalidated mid-stroke on that path.** The compositor
   rewrites frame 0 from the window every ~0.2–1.4 s regardless, and a frame presented
   mid-stroke is that copy — *older than the dabs just painted*, which it overwrites; the
   panel only refreshes when someone asks, so with no frames the preview simply stands.
-  **(2) Every live pixel goes through `RattaPanelTone`**, the measured compositor
-  grey→level table (irregular bands, level 9 never produced, identical on both devices) —
-  that is what makes the pen-up recompose a no-op instead of every mark settling a shade a
-  beat after it is drawn. **(3) The daemon is full-screen-disabled while that pencil is
-  armed**, from the same tool push that would have armed the needle, or it paints its one
-  flat grey over the grain. The physics behind the whole thing: **a solid grey dab lands
-  black and lightens toward its target** (the 16-grey waveform passes through black) while
-  **black flecks land at once** — so a scatter is the one thing this panel can preview
-  truthfully, and a pencil is a scatter. `probe-ebc/README.md` holds every number; the
+  **(2) The live pixel and the displayed pixel are decided by ONE pure function at the same
+  page coordinates** (`DitherFlatten` — see (4)) — that is what makes the pen-up recompose a
+  no-op instead of every mark settling a shade a beat after it is drawn. It was
+  `RattaPanelTone`, the measured compositor grey→level table (irregular bands, level 9 never
+  produced, identical on both devices), while the panel was still being sent greys; that
+  table stays as the record of a measurement nothing else holds. **(3) The daemon is
+  full-screen-disabled while that pencil is armed**, from the same tool push that would have
+  armed the needle, or it paints its one flat grey over the grain. The physics behind the
+  whole thing: **a solid grey dab lands black and lightens toward its target** (the 16-grey
+  waveform passes through black) while **black flecks land at once** — so a scatter of black
+  is the one thing this panel can preview truthfully, a pencil is a scatter, and a dither is
+  how a *grey* one becomes black. `probe-ebc/README.md` holds every number; the
   fallback when the driver is unavailable is 0.1.40's needle, one log line, no host change.
-  **(4) On that path a pencil's shade is a DENSITY of black flecks, live and baked — grey
-  pixels are never sent to the panel by the pencil.** The first walk made the flecks opaque
-  and the black lead stopped trailing; the pale leads did not, because the fault was the
-  *grey*, not the alpha. Atelier's own frame, read back, settles it: a light-grey stroke is
-  **3401 stroke pixels, every one level 0** — its sixteen shades are sixteen densities of one
-  ink. So `GraphiteGrain.of(…, density)` scales the **coverage** and nothing else, which makes
-  a thinned mark an *ordered subset* of the full one (`catches` weighs a fixed per-site toss
-  against the coverage), and `PencilInk(color, opaque, density)` — asked per stroke through
-  `CanvasPaperView.pencilInk(color)` — carries the answer to every pencil render on an engine,
-  so a page can never mix two. `RattaPencilInk` fits Atelier's measured ladder
-  (`1 − 0.85·(luma/221)^1.5`, floor 0.15, white ≥ 224 staying the full-density lightener). The
-  **stroke's stored colour never moves**: this is a rendering decision belonging to one panel,
-  and BOOX, the generic engine and Paintsprout keep the alpha-graded pencil at density 1.
+  **(4) The pencil stays GREY in the page image; on that path the window and the panel show a
+  blue-noise DITHER of the flatten, live and at pen-up — so no grey pixel ever reaches the
+  panel from the pencil, and covers and exports stay true grey.** The read-back was right
+  (Atelier sends the panel level 0 and nothing else) and the conclusion drawn from it was
+  wrong: Atelier **dithers** a grey stroke into an even pattern of black dots, so a light
+  stroke keeps its whole shape and reads as a flat light grey. The second walk instead thinned
+  the grain — shade as fleck *density* — which lands cleanly under the nib and is still wrong,
+  because **a density changes the MARK and the fault is in how the panel SHOWS one**
+  (*"Atelier uses greyscale colours; this just leaves less graphite down, so shade 13 looks
+  like a bug"*). The fix belongs to the display and stays there: `Dither` over `BlueNoise64`
+  (pure, position-keyed, stateless — so two renderers looking at the same grey at the same page
+  pixel always agree), `DitherFlatten` as the **one** per-pixel flatten+dither both halves call,
+  and a core seam that keeps it off the data — `drawRasterLayers(canvas, forDisplay)`, false
+  from `renderToBitmap`, plus `onRasterPixelsChanged(rect)` firing after every raster mutation
+  and **before** the redraw that presents it. Its ends are exact by construction (`grey/255 <
+  (threshold+0.5)/256`, not `grey < threshold`, or pure black would speckle). `DITHER_GAMMA` is
+  the one knob and is 1 until a hand says otherwise. `PencilInk` and `GraphiteGrain`'s density
+  dial stay as an unused seam; the stroke's stored colour never moved through any of this, and
+  BOOX, the generic engine and Paintsprout were never touched.
 - **A live preview may lay a fleck only where the bake will put one — which makes
   `GraphiteGrain`'s PREFIX the contract, not the whole (Phase 28).** `of(points, …,
   prefix = true)` returns an exact ordered prefix of the finished stroke's grain, so a

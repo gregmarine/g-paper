@@ -12,13 +12,22 @@ import kotlin.math.roundToInt
  * not linear anywhere — the steps are 12, 12, 8, 12, 12, 8, 12, 16, 20, 8, 8, 12, 8, 32 wide,
  * and **level 9 is never produced at all** (168–187 lands on 10).
  *
- * Why it matters that the mapping is *this* one: the live pencil paints levels straight into
+ * Why it mattered that the mapping is *this* one: the live pencil paints levels straight into
  * the panel, and a moment later the compositor rewrites the same pixels from the window,
  * unasked. If the window's grey maps to the level that was painted, that rewrite is a no-op
  * on the panel and the mark simply stays. If it maps one level off, every mark quietly shifts
  * tone a beat after it is drawn — which reads as the ink settling, and is the exact failure
- * the direct path exists to avoid. So every live pixel goes through [level] and the mirror is
- * invisible by construction.
+ * the direct path exists to avoid.
+ *
+ * **No live pixel goes through this table any more** (Phase 28, the third walk). The panel is
+ * now sent a *dither* of the page — black or white and nothing between, both of which land on
+ * its first frame — and the window is drawn the same way, so the two agree by arithmetic
+ * ([DitherFlatten]) rather than by a table. Black and white are also the two greys this table
+ * maps without argument, so nothing it says has been contradicted.
+ *
+ * It stays because it is a **measurement**, and the only record of one: what the compositor
+ * does to a grey is a fact about this firmware that cost a read-back of the driver's own
+ * frames on two devices to learn, and the next question asked of this panel will want it.
  */
 internal object RattaPanelTone {
 
