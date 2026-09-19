@@ -132,7 +132,9 @@ class MainActivity : Activity() {
             val mode = intent.getIntExtra("mode", -1)
             if (mode >= 0) bands(mode, intent.getIntExtra("frame", 0), intent.getIntExtra("flag", 0),
                 intent.getIntExtra("v0", 0), intent.getIntExtra("v1", 15))
-            // --ez dump true writes every mapped frame to the cache dir 2 s later (after the
+            // --ez refresh true: can an ordinary app ask the framework's EinkManager for a full refresh?
+        if (intent.getBooleanExtra("refresh", false)) ui.postDelayed({ tryScreenRefresh() }, 3000)
+        // --ez dump true writes every mapped frame to the cache dir 2 s later (after the
             // paint), for adb pull + offline viewing: what the driver holds, frame by frame.
             if (intent.getBooleanExtra("dump", false))
                 ui.postDelayed({ dumpFrames() }, intent.getIntExtra("dumpAt", 2500).toLong())
@@ -237,6 +239,23 @@ class MainActivity : Activity() {
         // Frame 0 as it is right now — a sample says whether the driver keeps the screen here.
         val sample = (0 until 8).map { String.format("%02x", m.get((it * frameBytes / 8).toInt()).toInt() and 0xFF) }
         say("  frame0 samples: ${sample.joinToString(" ")}")
+    }
+
+    private fun tryScreenRefresh() {
+        val r = runCatching {
+            val sm = Class.forName("android.os.ServiceManager")
+            val binder = sm.getMethod("getService", String::class.java).invoke(null, "eink") as android.os.IBinder
+            val stub = Class.forName("android.os.IEinkManager\$Stub")
+            val mgr = stub.getMethod("asInterface", android.os.IBinder::class.java).invoke(null, binder)
+            val sigs = mgr.javaClass.declaredMethods.map { "${it.name}(${it.parameterTypes.joinToString { t -> t.simpleName }})" }.sorted()
+            Log.i(TAG, "IEinkManager methods: " + sigs.joinToString(" | "))
+            val methods = mgr.javaClass.methods.filter { it.name == "screenRefresh" }
+            val m = methods.firstOrNull() ?: error("no screenRefresh; have ${mgr.javaClass.methods.map { it.name }.distinct()}")
+            val args = m.parameterTypes.map { t -> when (t) { java.lang.Boolean.TYPE -> false; Integer.TYPE -> 0; else -> null } }
+            m.invoke(mgr, *args.toTypedArray())
+            "screenRefresh(${m.parameterTypes.joinToString { it.simpleName }}) invoked ok"
+        }
+        say("eink refresh: " + r.getOrElse { "FAILED ${it.javaClass.simpleName}: ${it.message ?: it.cause?.message}" })
     }
 
     private fun dumpFrames() {

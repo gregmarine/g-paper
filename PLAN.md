@@ -2317,6 +2317,51 @@ reads, a known cost for a later phase (an asynchronous bake).** The temporary `s
 question (candidates: an automatic full refresh at page turn; the rubber through the panel).
 `ebc-maint` merged to `main`; 0.1.42 published.
 
+### Phase 29 — The raster page goes direct: rubber, pen, and the bake is the live layer (post-v0.1.0)
+**Status:** 🔄 In progress (opened 2026-09-19) · **Publishes:** 0.1.43 · branch `direct-raster`.
+Opened on the user's word after the 0.1.42 walk: *"I'd like to try to have the rubber go through
+the panel the way pencil does. And we should consider the same for pen. For the sketch face, it
+would be great to have all go through our own panel implementation."* And on the dense scribble's
+1.2 s pen-up: *"Async bake would be lovely if we can do it"* — answered here by something better
+than async: **the bake is the live layer.** SN-side this is a re-pin (maintenance), not an arc.
+
+**Design**
+- **`directRaster`** replaces `directPencil` as the gate: on a raster page with the panel open the
+  daemon is full-screen-disabled for **every** tool, and no firmware overlay, `pendingBake` or clear
+  ladder is ever involved on that page. Stroke-mode pages keep the firmware path untouched.
+- **The rubber, direct.** `eraseRasterAlong` already rubs the graphite raster per batch and
+  announces the rect; on the direct path each batch's rect is flattened + dithered and **posted to
+  the panel** (the same `toneAndPost` road, no live layer), and the throttled compositor redraw is
+  **not** used mid-sweep (`rasterEraseRedrawIntervalMs` → end-only on this path) — the panel shows
+  the rub as it happens, and one `redrawCommitted()` at the end of the sweep is the mirror. The
+  16 ms cadence stays for the needle fallback.
+- **The pen, direct.** A `PEN`-style contact (the gel pen, black, uniform width) previews through a
+  second page-sized alpha layer, `liveInk`: each event renders only the **new segment** (round
+  caps, so overlapping joins are exact) with `StrokeRenderer`'s pen path into the batch scratch,
+  merges it into `liveInk`, and posts the rect flattened as `drawCommittedContent` flattens —
+  graphite (⊕ liveGraphite) over white, then ink (⊕ liveInk) through `DARKEN`. Other styles on a
+  raster page (MARKER/FOUNTAIN/…, none offered by SN) may keep the needle for now, gated per style.
+- **The bake is the live layer.** At pen-up the direct pencil composites `liveGraphite` (alpha ×
+  the lead's colour) into the graphite raster with the **same integer SRC_OVER** `DitherFlatten`
+  uses — no second `GraphiteGrain.of`, no second `drawPoints` — plus the end cap, which the prefix
+  sweep never laid: `Sweep.finish(points)` returns the cap's flecks, laid into the live layer first
+  so the composite carries them. The pen likewise composites `liveInk`. This makes the mirror
+  exact by construction (the raster now holds exactly the pixels the panel showed) and removes the
+  whole-stroke recompute that cost a dense scribble ~1 s. Pinned by test: for every stroke in the
+  incremental harness, `Sweep` runs + `finish` == `of(points)`, and the integer composite of the
+  mask equals the flecks drawn one by one within ±1/255 per channel (the tolerance is documented;
+  the dither compare is what makes ±1 invisible except at a threshold boundary).
+- **Host contract unchanged:** `onRasterWillChange` per run before pixels move, `onStrokeCommitted`,
+  `onRasterChanged` after — the runs are still `RasterDirty.along`; the before-image reads stay
+  where they are. Undo/redo, `swapPageRaster`, `loadPageRaster` untouched.
+- Demo: the raster page's status head or log says `direct: pencil+pen+rubber`. `docs/api.md`
+  (Ratta section), `CLAUDE.md` (the Phase 28 bullets amended: every raster tool is direct; the bake
+  is the live layer) in the same commit.
+
+**Gate:** `./gradlew test` green; `:demo:assembleDebug`; the user's Nomad walk through SN's sketch
+face after the re-pin: rubber live under the nib, gel pen live, pencil pen-up on a dense scribble
+under ~300 ms, over-ink rubs unchanged (ink never erases), undo/redo, page turns; 0.1.43 published.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
