@@ -22,4 +22,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "g-paper"
-include(":gpaper-core", ":gpaper-onyx", ":gpaper-ratta", ":demo")
+include(":gpaper-core", ":gpaper-onyx", ":gpaper-ratta", ":demo", ":probe-ebc")
