@@ -19,6 +19,11 @@ import org.junit.Test
 class DitherFlattenTest {
 
     private val transparent = 0
+
+    /** The two bytes the band kernel writes — the display rebuild uses `ALPHA_8`'s own
+     *  opaque/clear, the idle clean the panel's black/white levels. */
+    private val ON: Byte = -1
+    private val OFF: Byte = 0
     private val black = 0xFF000000.toInt()
     private val white = 0xFFFFFFFF.toInt()
 
@@ -140,6 +145,111 @@ class DitherFlattenTest {
             }
         }
         assertTrue(compared > 5000)
+    }
+
+    // ── The band kernel: the same picture, a page at a time ─────────────────
+
+    @Test
+    fun `the band kernel is the per-pixel answer, pixel for pixel`() {
+        // The whole of the fast path's licence to exist. [DitherFlatten.band] hoists the
+        // blue-noise row, tables the gamma and writes the flatten out longhand to make a
+        // page turn under 100 ms instead of 500; none of that is allowed to change a
+        // single pixel, and a pixel changed here would show as a page that shifts tone the
+        // moment it is turned to.
+        val w = 71 // not a multiple of the 64-wide matrix, on purpose
+        val h = 37
+        val graphite = IntArray(w * h)
+        val ink = IntArray(w * h)
+        var seed = 0x5ee7
+        fun next(): Int {
+            seed = seed * 1103515245 + 12345
+            return seed ushr 8
+        }
+        for (i in 0 until w * h) {
+            // A real page: mostly bare paper, some opaque ink, plenty of part-covered
+            // flecks at every shade, and a few pixels with colour under zero alpha.
+            graphite[i] = when (next() % 5) {
+                0 -> 0
+                1 -> 0xFF000000.toInt() or (next() and 0xFFFFFF)
+                2 -> ((next() and 0xFF) shl 24) or (next() and 0xFFFFFF)
+                3 -> (next() and 0xFFFFFF)
+                else -> 0
+            }
+            ink[i] = when (next() % 6) {
+                0 -> 0xFF000000.toInt()
+                1 -> ((next() and 0xFF) shl 24) or (next() and 0xFFFFFF)
+                else -> 0
+            }
+        }
+        // An offset origin, an output stride wider than the band, and a non-zero offset:
+        // the whole-page rebuild writes the bitmap's own padded rows, so all three are
+        // shapes the caller really uses.
+        val x0 = 813
+        val y0 = 251
+        val stride = w + 5
+        val offset = stride * 2 + 3
+        val out = ByteArray(offset + stride * h)
+        DitherFlatten.band(
+            graphite, true, ink, true, x0, y0, w, h, out, offset, stride, ON, OFF,
+        )
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val expected = DitherFlatten.black(
+                    graphite[y * w + x], 0, 0, ink[y * w + x], x0 + x, y0 + y,
+                )
+                assertEquals(
+                    "pixel ($x, $y)",
+                    if (expected) ON else OFF,
+                    out[offset + y * stride + x],
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `an absent layer is not read, and bare paper is white`() {
+        // A pencil page has no ink image at all, and most of a page has nothing on either
+        // layer. Both must be answered without touching the array that is not there — the
+        // arrays below are deliberately full of black, so a kernel that read one would
+        // paint the page solid.
+        val w = 64
+        val h = 8
+        val poison = IntArray(w * h) { 0xFF000000.toInt() }
+        val blank = IntArray(w * h)
+        val out = ByteArray(w * h)
+        DitherFlatten.band(poison, false, poison, false, 0, 0, w, h, out, 0, w, ON, OFF)
+        assertTrue(out.all { it == OFF })
+        DitherFlatten.band(blank, true, poison, false, 0, 0, w, h, out, 0, w, ON, OFF)
+        assertTrue(out.all { it == OFF })
+        // And a band whose pixels are all transparent is the same answer as no band.
+        DitherFlatten.band(blank, true, blank, true, 0, 0, w, h, out, 0, w, ON, OFF)
+        assertTrue(out.all { it == OFF })
+    }
+
+    @Test
+    fun `the band kernel agrees with itself whatever the banding`() {
+        // A whole page is rebuilt in horizontal bands and a rect in one; the seam between
+        // two bands is where a row-keyed threshold would go wrong, and it would look like
+        // a faint stripe across the page rather than like a bug.
+        val w = 40
+        val h = 32
+        val graphite = IntArray(w * h) { (0xFF000000.toInt() or (it * 7 and 0xFFFFFF)) }
+        val ink = IntArray(w * h)
+        val whole = ByteArray(w * h)
+        DitherFlatten.band(graphite, true, ink, false, 5, 9, w, h, whole, 0, w, ON, OFF)
+        val banded = ByteArray(w * h)
+        var top = 0
+        while (top < h) {
+            val bottom = minOf(top + 7, h)
+            val rows = bottom - top
+            val g = IntArray(w * rows)
+            System.arraycopy(graphite, top * w, g, 0, w * rows)
+            DitherFlatten.band(
+                g, true, ink, false, 5, 9 + top, w, rows, banded, top * w, w, ON, OFF,
+            )
+            top = bottom
+        }
+        assertTrue(whole.contentEquals(banded))
     }
 
     /** [src] at [srcAlpha] over [dst], unpremultiplied — what the bake leaves in the page

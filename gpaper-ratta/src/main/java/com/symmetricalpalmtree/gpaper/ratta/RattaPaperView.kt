@@ -172,6 +172,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
          *  (`ALPHA_8` takes its colour from the paint). */
         const val DITHER_INK = 0xFF000000.toInt()
 
+        /** The same two pixels as bytes — what the band kernel writes, and what an
+         *  `ALPHA_8` bitmap's own rows hold. */
+        const val DITHER_ON: Byte = -1 // 0xFF
+        const val DITHER_OFF: Byte = 0
+
         /**
          * Overlay-clear retry ladder (overlay law 2): a clear issued in the wake of a
          * pen-lift lands inside the daemon's stroke-finalization window and is eaten,
@@ -289,6 +294,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 ditherDisplay = null
                 ditherW = 0
                 ditherH = 0
+                // Anything posted against the old page goes with it: a rebuild of pixels
+                // that are gone, and a clean of a halo that is no longer on the panel.
+                removeCallbacks(ditherRebuild)
+                ditherCoalescer.reset()
+                cancelIdleClean(forget = true)
                 // The page's mode is one of [directPencil]'s preconditions — a host
                 // switching a pencil page between raster and stroke changes which thing
                 // draws the live ink, and the base's setter knows nothing of the firmware.
@@ -489,6 +499,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     override fun redrawCommitted() {
+        // A whole-page dither rebuild is posted and this frame would present the page
+        // half-built (or, after a content swap, blank). The runnable rebuilds and then
+        // redraws — one present, of one correct picture. See [DitherCoalescer].
+        if (ditherCoalescer.deferRedraw) return
         if (!firmware) {
             super.redrawCommitted()
             return
@@ -872,6 +886,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         toneScreenRect.set(rect)
         toneScreenRect.offset(contactScreenLoc[0], contactScreenLoc[1])
         panel.post(toneScreenRect, toneLevels, w)
+        // Every rect this path drives partially is a rect nothing ever drives properly —
+        // remember it for the idle clean (see [EbcClean] and [runIdleClean]).
+        if (cleanRect.isEmpty) cleanRect.set(rect) else cleanRect.union(rect)
     }
 
     /**
@@ -891,6 +908,33 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         val right = rect.right.coerceAtMost(bitmap.width)
         val bottom = rect.bottom.coerceAtMost(bitmap.height)
         if (right <= left || bottom <= top) return false
+        val offset = (top - rect.top) * w + (left - rect.left)
+        bitmap.getPixels(into, offset, w, left, top, right - left, bottom - top)
+        return true
+    }
+
+    /**
+     * [readRaster] for the band kernel: the same pixels, but a layer with no image at all
+     * is answered with `false` and [into] is **not touched**.
+     *
+     * The zero-fill [readRaster] does is a kindness to a caller that reads the array
+     * without asking; here it is a page-sized write of nothing on every rebuild, for the
+     * ink layer of every pencil page there has ever been. [DitherFlatten.band] takes the
+     * flag instead. The fill stays for a layer whose image does not cover the whole band —
+     * a page smaller than the view — because those pixels really are blank paper.
+     */
+    private fun readRasterBand(layer: RasterLayer, rect: Rect, into: IntArray): Boolean {
+        val bitmap = rasterFor(layer) ?: return false
+        val w = rect.width()
+        val h = rect.height()
+        val left = rect.left.coerceAtLeast(0)
+        val top = rect.top.coerceAtLeast(0)
+        val right = rect.right.coerceAtMost(bitmap.width)
+        val bottom = rect.bottom.coerceAtMost(bitmap.height)
+        if (right <= left || bottom <= top) return false
+        val covers = left == rect.left && top == rect.top &&
+            right == rect.right && bottom == rect.bottom
+        if (!covers) java.util.Arrays.fill(into, 0, w * h, 0)
         val offset = (top - rect.top) * w + (left - rect.left)
         bitmap.getPixels(into, offset, w, left, top, right - left, bottom - top)
         return true
@@ -962,7 +1006,16 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private var bandGraphite = IntArray(0)
     private var bandInk = IntArray(0)
     private var bandOut = IntArray(0)
+    private var bandBytes = ByteArray(0)
     private val bandRect = Rect()
+
+    /** The page's own rows for a whole-page rebuild, and the buffer that lands them in the
+     *  bitmap in one call rather than a million `Int`s through `setPixels`. */
+    private var ditherBytes: ByteArray? = null
+    private var ditherBuffer: java.nio.ByteBuffer? = null
+
+    /** Which whole-page rebuilds are pending, and which redraws wait for them. */
+    private val ditherCoalescer = DitherCoalescer()
 
     /** Whether the window is showing the dither rather than the page images themselves. */
     private val ditherDisplayed: Boolean
@@ -1004,16 +1057,36 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun onRasterPixelsChanged(rect: Rect?) {
         if (!ditherDisplayed) return
         if (rect == null) {
+            // A page arriving or leaving: either way the halo the idle clean remembers
+            // belongs to pixels that are gone.
+            cancelIdleClean(forget = true)
             if (rasterFor(RasterLayer.GRAPHITE) == null && rasterFor(RasterLayer.INK) == null) {
+                ditherCoalescer.onPageGone()
+                removeCallbacks(ditherRebuild)
                 ditherDisplay = null
                 ditherW = 0
                 ditherH = 0
                 return
             }
-            regenDither(null)
+            // Deferred, and coalesced: a two-raster page is two of these calls back to
+            // back, and rebuilding on each is half a second of a Nomad's time thrown away
+            // plus a frame showing graphite with no ink. See [DitherCoalescer].
+            if (ditherCoalescer.onWholePage() == DitherCoalescer.Action.SCHEDULE_WHOLE) {
+                post(ditherRebuild)
+            }
             return
         }
-        regenDither(rect)
+        // A rect stays synchronous: it precedes a present that is already on its way, and
+        // one deferred would be a mark that appears a frame late.
+        if (ditherCoalescer.onRect() == DitherCoalescer.Action.REBUILD_RECT) regenDither(rect)
+    }
+
+    /** The posted whole-page rebuild: build it once, then present it once. */
+    private val ditherRebuild = Runnable {
+        if (!ditherCoalescer.takeScheduled()) return@Runnable
+        if (!ditherDisplayed) return@Runnable
+        regenDither(null)
+        redrawCommitted()
     }
 
     /**
@@ -1022,6 +1095,21 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * In horizontal bands, so the scratch a page-wide rebuild needs is a megabyte rather
      * than the page's own four: a band at a time is also how the cost stays predictable on
      * the one call that has a deadline — a page turn, where the artist is waiting.
+     *
+     * **The whole page is the path that had to be fast** (2026-09-19): 494–551 ms measured
+     * on a Nomad, and two of them per page open. *Where* that half-second went has not been
+     * measured — no profile of this loop on a device exists, and the split between the
+     * arithmetic and Skia is a guess until one does. What could be said is that four things
+     * around it were doing avoidable work: a call per pixel into [DitherFlatten], a
+     * blue-noise lookup per pixel, a page-sized zero-fill for an ink layer that does not
+     * exist on a pencil page, and `setPixels`, which hands Skia two and a half million
+     * `Int`s to take one alpha byte from each. All four are gone — the per-pixel work is
+     * [DitherFlatten.band]'s and the whole-page pass writes the bitmap's **own rows** as
+     * bytes and lands them with a single `copyPixelsFromBuffer` — and the same flatten costs
+     * 4.4 ms on a desktop JVM, which bounds the arithmetic without settling anything about
+     * ART. **The log line above is what says by how much**, and the target it is judged
+     * against is 100 ms. A rect still goes through `setPixels`: `ALPHA_8` has no sub-rect
+     * byte entry, and a stroke's bounds is not where the half-second was.
      */
     private fun regenDither(rect: Rect?) {
         val bitmap = ensureDither() ?: return
@@ -1029,36 +1117,91 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         val area = Rect(rect ?: full)
         if (!area.intersect(full) || area.isEmpty) return
         val t0 = System.nanoTime()
+        val whole = area == full
         val w = area.width()
         val bandH = (DITHER_BAND_PX / w).coerceIn(1, area.height())
-        if (bandGraphite.size < w * bandH) {
-            bandGraphite = IntArray(w * bandH)
-            bandInk = IntArray(w * bandH)
-            bandOut = IntArray(w * bandH)
-        }
+        ensureBandScratch(w * bandH)
+        val stride = if (whole) bitmap.rowBytes else w
+        val out = (if (whole) ensureDitherBytes(stride * bitmap.height) else ensureBandBytes(w * bandH))
+            ?: return
         var top = area.top
         while (top < area.bottom) {
             val bottom = minOf(top + bandH, area.bottom)
-            bandRect.set(area.left, top, area.right, bottom)
-            readRaster(RasterLayer.GRAPHITE, bandRect, bandGraphite)
-            readRaster(RasterLayer.INK, bandRect, bandInk)
-            for (y in top until bottom) {
-                val row = (y - top) * w
-                for (x in 0 until w) {
-                    // No live layer: by the time the window shows a mark it is in the
-                    // graphite image, which is the whole of the pen-up mirror.
-                    val black = DitherFlatten.black(
-                        bandGraphite[row + x], 0, 0, bandInk[row + x], area.left + x, y,
-                    )
-                    bandOut[row + x] = if (black) DITHER_INK else 0
-                }
+            val h = bottom - top
+            ditherBand(area, top, bottom, out, if (whole) top * stride else 0, stride, DITHER_ON, DITHER_OFF)
+            if (!whole) {
+                val n = w * h
+                for (i in 0 until n) bandOut[i] = if (out[i] != DITHER_OFF) DITHER_INK else 0
+                bitmap.setPixels(bandOut, 0, w, area.left, top, w, h)
             }
-            bitmap.setPixels(bandOut, 0, w, area.left, top, w, bottom - top)
             top = bottom
         }
-        if (rect == null) {
-            Log.i(TAG, "dither: whole page ${bitmap.width}x${bitmap.height} in ${(System.nanoTime() - t0) / 1_000_000} ms")
+        if (whole) {
+            val buffer = ditherBuffer ?: return
+            buffer.rewind()
+            bitmap.copyPixelsFromBuffer(buffer)
+            Log.i(
+                TAG,
+                "dither: whole page ${bitmap.width}x${bitmap.height} in " +
+                    "${(System.nanoTime() - t0) / 1_000_000} ms",
+            )
         }
+    }
+
+    /**
+     * One band of [area] — `[top, bottom)` — read out of the two page images and flattened
+     * into [out] at [offset], [stride] bytes to a row, as [inked] / [blank].
+     *
+     * The one place either display-side pass reads the page: the rebuild writes the dither
+     * image's own rows, the idle clean writes the panel's levels, and they must be the same
+     * picture or the clean would drive something the window does not show.
+     */
+    private fun ditherBand(
+        area: Rect,
+        top: Int,
+        bottom: Int,
+        out: ByteArray,
+        offset: Int,
+        stride: Int,
+        inked: Byte,
+        blank: Byte,
+    ) {
+        bandRect.set(area.left, top, area.right, bottom)
+        val hasGraphite = readRasterBand(RasterLayer.GRAPHITE, bandRect, bandGraphite)
+        val hasInk = readRasterBand(RasterLayer.INK, bandRect, bandInk)
+        DitherFlatten.band(
+            bandGraphite, hasGraphite, bandInk, hasInk,
+            area.left, top, area.width(), bottom - top,
+            out, offset, stride, inked, blank,
+        )
+    }
+
+    private fun ensureBandScratch(n: Int) {
+        if (bandGraphite.size < n) {
+            bandGraphite = IntArray(n)
+            bandInk = IntArray(n)
+            bandOut = IntArray(n)
+        }
+    }
+
+    /** One band's worth of flattened bytes — the rect path's target, before it is expanded
+     *  into `Int` alpha for `setPixels`. */
+    private fun ensureBandBytes(n: Int): ByteArray {
+        if (bandBytes.size < n) bandBytes = ByteArray(n)
+        return bandBytes
+    }
+
+    /** The page's own rows, and the buffer that lands them in the bitmap in one call. Sized
+     *  from `rowBytes`, not from the width, because an `ALPHA_8` row may be padded and
+     *  `copyPixelsFromBuffer` copies the bitmap's bytes, padding and all. */
+    private fun ensureDitherBytes(n: Int): ByteArray? {
+        if (n <= 0) return null
+        val existing = ditherBytes
+        if (existing != null && existing.size == n) return existing
+        val bytes = ByteArray(n)
+        ditherBytes = bytes
+        ditherBuffer = java.nio.ByteBuffer.wrap(bytes)
+        return bytes
     }
 
     /** The dither image at the page's size, re-made when the page changes shape. */
@@ -1074,11 +1217,94 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     /** Rebuild the whole dither and present it — for the moments the *representation*
-     *  changed rather than the page: the panel opening under a page already drawn on. */
+     *  changed rather than the page: the panel opening under a page already drawn on.
+     *  Through the same deferral as a load, so the two can never both run. */
     private fun refreshDitherDisplay() {
         if (!ditherDisplayed) return
-        regenDither(null)
-        redrawCommitted()
+        if (ditherCoalescer.onWholePage() == DitherCoalescer.Action.SCHEDULE_WHOLE) {
+            post(ditherRebuild)
+        }
+    }
+
+    // ── The idle clean: the halo the partial updates leave (2026-09-19) ──────
+    //
+    // The live path drives only the pixels that changed, and the pen-up mirror finds them
+    // already right and drives nothing — so nothing ever re-drives the pixels *around* a
+    // mark, and the e-ink halo each partial update leaves behind accumulates. The bake this
+    // path replaced was one compositor post over the whole stroke area, which re-drove all
+    // of it; that is the ghosting the first walk of 0.1.41 saw. So [cleanRect] remembers
+    // every rect the direct path has posted, and a hand that stops writing for
+    // [EbcClean.IDLE_MS] gets that rect driven properly — the same picture, through a full
+    // waveform ([EbcPanel.clean]). Never while the pen is down: that ioctl blocks ~40 ms
+    // and would fight the live path for the same pixels.
+
+    /** Union, in view coordinates, of every rect the direct path has posted since the last
+     *  clean. Empty means there is nothing to clean. */
+    private val cleanRect = Rect()
+    private val cleanScreenRect = Rect()
+    private val cleanScreenLoc = IntArray(2)
+    private var cleanLevels = ByteArray(0)
+    private var cleanArmed = false
+    private val cleanRunnable = Runnable { runIdleClean() }
+
+    /** (Re-)start the idle timer. Every contact end calls this; a contact start cancels. */
+    private fun armIdleClean() {
+        if (!panel.isOpen || cleanRect.isEmpty) return
+        removeCallbacks(cleanRunnable)
+        cleanArmed = true
+        postDelayed(cleanRunnable, EbcClean.IDLE_MS)
+    }
+
+    /** Stop the idle timer — [forget] when the pixels it was remembering are gone (a page
+     *  change, the panel closing) rather than merely postponed (a pen-down). */
+    private fun cancelIdleClean(forget: Boolean = false) {
+        if (cleanArmed) {
+            removeCallbacks(cleanRunnable)
+            cleanArmed = false
+        }
+        if (forget) cleanRect.setEmpty()
+    }
+
+    private fun runIdleClean() {
+        cleanArmed = false
+        if (!panel.isOpen || cleanRect.isEmpty) return
+        // Never under the pen, and never over a pass still in flight. Both re-arm: the
+        // halo does not go away by itself.
+        if (contactDirect || panel.cleaning) {
+            armIdleClean()
+            return
+        }
+        val area = Rect(cleanRect)
+        val pageW = minOf(rasterPageWidth, width)
+        val pageH = minOf(rasterPageHeight, height)
+        if (!area.intersect(0, 0, pageW, pageH) || area.isEmpty) {
+            cleanRect.setEmpty()
+            return
+        }
+        val t0 = System.nanoTime()
+        val w = area.width()
+        val h = area.height()
+        if (cleanLevels.size < w * h) cleanLevels = ByteArray(w * h)
+        val bandH = (DITHER_BAND_PX / w).coerceIn(1, h)
+        ensureBandScratch(w * bandH)
+        // The display rebuild's own flatten, with no live layer — by the time a clean runs
+        // every mark is in the page images, and the panel must be driven to exactly the
+        // picture the window is showing.
+        var top = area.top
+        while (top < area.bottom) {
+            val bottom = minOf(top + bandH, area.bottom)
+            ditherBand(area, top, bottom, cleanLevels, (top - area.top) * w, w, LEVEL_BLACK, LEVEL_WHITE)
+            top = bottom
+        }
+        getLocationOnScreen(cleanScreenLoc)
+        cleanScreenRect.set(area)
+        cleanScreenRect.offset(cleanScreenLoc[0], cleanScreenLoc[1])
+        if (panel.clean(cleanScreenRect, cleanLevels, w)) {
+            cleanRect.setEmpty()
+            Log.i(TAG, "clean: $area in ${(System.nanoTime() - t0) / 1_000_000} ms")
+        } else {
+            armIdleClean()
+        }
     }
 
     /** A direct contact begins: nothing laid yet, nothing to clear, and the view's screen
@@ -1406,6 +1632,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (isStylus && firmware) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    // The hand is back on the paper: the idle clean stands down (its ioctl
+                    // blocks ~40 ms and would fight the live path), keeping the rect it has
+                    // accumulated for the next quiet moment.
+                    cancelIdleClean()
                     // No-hover backstop for the pen-approach re-arm (too late for this
                     // stroke's paint, but heals the session for the rest).
                     rearmOnPenApproach()
@@ -1501,6 +1731,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             contactLassoDrag = false
             contactInking = false
             contactDirect = false
+            // Every contact re-arms the clean; it fires only if the hand stays off the
+            // paper, and does nothing at all unless the direct path has posted something.
+            armIdleClean()
         }
         return handled
     }
@@ -1630,6 +1863,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  Idempotent, and never re-opened for this view — a dead view has nothing to preview. */
     private fun releasePanel() {
         clearLivePreview()
+        // Before the fd goes: nothing may be left waiting on a panel that is about to
+        // close, and nothing may be left holding back a redraw for a rebuild that will
+        // never run (deferRedraw would swallow every frame this view ever presents again).
+        cancelIdleClean(forget = true)
+        removeCallbacks(ditherRebuild)
+        ditherCoalescer.reset()
         panel.close()
         liveAlpha = null
         liveAlphaW = 0
@@ -1641,6 +1880,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         ditherDisplay = null
         ditherW = 0
         ditherH = 0
+        ditherBytes = null
+        ditherBuffer = null
+        cleanLevels = ByteArray(0)
     }
 
     override fun onAttachedToWindow() {

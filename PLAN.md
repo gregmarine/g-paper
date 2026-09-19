@@ -2161,6 +2161,94 @@ through the panel, the ink pen through the panel, the template dithered with the
 provisional 50 px start replaced by a landing-free grain. 0.1.41 to mavenLocal by the user's hand;
 merge on the user's word.
 
+**Maintenance (2026-09-19) — the first walk inside NSE · Sketch, and the two things it
+found.** Publishes **0.1.42**, branch `ebc-maint`; unwalked, both halves are the desk's
+answer to the artist's words and the device gate is open again.
+
+*The pencil first and the ink a moment later.* A page open cost **two** whole-page dither
+rebuilds — the host loads graphite and ink as two back-to-back `loadPageRaster` calls, each
+announcing the whole page and each presenting afterwards — and the engine logged **494–551
+ms** for one of them on a Nomad, so a page turn was about a second with a frame in the
+middle showing a page that had graphite and no ink. Two fixes, one for each half of that
+sentence. **Coalesced:** a whole-page (`rect == null`) rebuild is now deferred to a posted
+runnable and the second call folds into the first (`DitherCoalescer`, pure, 5 tests), and
+`redrawCommitted` is **held back** while one is pending so the present happens once, after
+the rebuild — the base's own load presents would otherwise show the page half-built, or,
+after a content swap dropped the image, blank. Per-rect rebuilds stay synchronous: a stroke
+bake, an erase batch and an undo patch each precede a present already on its way, and a rect
+arriving while a whole page is pending is simply subsumed. **And made tight:**
+`DitherFlatten.band` is the bulk form of `black` — the blue-noise row fetched once per row
+(`BlueNoise64.row`) and turned into the compare's right-hand side there, the gamma curve a
+256-entry table rather than a call, the flatten written out longhand so nothing is called per
+pixel, a band with nothing on either layer filled in one go, and bare paper — most of most
+pages — costing one test of two alpha bytes. A layer with no image at all is answered with a
+flag instead of a page-sized zero-fill (`readRasterBand`), which is every pencil page's ink.
+The whole-page pass writes the bitmap's **own rows** as bytes and lands them with a single
+`copyPixelsFromBuffer`, where `setPixels` was handing Skia two and a half million `Int`s to
+extract one alpha byte from each; a rect still goes through `setPixels`, because `ALPHA_8`
+has no sub-rect byte entry and a stroke's bounds is not where the half-second was. The
+kernel is pinned against `black` pixel for pixel over a synthetic band, over every banding,
+and on an absent layer whose array is deliberately full of black. **On a desktop JVM the
+whole 1404 × 1872 page flattens in 4.4 ms** (5.5 ms through the per-pixel `black`, 0.9 ms
+when the page is empty) — which bounds the arithmetic and settles nothing about ART, because
+*where* the Nomad's half-second went was never profiled. Four things around the loop were
+doing avoidable work and all four are gone; the Nomad's own log line is what decides whether
+the target of **under 100 ms** was met, and if it did not, the next levers are the bands in
+parallel across the four cores and reading the page premultiplied.
+
+*More ghosting than before.* The live path drives only the pixels that changed, and the
+pen-up mirror finds them already right and drives nothing — which is the mirror working, and
+is also why nothing ever re-drives the pixels *around* a mark. The bake this path replaced
+was one compositor post over the whole stroke area, and that post re-drove all of it. So
+there is an **idle clean**: `RattaPaperView` keeps a union of every rect the direct path has
+posted, and a hand that stays off the paper for `EbcClean.IDLE_MS` (1500 ms, re-armed by
+every contact, cancelled by pen-down, a page change and the panel closing) gets that rect
+re-flattened from the page images exactly as the display rebuild does — no live layer,
+through the same `DitherFlatten.band`, so the panel is driven to precisely the picture the
+window is showing — and driven properly: `EbcPanel.clean` writes the levels on the **0…60
+scale** (`EbcClean.SCALE`) and displays them with **mode 4** (`EbcClean.MODE`), a full
+waveform over every pixel in the rect. It runs on the panel thread, and unlike `post` it
+writes its pixels there too: the ioctl blocks ~40 ms, the caller is an idle timer, and
+blocking a hand that has come back to the paper is the one thing this path must not do.
+Three guards: a clean never starts while a contact is live or one is already in flight; a
+`post` landing between the queue and the ioctl stands it down (the live path owns the panel
+again); and the frame is put **back** on the 0…15 scale after the drive, so a later mode-7
+union that takes in pixels neither of its rects wrote never reads a ×4 value. The mode, the
+scale and the idle time sit together in `EbcClean` with a KDoc saying what they are — the
+first two the probe's measurement, the third a guess at when a hand has stopped — because
+all three are the artist's to move.
+
+**Deviations from the brief, and why**
+
+1. **`copyPixelsFromBuffer` is one call for the page, not one per band.** It copies the
+   *whole* bitmap from the buffer's position, so there is no per-band form of it; the
+   whole-page pass therefore fills the page's own rows — sized from `rowBytes`, not from the
+   width, because an `ALPHA_8` row may be padded and the call copies the bitmap's bytes,
+   padding and all — and lands them in one call at the end. A rect keeps `setPixels`.
+2. **The clean borrows the caller's levels rather than copying them.** The rect can be the
+   whole page, and a page-sized copy per clean is four megabytes this path has no deadline
+   worth paying for; `EbcPanel.cleaning` is the contract instead, and the caller re-arms
+   rather than refilling while it is true. `close()` joins the panel thread for up to 250 ms
+   when a clean had started, because that is the one place in the class that would follow a
+   `munmap` into a signal rather than an error code.
+3. **The frame is restored to 0…15 after the clean.** Not in the brief, and the reason is
+   the union in `EbcPanel.drain`: two disjoint rects queued behind a blocked ioctl are sent
+   as one, and the pixels between them are displayed from whatever frame 0 holds. After a
+   clean that would be a ×4 value — a white pixel at 60 rather than 15. The restore closes
+   the window deterministically; the compositor's own rewrite would close it within a second
+   or so anyway.
+4. **`probe-ebc/README.md` still says of modes 4 / 8 / 9 that they "draw something else with
+   the same data … not decoded".** The 0…60 scale and the ~40 ms block this clean is built
+   on are the brief's measurement, made after that line was written; the line has not been
+   touched, and the first walk of the clean is what decides which of the two the README
+   should end up saying.
+
+**Still unwalked:** whether the page turn is now under a page turn's budget on a Nomad and a
+Manta (the ms is still logged); whether a mode-4 clean 1500 ms after the hand stops is
+invisible, welcome, or a flash that wants a different idle time; whether the halo it lifts is
+the halo the artist saw; and whether a clean of a large union is quick enough that nobody
+notices it at all.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

@@ -1,5 +1,6 @@
 package com.symmetricalpalmtree.gpaper.ratta
 
+import android.graphics.Point
 import android.graphics.Rect
 import android.os.Handler
 import android.os.HandlerThread
@@ -54,6 +55,10 @@ internal class EbcPanel {
          *  offset 0 of the mapping, which is why nothing here ever adds a frame offset. */
         const val FRAME = 0
 
+        /** How long [close] waits for an idle clean that had already started before it
+         *  unmaps the frame under it — the ioctl blocks ~40 ms, so this is generous. */
+        const val CLEAN_JOIN_MS = 250L
+
         /** How many frames the driver keeps — the length the firmware's own `initEbc` maps,
          *  and this path's fallback if a shorter mapping is refused. */
         const val FRAMES = 5
@@ -103,6 +108,24 @@ internal class EbcPanel {
     private val drainRect = Rect()
 
     private var rotated = false
+
+    /** Bumped by every [post]: the live path's claim on the panel, which is what an idle
+     *  [clean] checks before and after its blocking ioctl. Written under [lock] on the UI
+     *  thread, read on the panel thread — volatile rather than synchronized there because
+     *  a stale read can only make the clean skip a pass it would have been right to make. */
+    @Volatile
+    private var postSeq = 0
+
+    /** The levels an idle clean is showing, borrowed from the caller (see [clean]) — never
+     *  copied, because the rect can be the whole page and this path has no deadline worth
+     *  four megabytes. Only ever read while [cleaning] is true. */
+    private var cleanLevels: ByteArray? = null
+    private var cleanStride = 0
+
+    /** True from [clean] until its runnable is done with [cleanLevels]. */
+    @Volatile
+    var cleaning = false
+        private set
 
     /**
      * Open the driver, read the geometry, map frame 0 and start the display thread.
@@ -184,7 +207,14 @@ internal class EbcPanel {
             pending.setEmpty()
         }
         handler?.removeCallbacksAndMessages(null)
-        thread?.quitSafely()
+        val worker = thread
+        worker?.quitSafely()
+        // An idle clean writes into the mapping ON the panel thread, which is the one
+        // thing in this class that would follow a munmap into a signal rather than an
+        // error code. Queued work is already gone; this waits out a pass that had started.
+        if (cleaning) runCatching { worker?.join(CLEAN_JOIN_MS) }
+        cleanLevels = null
+        cleaning = false
         thread = null
         handler = null
         map?.let { EbcNative.munmap(it, mapBytes) }
@@ -226,6 +256,9 @@ internal class EbcPanel {
             }
         }
         synchronized(lock) {
+            // Every post is the live path taking the panel back; a clean queued or running
+            // behind one stands down rather than driving pixels the hand has moved past.
+            postSeq++
             if (hasPending) pending.union(left, top, right, bottom)
             else {
                 pending.set(left, top, right, bottom)
@@ -235,6 +268,110 @@ internal class EbcPanel {
                 scheduled = true
                 handler?.post(drain)
             }
+        }
+    }
+
+    /**
+     * Drive [screenRect] properly: show the 4-bit [levels] in it — the same layout [post]
+     * takes, [stride] bytes to a row, screen coordinates — through [EbcClean.MODE], which
+     * puts every pixel in the rect through a full waveform instead of patching the ones
+     * that changed.
+     *
+     * **This is the halo pass, not a display path.** The live pencil's partial updates
+     * leave one behind every rect they touch and nothing ever comes back for it (see
+     * [EbcClean]). It runs on [thread] like every other ioctl, and unlike [post] it writes
+     * its pixels there too: the call blocks about 40 ms and the caller is an idle timer,
+     * so there is nothing to be gained by writing first and everything to be lost by
+     * blocking a hand that has come back to the paper.
+     *
+     * [levels] is **borrowed, not copied** — the caller must leave it alone until
+     * [cleaning] goes false. Returns false when the panel is shut, or when a clean is
+     * already in flight.
+     */
+    fun clean(screenRect: Rect, levels: ByteArray, stride: Int): Boolean {
+        if (!open) return false
+        if (cleaning) return false
+        val h = handler ?: return false
+        val screenW = if (rotated) panelH else panelW
+        val screenH = if (rotated) panelW else panelH
+        val left = screenRect.left.coerceIn(0, screenW)
+        val top = screenRect.top.coerceIn(0, screenH)
+        val right = screenRect.right.coerceIn(0, screenW)
+        val bottom = screenRect.bottom.coerceIn(0, screenH)
+        if (right <= left || bottom <= top) return false
+        // The rect as clipped, plus where the caller's rows start — the levels array is
+        // indexed against the UNCLIPPED rect, exactly as post() indexes it.
+        val area = Rect(left, top, right, bottom)
+        val origin = Point(screenRect.left, screenRect.top)
+        cleanLevels = levels
+        cleanStride = stride
+        cleaning = true
+        val seq = postSeq
+        h.post { runClean(area, origin, seq) }
+        return true
+    }
+
+    /** [clean]'s body, on the panel thread: write the rect at [EbcClean.SCALE], drive it,
+     *  then put the frame back on the scale the live path reads. */
+    private fun runClean(area: Rect, origin: Point, seq: Int) {
+        try {
+            val m = map ?: return
+            val levels = cleanLevels ?: return
+            if (!open) return
+            val f = fd
+            if (f < 0) return
+            // A contact began while this was queued: the live path owns the panel again
+            // and nothing here is worth 40 ms of its time.
+            if (postSeq != seq) return
+            val stride = cleanStride
+            for (sy in area.top until area.bottom) {
+                val row = (sy - origin.y) * stride - origin.x
+                for (sx in area.left until area.right) {
+                    val level = levels[row + sx].toInt() and 0x0F
+                    m.put(
+                        EbcGeometry.panelIndex(rotated, panelW, panelH, sx, sy),
+                        (level * EbcClean.SCALE).toByte(),
+                    )
+                }
+            }
+            EbcGeometry.panelRect(
+                rotated, panelH, area.left, area.top, area.right, area.bottom, panelRect,
+            )
+            EbcDisplayArg.pack(
+                left = panelRect[0],
+                top = panelRect[1],
+                right = panelRect[2],
+                bottom = panelRect[3],
+                bufOffset = 0,
+                mode = EbcClean.MODE,
+                flag = EbcDisplayArg.FLAG_ATELIER,
+                into = argBytes,
+            )
+            argBuffer.rewind()
+            argBuffer.put(argBytes)
+            val ret = EbcNative.ioctl(f, EbcDisplayArg.REQ_DISPAREA, argBuffer)
+            if (ret < 0) {
+                Log.w(TAG, "panel: clean failed (${EbcNative.strerror(-ret)})")
+                return
+            }
+            // Frame 0 holds the 0…60 scale now, and everything else that reads it — the
+            // live path's mode 7, and any union of two rects that takes in pixels neither
+            // of them wrote — reads 0…15. So put it back. Not if the pen has landed
+            // meanwhile: those pixels are the hand's now, and the compositor rewrites this
+            // frame every second or so regardless.
+            if (postSeq != seq) return
+            for (sy in area.top until area.bottom) {
+                val row = (sy - origin.y) * stride - origin.x
+                for (sx in area.left until area.right) {
+                    m.put(
+                        EbcGeometry.panelIndex(rotated, panelW, panelH, sx, sy),
+                        levels[row + sx],
+                    )
+                }
+            }
+        } finally {
+            cleanLevels = null
+            cleaning = false
         }
     }
 

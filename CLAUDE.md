@@ -147,6 +147,39 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   the one knob and is 1 until a hand says otherwise. `PencilInk` and `GraphiteGrain`'s density
   dial stay as an unused seam; the stroke's stored colour never moved through any of this, and
   BOOX, the generic engine and Paintsprout were never touched.
+  **(5) Partial updates leave a halo nothing comes back for, so an IDLE CLEAN drives the
+  ground they covered properly (0.1.42).** The live path updates only the pixels that
+  changed and the pen-up mirror finds them already right and drives nothing — that *is* the
+  mirror working, and it is also why the e-ink halo around every small update accumulates
+  where the bake this path replaced re-drove the whole stroke area in one post (the artist,
+  first walk of 0.1.41 inside NSE · Sketch: *more ghosting than before*). So `RattaPaperView`
+  keeps a union of every rect it has posted and, `EbcClean.IDLE_MS` after the last pen-up,
+  re-flattens it from the page images **through the same `DitherFlatten.band` the display
+  rebuild uses** — the panel must be driven to exactly the picture the window is showing, or
+  the clean becomes a second opinion — and `EbcPanel.clean` sends it on the **0…60 scale**
+  with **mode 4**, a full waveform over every pixel. **It may never run while the pen is
+  down**: that ioctl blocks ~40 ms and the rect would fight the live path for the same
+  pixels, so pen-down cancels it, every contact re-arms it, and a `post` landing between the
+  queue and the ioctl stands it down. Frame 0 goes **back** to 0…15 afterwards, because
+  `drain` unions two rects into one display call and the pixels between them are shown from
+  whatever the frame holds. The mode, the scale and the idle time live together in
+  `EbcClean`: the first two are the probe's measurement, the third is a guess, and all three
+  are the artist's to move.
+  **(6) A whole-page rebuild is DEFERRED and the present waits for it (0.1.42).** A
+  two-raster page is two `loadPageRaster` calls, each announcing the whole page and each
+  presenting after — two ~500 ms rebuilds on a Nomad with a frame between them showing
+  graphite and no ink (*the pencil first and the ink a moment later*). So `rect == null`
+  posts a runnable, the second call folds into the first, and `redrawCommitted` is held back
+  while one is pending (`DitherCoalescer`, pure, JVM-tested) — one rebuild, one present, of
+  one correct picture. **Per-rect rebuilds stay synchronous**: each precedes a present that
+  is already on its way, and a rect deferred is a mark that appears a frame late; a rect
+  arriving while a whole page is pending is subsumed by it. Anything that cancels the posted
+  runnable — the panel closing, a `pageMode` flip — must `reset()` the coalescer too, or
+  every frame the view ever presents again is swallowed by `deferRedraw`. And the flatten
+  itself is bulk work now (`DitherFlatten.band`, pinned against the per-pixel `black` pixel
+  for pixel): the blue-noise row fetched once per row, the gamma a table, an absent layer a
+  flag rather than a page-sized zero-fill, and the page's own rows landed with one
+  `copyPixelsFromBuffer` instead of two and a half million `Int`s through `setPixels`.
 - **A live preview may lay a fleck only where the bake will put one — which makes
   `GraphiteGrain`'s PREFIX the contract, not the whole (Phase 28).** `of(points, …,
   prefix = true)` returns an exact ordered prefix of the finished stroke's grain, so a

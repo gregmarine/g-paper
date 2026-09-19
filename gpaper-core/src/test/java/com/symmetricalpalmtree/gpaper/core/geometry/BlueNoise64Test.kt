@@ -48,6 +48,25 @@ class BlueNoise64Test {
     }
 
     @Test
+    fun `a row slice is the row`() {
+        // The band renderer fetches a row once and indexes it per pixel; if that ever
+        // stopped being threshold(x, y) the page would dither differently from the live
+        // preview painted on the panel, which is the one thing the direct path cannot
+        // survive.
+        val row = ByteArray(BlueNoise64.SIZE)
+        for (y in -130 until 200) {
+            BlueNoise64.row(y, row)
+            for (x in 0 until 512) {
+                assertEquals(
+                    "row $y, x $x",
+                    BlueNoise64.threshold(x, y),
+                    row[x and (BlueNoise64.SIZE - 1)].toInt() and 0xFF,
+                )
+            }
+        }
+    }
+
+    @Test
     fun `threshold wraps around on negative coordinates`() {
         // A page pixel is never negative, but a rect padded outward by a fleck radius at
         // the page edge is — and an index that threw or read the wrong cell there would

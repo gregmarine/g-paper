@@ -18,6 +18,21 @@ object BlueNoise64 {
     fun threshold(x: Int, y: Int): Int =
         TABLE[((y and (SIZE - 1)) shl 6) or (x and (SIZE - 1))].toInt() and 0xFF
 
+    /**
+     * Copy the [SIZE] thresholds of page row [y] into [into] — the row slice a band
+     * renderer wants (2026-09-19 maintenance).
+     *
+     * [threshold] is the right shape for one pixel and the wrong one for a million: a
+     * whole-page pass asks for the same 64 bytes across every row of the page, and a
+     * lookup per pixel is a mask, a shift, an or and a bounds-checked read where a row
+     * fetched once is one bounds-checked read. Same table, same values — `row(y)[x and 63]`
+     * is `threshold(x, y)` by construction, and a JVM test says so.
+     */
+    fun row(y: Int, into: ByteArray) {
+        val from = (y and (SIZE - 1)) shl 6
+        TABLE.copyInto(into, 0, from, from + SIZE)
+    }
+
     private val TABLE: ByteArray = byteArrayOf(
         120, -44, -85, 82, -125, -80, -112, -19, 111, 57, -4, 88, -80, 122, 52, 90, 112, -71, 66, -29, -100, 15, -74, -114, 7, 109, -35, 84, 18, -96, 41, -44, -81, 50, -54, 36, 88, 16, 61, 123, 41, 83, 115, -41, -101, -15, 78, -52, 109, -67, 62, 6, -4, -61, -117, 12, -66, 90, 58, 4, -123, -100, -22, -68,
         2, 68, -26, 23, -5, 49, 72, 24, -83, 13, -67, 38, 67, -56, 18, -38, -119, 6, -49, 31, 121, -39, 69, 95, -27, -103, 62, 127, -25, 107, -16, 62, 120, -110, 102, -26, -124, -46, -102, -75, -35, 4, -117, 50, 27, 126, -75, 41, -104, 26, -20, -110, -82, 80, -45, 100, -8, -111, 118, -16, -62, 95, 48, -90,
