@@ -7,7 +7,7 @@ everything on this page is the `consumer-smoke/` project at the repo root.
 
 ## Getting the artifacts
 
-Publishing is **mavenLocal-only** for 0.1.39. From a g-paper checkout:
+Publishing is **mavenLocal-only** for 0.1.41. From a g-paper checkout:
 
 ```sh
 ./gradlew publishToMavenLocal
@@ -17,9 +17,9 @@ This publishes three artifacts (plus sources jars), coordinates centralized in t
 `gradle.properties`:
 
 ```
-com.symmetricalpalmtree.gpaper:gpaper-core:0.1.39
-com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.39
-com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.39
+com.symmetricalpalmtree.gpaper:gpaper-core:0.1.41
+com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.41
+com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.41
 ```
 
 In the consuming app's `settings.gradle.kts`, add `mavenLocal()` to the dependency
@@ -41,7 +41,7 @@ registering an adapter on foreign hardware is harmless.
 
 ```kotlin
 dependencies {
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-core:0.1.39")
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-core:0.1.41")
 }
 ```
 
@@ -51,7 +51,7 @@ That's everything. No registration call needed — the generic engine is built i
 
 ```kotlin
 dependencies {
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.39")
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.41")
 }
 ```
 
@@ -64,6 +64,13 @@ No extra repo, no jetifier, no SDK — the module drives the Supernote firmware'
 directly over Binder. The engine's availability probe requires Supernote hardware **and** a
 reachable firmware ink binder; absent either, `GPaper.create` falls through to the next engine,
 so the same APK runs everywhere.
+
+Since 0.1.41 the AAR also carries one small native library (`libgpaper_ebc.so`, arm64-v8a) —
+the syscalls the raster pencil's direct panel preview needs, which have no platform API. **A
+consumer needs nothing for it**: no NDK, no packaging rule, no ABI filter; it rides inside the
+AAR like any other resource, and an app running on a non-arm64 device simply finds it missing
+and keeps the firmware preview. Only a build *of g-paper itself* needs the NDK (28.2.13676358)
+and CMake 3.22.1.
 
 ## BOOX (Onyx) consumer
 
@@ -128,7 +135,7 @@ Then the dependency and the registration call:
 
 ```kotlin
 dependencies {
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.39")
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.41")
 }
 ```
 

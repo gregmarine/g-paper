@@ -5,6 +5,8 @@ build/
 
 # Android
 local.properties
+# CMake/NDK build state (gpaper-ratta's panel pass-through, Phase 28)
+.cxx/
 captures/
 *.apk
 *.aab

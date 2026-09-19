@@ -60,6 +60,22 @@ import kotlin.math.sqrt
  * digitizer agree on, but the first 40 mm of a path is the first 40 mm of it whether four
  * more samples have arrived or four hundred.
  *
+ * ## The prefix invariant (Phase 28)
+ *
+ * **A prefix's flecks are the first N of the whole stroke's** — same coordinates, same
+ * darknesses, same order — which is what lets a live preview lay each fleck *once* and never
+ * move it again. `of(points.take(k), width, seed, prefix = true)` is an exact ordered prefix
+ * of `of(points, width, seed)` minus the whole's end cap, for every `k`.
+ *
+ * Two things were needed for that, and both are here rather than in the caller. [prefix]
+ * omits the **end cap**, because the dome at the lifting end is the tip of the lead and
+ * travels with the pen. And nothing may be decided from further ahead than the first
+ * [SEED_WINDOW_PX] of travel: the arrival trim already looked exactly that far
+ * (`2 × LANDING_TRIM_PX`), and the two filter seeds now look no further either — see
+ * [SEED_WINDOW_PX]. Until a prefix carries that much settled path, prefix mode returns
+ * nothing at all, because what it would lay is not yet decidable and a fleck laid in the
+ * wrong place cannot be taken back off a panel that was painted directly.
+ *
  * ## Tilt widens the mark, where the engine can supply it
  *
  * A real pencil laid over on its side draws with the flank of the lead instead of its point, and
@@ -336,6 +352,28 @@ object GraphiteGrain {
      */
     private const val LANDING_TRIM_PX = 25f
 
+    /**
+     * How far ahead of a stroke's start anything here is allowed to look, in px of arc —
+     * `2 × LANDING_TRIM_PX`, the reach the arrival trim already needed.
+     *
+     * The running filters are causal by construction ([TILT_SMOOTH_PX], [COVER_SMOOTH_PX],
+     * [TANGENT_SMOOTH_PX] all walk forward with the stations), but their **seeds** were not:
+     * each is the mean over the first window px of travel, and the darkness seed's window is
+     * 150 px. A seed read from 150 px ahead is a lookahead like any other — it makes the
+     * opening of a mark depend on path the pen has not travelled yet, so the same stroke
+     * renders one way while it is being drawn and another once it is finished. That never
+     * showed while every renderer drew the whole stroke at once; Phase 28's live panel
+     * preview draws prefixes, and a fleck already on the panel cannot be moved.
+     *
+     * So both seeds are capped here, in **both** modes — a prefix and a whole stroke must not
+     * take different paths through this file, or the invariant is a property of the caller
+     * rather than of the grain. The cost is that the darkness filter starts from the mean lean
+     * over the first 50 px instead of the first 150: a slightly different opening on strokes
+     * whose grip changes early, invisible on any stroke drawn at one angle, and nothing at all
+     * past the first filter window. (Phase 28. The alternative was a preview that lays nothing
+     * for the first 150 px of every stroke — a centimetre of dead hand on a 300 ppi panel.)
+     */
+    private const val SEED_WINDOW_PX = LANDING_TRIM_PX * 2f
 
     /**
      * Below this lean the mark does not widen at all. A pencil held "upright" is never at zero —
@@ -416,11 +454,19 @@ object GraphiteGrain {
      * The graphite [points] deposited at [width] px, seeded by [seed] (the stroke's stable
      * id — see the determinism note above). A single point is a tap: the lead touched down
      * and lifted, leaving a disc of grit rather than a line.
+     *
+     * With [prefix] set, [points] is a stroke **still under the pen** and what comes back is
+     * an exact ordered prefix of what the finished stroke will produce: no end cap, and
+     * nothing at all until the path has settled past [SEED_WINDOW_PX] (see the prefix
+     * invariant above). A caller drawing successive prefixes therefore draws each fleck once,
+     * from `count` of the previous call to `count` of this one, and never has to take one
+     * back — which is the whole point on a panel painted directly.
      */
-    fun of(points: List<StrokePoint>, width: Float, seed: Int): Grain {
+    fun of(points: List<StrokePoint>, width: Float, seed: Int, prefix: Boolean = false): Grain {
         if (points.isEmpty()) return EMPTY
         val base = (if (width < MIN_WIDTH_PX) MIN_WIDTH_PX else width) / 2f
-        return if (points.size == 1) tap(points[0], base, seed) else sweep(points, base, seed)
+        if (points.size == 1) return if (prefix) EMPTY else tap(points[0], base, seed)
+        return sweep(points, base, seed, prefix)
     }
 
     /**
@@ -607,7 +653,40 @@ object GraphiteGrain {
         return last
     }
 
-    private fun sweep(points: List<StrokePoint>, base: Float, seed: Int): Grain {
+    /** Arc length from the first point to `points[index]` (clamped to the path). */
+    private fun arcTo(points: List<StrokePoint>, index: Int): Float {
+        var reach = 0f
+        var i = 1
+        val last = min(index, points.size - 1)
+        while (i <= last) {
+            val a = points[i - 1]
+            val b = points[i]
+            reach += sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))
+            i++
+        }
+        return reach
+    }
+
+    /**
+     * Whether a prefix ending at these points has travelled far enough that everything the
+     * sweep decides from the path ahead is already decided — and decided the same way the
+     * finished stroke will decide it.
+     *
+     * Two conditions, each the exact reach of one lookahead. The **settled** arc is measured
+     * to the second-to-last point rather than the last, because every window here is walked
+     * with a `while (i < size …)` bound: a window that runs out of samples stops early and
+     * answers from a shorter stretch than the whole stroke will, which is precisely the
+     * disagreement to avoid. So the arrival chord and the landing trim need
+     * [SEED_WINDOW_PX] of settled path from the **start**, and the two filter seeds need
+     * another [SEED_WINDOW_PX] past wherever the arrival trim put the beginning.
+     */
+    private fun prefixDecidable(points: List<StrokePoint>, from: Int): Boolean {
+        val settled = arcTo(points, points.size - 2)
+        if (settled < SEED_WINDOW_PX) return false
+        return settled - arcTo(points, from) >= SEED_WINDOW_PX
+    }
+
+    private fun sweep(points: List<StrokePoint>, base: Float, seed: Int, prefix: Boolean): Grain {
         val out = Sink()
         var traveled = 0f
         var station = 0
@@ -618,10 +697,15 @@ object GraphiteGrain {
         // is seeded from where the stroke actually begins — otherwise the seeds are themselves
         // measured across the wobble they exist to be immune to.
         val dir = FloatArray(2)
-        chordDirection(points, 0, LANDING_TRIM_PX * 2f, dir)
+        chordDirection(points, 0, SEED_WINDOW_PX, dir)
         val from = landingEnd(points, dir[0], dir[1])
+        // A prefix that has not travelled far enough to decide these things the way the
+        // finished stroke will lays nothing: see [prefixDecidable].
+        if (prefix && !prefixDecidable(points, from)) return EMPTY
         val smoothing = 1f - exp(-TOOTH_PITCH_PX / TILT_SMOOTH_PX)
-        // Seeded from the mean lean over the smoothing window, never from the first sample.
+        // Seeded from the mean lean over the smoothing window (capped at SEED_WINDOW_PX so
+        // nothing is decided from further ahead than the arrival trim already looks), never
+        // from the first sample.
         //
         // Same transient as the travelled direction, and it shows up as a wedge instead of a hook.
         // A digitizer's tilt at the instant of touch-down is the least trustworthy reading it
@@ -631,9 +715,9 @@ object GraphiteGrain {
         // lead already laid over starts narrow and dark and flares out over the next few
         // millimetres: an arrowhead with a dense nub on the point, which is exactly as much like
         // graphite as it sounds.
-        var leanTilt = seedLean(points, from, TILT_SMOOTH_PX)
+        var leanTilt = seedLean(points, from, min(TILT_SMOOTH_PX, SEED_WINDOW_PX))
         val covering = 1f - exp(-TOOTH_PITCH_PX / COVER_SMOOTH_PX)
-        var coverTilt = seedLean(points, from, COVER_SMOOTH_PX)
+        var coverTilt = seedLean(points, from, min(COVER_SMOOTH_PX, SEED_WINDOW_PX))
         val turning = 1f - exp(-TOOTH_PITCH_PX / TANGENT_SMOOTH_PX)
         // Seed the travelled direction from a chord across the whole smoothing window, never from
         // the first pair of samples.
@@ -731,13 +815,17 @@ object GraphiteGrain {
             }
             traveled += segLen
         }
-        // A path shorter than one pitch never reaches a station; it still left graphite.
-        if (station == 0) return tap(points[from], base, seed)
-        // And the lifting end gets its dome too.
-        cap(
-            out, lastCx, lastCy, travelX, travelY, lastPress, lastLean, lastArc, lastHalf,
-            seed, station + 1, 1f,
-        )
+        // A path shorter than one pitch never reaches a station; it still left graphite —
+        // but a tap is not a prefix of a sweep, so prefix mode waits for the first station.
+        if (station == 0) return if (prefix) EMPTY else tap(points[from], base, seed)
+        // And the lifting end gets its dome too — except under the pen, where that end is
+        // the tip of the lead and has not come to rest anywhere yet.
+        if (!prefix) {
+            cap(
+                out, lastCx, lastCy, travelX, travelY, lastPress, lastLean, lastArc, lastHalf,
+                seed, station + 1, 1f,
+            )
+        }
         return out.grain()
     }
 

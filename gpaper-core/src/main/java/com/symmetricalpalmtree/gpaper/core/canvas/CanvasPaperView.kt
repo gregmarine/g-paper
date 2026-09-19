@@ -31,6 +31,7 @@ import com.symmetricalpalmtree.gpaper.core.Tool
 import com.symmetricalpalmtree.gpaper.core.engine.GPaper
 import com.symmetricalpalmtree.gpaper.core.geometry.EraseHitTest
 import com.symmetricalpalmtree.gpaper.core.geometry.GestureRecognizer
+import com.symmetricalpalmtree.gpaper.core.geometry.GraphiteGrain
 import com.symmetricalpalmtree.gpaper.core.geometry.LassoHitTest
 import com.symmetricalpalmtree.gpaper.core.geometry.RasterDirty
 import com.symmetricalpalmtree.gpaper.core.geometry.RasterErase
@@ -716,6 +717,18 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (layer == RasterLayer.GRAPHITE) graphiteRaster else inkRaster
 
     /**
+     * [layer]'s page image for a device engine that has to flatten the page itself —
+     * **read-only**, null when nothing has landed on that layer, and never to be held
+     * across a content swap (the images are dropped, not erased; see [graphiteRaster]).
+     *
+     * It exists for Ratta's direct panel preview (Phase 28), which must work out the grey a
+     * pixel is about to show — white, then graphite, then the live flecks, then ink through
+     * `DARKEN` — outside the window's own drawing, because on that path there is no frame.
+     * Everything else asks [drawCommittedContent] for the page and lets Canvas do it.
+     */
+    protected fun rasterFor(layer: RasterLayer): Bitmap? = raster(layer)
+
+    /**
      * [layer]'s page image, allocated if it is not there yet, or null when there is no
      * page to size it by: the page rect if the host set one, else the laid-out view. A
      * view asked to keep raster content before either is known has nowhere to put it, and
@@ -790,20 +803,27 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * digitizer reported, because in stroke mode that object is the host's data and the
      * host owns it.
      */
-    private fun bakePoints(stroke: Stroke): List<StrokePoint> {
-        val pts = stroke.points
+    private fun bakePoints(stroke: Stroke): List<StrokePoint> =
+        bakePoints(stroke.points, stroke.style)
+
+    /**
+     * [bakePoints]'s other half, for points that are not a [Stroke] yet: an engine drawing
+     * its own live preview of the stroke under the pen runs its samples through here, so
+     * the preview goes through exactly the seams the bake will and the two cannot drift.
+     */
+    protected fun bakePoints(points: List<StrokePoint>, style: StrokeStyle): List<StrokePoint> {
         // Identity by default, so nothing is copied on an engine that doesn't override
         // the seam. Raw bits rather than ==, so an unreported NaN pressure compares
         // equal to itself instead of faking a change and copying the whole polyline.
-        val differs = pts.any {
-            bakePressure(stroke.style, it.pressure).toRawBits() != it.pressure.toRawBits() ||
-                bakeTilt(stroke.style, it.tilt).toRawBits() != it.tilt.toRawBits()
+        val differs = points.any {
+            bakePressure(style, it.pressure).toRawBits() != it.pressure.toRawBits() ||
+                bakeTilt(style, it.tilt).toRawBits() != it.tilt.toRawBits()
         }
-        if (!differs) return pts
-        return pts.map {
+        if (!differs) return points
+        return points.map {
             it.copy(
-                pressure = bakePressure(stroke.style, it.pressure),
-                tilt = bakeTilt(stroke.style, it.tilt),
+                pressure = bakePressure(style, it.pressure),
+                tilt = bakeTilt(style, it.tilt),
             )
         }
     }
@@ -1466,6 +1486,32 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     /** The pending id, consumed — the next stroke starts fresh. */
     private fun takePendingStrokeId(): String = pendingStrokeId().also { pendingStrokeId = null }
 
+    /**
+     * The texture seed the stroke under the pen will be committed with — the same value
+     * [drawCommittedContent] and the raster bake will use for it, for the same reason the
+     * id is minted at contact start rather than at commit ([pendingStrokeId]).
+     *
+     * An engine previewing a textured style itself must seed from here, or its preview is
+     * a different stroke from the one that lands.
+     */
+    protected fun pendingStrokeSeed(): Int = pendingStrokeId().hashCode()
+
+    /**
+     * Lay the flecks of [grain] from index [from] onward onto [canvas] — the bake's own
+     * rasteriser, for an engine painting a live pencil preview of its own (Ratta's direct
+     * panel path, Phase 28). Same call the bake makes, same scratch paint, so the preview
+     * and the mark that commits are the same pixels.
+     */
+    protected fun drawPencilGrain(
+        canvas: Canvas,
+        grain: GraphiteGrain.Grain,
+        from: Int,
+        color: Int,
+        width: Float,
+    ) {
+        StrokeRenderer.drawPencilFlecks(canvas, grain, from, color, width, scratchPaint)
+    }
+
     // ── Pen-gesture recognizers (smart lasso / scribble erase) ───────────────
 
     /**
@@ -1636,6 +1682,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private fun appendDrawPoints(points: List<StrokePoint>) {
         if (exclusionRects.isEmpty()) {
             activePoints.addAll(points)
+            onLiveStrokeExtended(activePoints)
             return
         }
         for (p in points) {
@@ -1649,7 +1696,24 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 activePoints.add(p)
             }
         }
+        onLiveStrokeExtended(activePoints)
     }
+
+    /**
+     * The stroke under the pen has grown: [points] is everything captured for it so far,
+     * in order, and every call is a superset of the last until the contact ends.
+     *
+     * A no-op here, and not part of the host-facing surface — it exists for an engine whose
+     * live ink it draws **itself, outside the window**, and which therefore needs to know
+     * what to draw without the base presenting frames (Ratta's direct panel preview, Phase
+     * 28: the same flecks the bake will lay, painted straight into the panel driver). An
+     * engine that draws its live ink in [onDraw] ([rendersLiveStrokes]) needs nothing here,
+     * and neither does one whose firmware paints it.
+     *
+     * The list is the live capture buffer, valid for the duration of the call only — read
+     * it, never retain it. Called on the input thread that delivered the samples.
+     */
+    protected open fun onLiveStrokeExtended(points: List<StrokePoint>) {}
 
     /** Start a fresh eraser sweep: the next [eraseAlong] batch won't chain to the last. */
     protected fun beginEraseSweep() {

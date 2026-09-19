@@ -104,6 +104,41 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   only the un-layered half hears **nothing** of ink on purpose: its `readPageRaster(rect)`
   reads graphite, so forwarding an ink change would hand it the wrong before-image and its
   undo would paint graphite where ink was. Silence beats a corrupted history.
+- **On Supernote the pencil's live ink is ours, not the daemon's — and three rules keep it
+  honest (Phase 28, 0.1.41).** `/dev/ebc` is openable by any app (the vendor policy line
+  `allow appdomain rga_device chr_file { open ioctl map … }`, proved from an `untrusted_app`
+  on a Nomad and a Manta), one byte per pixel of 4-bit grey in frame 0, shown by one
+  `HTEINK_IOC_DISPAREA` (`0x48545701`, mode 7, flag 1 — Atelier's own call). So the raster
+  pencil paints `GraphiteGrain`'s flecks into the panel itself: sixteen greys, pressure and
+  tilt back, and **no change at pen-up**, because what the bake lays is what is already
+  there. **(1) The window is never invalidated mid-stroke on that path.** The compositor
+  rewrites frame 0 from the window every ~0.2–1.4 s regardless, and a frame presented
+  mid-stroke is that copy — *older than the dabs just painted*, which it overwrites; the
+  panel only refreshes when someone asks, so with no frames the preview simply stands.
+  **(2) Every live pixel goes through `RattaPanelTone`**, the measured compositor
+  grey→level table (irregular bands, level 9 never produced, identical on both devices) —
+  that is what makes the pen-up recompose a no-op instead of every mark settling a shade a
+  beat after it is drawn. **(3) The daemon is full-screen-disabled while that pencil is
+  armed**, from the same tool push that would have armed the needle, or it paints its one
+  flat grey over the grain. The physics behind the whole thing: **a solid grey dab lands
+  black and lightens toward its target** (the 16-grey waveform passes through black) while
+  **black flecks land at once** — so a scatter is the one thing this panel can preview
+  truthfully, and a pencil is a scatter. `probe-ebc/README.md` holds every number; the
+  fallback when the driver is unavailable is 0.1.40's needle, one log line, no host change.
+- **A live preview may lay a fleck only where the bake will put one — which makes
+  `GraphiteGrain`'s PREFIX the contract, not the whole (Phase 28).** `of(points, …,
+  prefix = true)` returns an exact ordered prefix of the finished stroke's grain, so a
+  direct-panel preview draws each fleck once and never moves it. Getting there needed the
+  file to be honest about lookahead: the running filters were always causal, but the two
+  filter **seeds** were means over the first 40 and 150 px of travel, and a seed read from
+  150 px ahead makes the opening of a mark depend on path the pen has not travelled yet.
+  Both are now capped at `SEED_WINDOW_PX` (50 px, the reach the arrival trim already
+  needed), in **both** modes — a prefix and a whole stroke must not take different paths
+  through the file, or the invariant belongs to the caller rather than to the grain. Below
+  that much settled travel prefix mode lays **nothing**: not yet decidable beats laid in the
+  wrong place when the paper cannot be repainted. **Anything that looks ahead is a lookahead
+  even when it is called a seed** — and the cost of this one was invisible for fifteen
+  releases because every renderer drew whole strokes.
 - **The raster eraser's mid-sweep cadence is PER ENGINE, because a redraw does not cost the
   same thing on two panels (Phase 19, 0.1.32).** `rasterEraseRedrawIntervalMs` is a
   `protected open val` the base reads in `throttledEraseRedraw`; `RASTER_ERASE_REDRAW_END_ONLY`

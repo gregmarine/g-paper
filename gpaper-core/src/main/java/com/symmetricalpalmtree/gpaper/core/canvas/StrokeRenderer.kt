@@ -105,13 +105,35 @@ internal object StrokeRenderer {
         seed: Int,
         paint: Paint,
     ) {
-        val grain = GraphiteGrain.of(points, width, seed)
-        if (grain.count == 0) return
+        drawPencilFlecks(canvas, GraphiteGrain.of(points, width, seed), 0, color, width, paint)
+    }
+
+    /**
+     * Put down the flecks of [grain] from index [from] onward — the bake's own rasteriser,
+     * reachable on its own so a live preview lays **the same pixels the bake will**.
+     *
+     * The bake calls it with `from = 0` for a whole stroke; Phase 28's Supernote panel
+     * preview calls it per batch with the count it has already laid, because
+     * [GraphiteGrain.of] with `prefix = true` guarantees those earlier flecks are exactly
+     * the ones already on the paper. One rasteriser, never two: a second one is a second
+     * answer to "what does this mark look like", and the pen-lift handoff is the moment
+     * the two would be compared.
+     */
+    fun drawPencilFlecks(
+        canvas: Canvas,
+        grain: GraphiteGrain.Grain,
+        from: Int,
+        color: Int,
+        width: Float,
+        paint: Paint,
+    ) {
+        if (from >= grain.count) return
+        resetPaint(paint, color, width)
         paint.strokeCap = Paint.Cap.ROUND
-        val packed = FloatArray(grain.count * 2)
+        val packed = FloatArray((grain.count - from) * 2)
         for (level in 0 until GraphiteGrain.LEVELS) {
             var n = 0
-            for (i in 0 until grain.count) {
+            for (i in from until grain.count) {
                 if (grain.level[i] != level) continue
                 packed[n++] = grain.xy[i * 2]
                 packed[n++] = grain.xy[i * 2 + 1]

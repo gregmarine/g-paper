@@ -1894,6 +1894,86 @@ little at pen-up; live rubbing through the panel and the ink pen are later phase
 Nomad and the Manta through the demo's raster page — light and hard, fast and slow, over ink, undo;
 no flash, no change at pen-up; 0.1.41 to mavenLocal by the user.
 
+**Landed** (2026-09-18, branch `ebc-live`, unwalked — the device gate above is still open).
+
+- **`gpaper-ratta` builds native code now.** `src/main/cpp/{CMakeLists.txt,ebc_jni.c}` →
+  `libgpaper_ebc.so` (arm64-v8a only), `ndkVersion 28.2.13676358` + cmake 3.22.1 in the module's
+  Gradle. Seven pass-through entries (open / close / ioctl-with-direct-ByteBuffer / mmap / munmap /
+  lastErrno / strerror), the probe's shapes, no shared code with `probe-ebc`. `EbcNative` guards
+  `System.loadLibrary` with `catch (Throwable)` and gates every call on `available`. Verified: the
+  `.so` is in `demo-debug.apk` and its symbols carry the `…gpaper.ratta.EbcNative` names.
+- **`EbcPanel`** (internal): fd + GETINFO geometry + mmap of frame 0 + a `HandlerThread`
+  ("gpaper-ebc") that owns every DISPAREA, unioning whatever queued while the previous ioctl
+  blocked. Pixels are written into the mapping on the **calling** thread before the rect is
+  queued — the display call only says "show what is there", and writing on the panel thread would
+  put the newest dab behind the current wait. Refusals are one `Log.w` and `isOpen` stays false.
+- **`RattaPanelTone`** (pure, 7 tests): the measured table, every boundary pinned from both sides,
+  level 9 proved unreachable. `levelOf` **rounds** the luma rather than truncating — the weights
+  sum to one, so a plain 188 grey comes back as 187.99998 and truncation would drop it a level at
+  exactly the boundary where a level changes.
+- **`EbcGeometry`** (pure, 8 tests) and **`EbcDisplayArg`** (pure, 5 tests): the rotation as a
+  bijection over a whole small panel, the turned rect's area and orientation, the 24-byte struct
+  byte for byte, and mode 7 / flag 1 / both request codes pinned as *found*, not chosen.
+- **`GraphiteGrain.of(…, prefix)`** (pure, 7 new tests): no end cap, nothing until the path has
+  settled past `2 × LANDING_TRIM_PX`, and every prefix of three synthetic strokes (straight,
+  curved-and-rolling, landing excursion) proved an exact ordered prefix of the whole at **every**
+  k. The decidability test is stated against the arc to the **second-to-last** point, because every
+  window in the file is walked with a `while (i < size …)` bound and a window that runs out of
+  samples answers from a shorter stretch than the whole stroke will.
+- **Core seams** (nothing public): `onLiveStrokeExtended(points)`, `rasterFor(layer)`,
+  `pendingStrokeSeed()`, a `bakePoints(points, style)` overload beside the `Stroke` one, and
+  `drawPencilGrain(canvas, grain, from, color, width)` onto the shared
+  `StrokeRenderer.drawPencilFlecks` — one rasteriser, the bake's, called with `from = 0` by the
+  bake and with the laid count by the preview.
+- **`RattaPaperView`**: `directPencil` (panel open ∧ raster ∧ PENCIL ∧ PEN), the daemon
+  full-screen-disabled for it from `applyToolToFirmware` / `rearmPenIfLive` / `setExclusionRects`,
+  a `pageMode` override so a mode change re-pushes, `bakePressure`/`bakeTilt` identity while the
+  panel is open, a page-sized live **alpha mask** + a grown-as-needed batch bitmap, per-batch
+  flatten (white → graphite → live flecks → ink by `DARKEN`) → tone → `panel.post`, and
+  `bakeAfterCommit` recording + presenting at once with no `pendingBake` for a direct contact.
+  Cancel, and a stroke consumed as a gesture, drop the live layer and re-tone the rect from the
+  page images alone.
+
+**Deviations from the design above, and why**
+
+1. **The two filter seeds are capped at 50 px for every caller, not only for prefixes.**
+   `seedLean`'s windows (40 px for width, **150 px** for darkness) are lookaheads, so the design's
+   "lays nothing until the arc passes `2 × LANDING_TRIM_PX`" was not on its own enough to make a
+   prefix agree with the whole. Two ways out: gate prefixes at 150 px instead — a centimetre of
+   dead hand at the start of every stroke, and short strokes never previewing at all — or cap the
+   seeds, which the brief's "make it prefix-safe by the same rule: decided from the first 50 px
+   only" authorises. Capped. **This moves the committed pencil very slightly on every engine**:
+   the darkness filter now starts from the mean lean over the first 50 px instead of the first
+   150. Invisible on a stroke drawn at one angle, and nothing at all past the first filter window,
+   but it is a change to an approved bake and the walk should be looked at with it in mind. All 35
+   existing `GraphiteGrainTest` cases still pass unchanged.
+2. **The live layer is a `ByteArray` alpha mask plus a small ARGB batch scratch**, not a
+   page-sized `ALPHA_8` bitmap. Same memory, same flecks, same renderer — but reading a rect back
+   out of an `ALPHA_8` bitmap rests on a Skia conversion (`getPixels` from A8 to N32) that nothing
+   here can verify without a device, and a silent wrong answer there is a preview that never
+   appears. The batch is rasterised into an ordinary ARGB bitmap, read with the plain call, and
+   composited into the mask with the `SRC_OVER` arithmetic a Canvas would have done.
+3. **`mmap` falls back to the whole five-frame length** if mapping frame 0 alone is refused. The
+   design says map frame 0; the probe proved only the five-frame call, and a driver that validates
+   the length would leave the pencil dead for a saving of nothing. Same address, same first frame.
+4. **The demo shows the path as a log line, not in the status head** — the brief's stated
+   alternative. `panel: direct …` / `panel: needle …` at `Log.i`/`Log.w` on `GPaperRatta`, plus a
+   paragraph in the demo's capability notes. Putting it in the status head would have meant
+   widening `RattaEngine` with a public probe to serve one line of demo chrome.
+5. **`EbcPanel.close()` allows a later re-open** when the session had actually opened (a *refused*
+   one is still never retried). A view detached and re-attached is ordinary, and it must not cost
+   the pencil its panel for the rest of the process.
+6. **`onGestureStrokeConsumed` gained a direct branch.** A smart-lasso or scribble-erase stroke
+   commits nothing, so a direct contact's graphite would have stayed on the panel belonging to no
+   mark; it drops the live layer and re-tones instead of running the overlay ladder (there is no
+   overlay ink — the daemon was off).
+
+**What no one can know without the devices:** that the driver still answers from inside an AAR in
+a host process the way it did from the probe; that mapping one frame is accepted (hence 3); that
+the preview and the bake agree to the eye at pen-up; that a mid-stroke frame from a *host's* own
+chrome does not spoil the preview (the engine presents none, but nothing stops a host); that the
+per-batch flatten keeps up with a fast hand on a Nomad; and every question of feel.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

@@ -605,6 +605,11 @@ class MainActivity : Activity() {
                 |  Barrel-button / eraser-end: firmware suppressed from hover;
                 |  software erase does the work. Lasso: firmware dash trail.
                 |  Colors map to nearest firmware grey live; true ARGB on bake.
+                |  Raster pencil (0.1.41): previewed by painting /dev/ebc
+                |  directly — 16 greys, pressure and tilt, no flash, daemon
+                |  off while it is armed. Which path this session got is one
+                |  logcat line: GPaperRatta "panel: direct" / "panel: needle".
+                |  The pen and the rubber are the firmware's as before.
             """.trimMargin()
             else -> """
                 |GENERIC ENGINE
