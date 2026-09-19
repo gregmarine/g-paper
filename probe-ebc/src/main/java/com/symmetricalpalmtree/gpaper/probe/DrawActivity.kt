@@ -182,18 +182,21 @@ class DrawActivity : Activity() {
             dirty.union(Rect(cx - RADIUS, cy - RADIUS, cx + RADIUS + 1, cy + RADIUS + 1))
         }
 
-        /** Screen rect → frame 0 (panelX = screenY, panelY = panelH−1 − screenX) + one DISPAREA. */
+        /**
+         * Screen rect → frame 0 + one DISPAREA. Two panel orientations seen: the Nomad's panel is
+         * landscape under a portrait screen (panelX = screenY, panelY = panelH−1 − screenX); the
+         * Manta's panel is the screen (identity). Chosen by geometry, measured on both.
+         */
+        private val rotated get() = panelW != width
         private fun post(r: Rect) {
             val m = map ?: return
-            for (sy in r.top until r.bottom) {
-                val px = sy
-                for (sx in r.left until r.right) {
-                    val py = panelH - 1 - sx
-                    m.put(py * panelW + px, levels[sy * width + sx])
-                }
+            for (sy in r.top until r.bottom) for (sx in r.left until r.right) {
+                val i = if (rotated) (panelH - 1 - sx) * panelW + sy else sy * panelW + sx
+                m.put(i, levels[sy * width + sx])
             }
             val arg = ByteBuffer.allocateDirect(24).order(ByteOrder.LITTLE_ENDIAN)
-            arg.putInt(0, r.top); arg.putInt(4, panelH - r.right); arg.putInt(8, r.bottom); arg.putInt(12, panelH - r.left)
+            if (rotated) { arg.putInt(0, r.top); arg.putInt(4, panelH - r.right); arg.putInt(8, r.bottom); arg.putInt(12, panelH - r.left) }
+            else { arg.putInt(0, r.left); arg.putInt(4, r.top); arg.putInt(8, r.right); arg.putInt(12, r.bottom) }
             arg.putInt(16, 0); arg.put(20, MODE.toByte()); arg.put(21, flag.toByte())
             val ret = Native.ioctl(fd, REQ_DISPAREA, arg)
             if (ret < 0) Log.w(TAG, "DISPAREA failed ${Native.strerror(-ret)}")

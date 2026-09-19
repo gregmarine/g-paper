@@ -69,13 +69,18 @@ for latency, then draw the same pixels into your own window** so the compositor'
 rewrite changes nothing the eye can see. For that mirror to be invisible, two calibrations
 (read back from frame 2 after composing a card — `--ez ramp true [--ez full256 true]`):
 
-- **Rotation (Nomad, portrait UI on a landscape panel):** `panelX = screenY`,
-  `panelY = 1403 − screenX`.
+- **Rotation.** Nomad (portrait UI on a landscape 1872×1404 panel): `panelX = screenY`,
+  `panelY = 1403 − screenX`. **Manta (A5 X2, 1920×2560 panel = the screen): identity.** Chosen
+  by geometry (`panelW != screenW`). On the Manta frame 0 (and 3) hold the screen; frames 2 and
+  4 hold a horizontally doubled copy (another role — read the LUT from frame 0 there), and the
+  daemon overlay frame 1 clears to `0x90` rather than `0xff`. Atelier's `_a5x2` path is the same
+  byte-per-pixel copy at stride 1920 — no packing anywhere.
 - **Compositor grey → 4-bit level** (Android grey value ranges): 0–75 → 0 · 76–87 → 1 ·
   88–99 → 2 · 100–107 → 3 · 108–119 → 4 · 120–131 → 5 · 132–139 → 6 · 140–151 → 7 ·
   152–167 → 8 · **168–187 → 10 (level 9 is never produced)** · 188–195 → 11 · 196–203 → 12 ·
-  204–215 → 13 · 216–223 → 14 · 224–255 → 15. Draw the mirror with one grey from the matching
-  range and the recompose is a no-op on the panel.
+  204–215 → 13 · 216–223 → 14 · 224–255 → 15. **Identical on the Manta** — the table is the
+  firmware's, not the panel's. Draw the mirror with one grey from the matching range and the
+  recompose is a no-op on the panel.
 
 ## The live stroke (`DrawActivity`, 2026-09-18, the user's hand)
 
