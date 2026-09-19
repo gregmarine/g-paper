@@ -77,6 +77,8 @@ class MainActivity : Activity() {
         button("m9") { bands(mode = 9, frame = 0, flag = 0) }
         button("PW") { bands(mode = 9, frame = 1, flag = 1) }
         button("Unmap") { unmap() }
+        button("Draw") { startActivity(android.content.Intent(this, DrawActivity::class.java)) }
+        button("Raw") { startActivity(android.content.Intent(this, DrawActivity::class.java).putExtra("mirror", false)) }
         button("Close") { close() }
         button("Clear") { log.text = "" }
         root.addView(row1)

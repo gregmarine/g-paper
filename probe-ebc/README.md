@@ -77,6 +77,25 @@ rewrite changes nothing the eye can see. For that mirror to be invisible, two ca
   204–215 → 13 · 216–223 → 14 · 224–255 → 15. Draw the mirror with one grey from the matching
   range and the recompose is a no-op on the panel.
 
+## The live stroke (`DrawActivity`, 2026-09-18, the user's hand)
+
+`am start -n com.symmetricalpalmtree.gpaper.probe/.DrawActivity [--ez flecks true] [--ez mirror false] [--ei flag N]`
+— a stylus lays dabs; every MotionEvent writes them into frame 0 (rotated) and sends one
+DISPAREA mode 7 for the dirty rect; the window is mirrored at pen-up (`Mirror: UP`, Atelier's
+way), live, or never. Finger buttons along the top (no Back key on a Supernote): Dab · Flag ·
+Mirror · Clear · Exit.
+
+Measured: event → ioctl return averages 0.4–0.9 ms; the ioctl blocks up to ~65 ms while the
+previous update is in flight. Mirror modes and flags 0 / 1 / 4 / 5 all look the same to the
+eye. Atelier's own call (`repaint::display_rect_after_set` in libspaint) is mode 7, frame 0,
+flag 1 — the same call, so the flag is not a waveform switch.
+
+**What the hand found — the physics:** a solid grey dab shaded by pressure lands **black
+first and then lightens** toward its target, trailing the nib, while a black dab lands at once
+and stays. That is the 16-grey partial waveform: it passes through black on the way to a grey.
+**Black-only flecks whose density follows pressure "work perfectly — very much like Atelier."**
+Atelier's pencils are a MyPaint dab scatter; the shade is chosen, not pressure-driven.
+
 Other doors seen but not walked: `MISCCTL` (`CLERA_PW_RECT`, `SYNCWIN`), the pen-write path
 (frame 1, mode 9, flag 1|5 — only black showed, consistent with a 1-bit overlay), and the
 boot-classpath `EinkPWCoreController` (`nativeAddPWRect` → `set_pw_fsb` / `postEinkPWRectFastHL`
