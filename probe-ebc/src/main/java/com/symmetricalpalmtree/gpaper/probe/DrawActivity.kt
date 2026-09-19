@@ -83,6 +83,9 @@ class DrawActivity : Activity() {
         /** Solid: one grey level per dab, from pressure. Flecks: black-only 1 px flecks, density from pressure. */
         var flecks = intent.getBooleanExtra("flecks", false)
         private val rng = java.util.Random(7)
+        /** Dabs are laid along the path at a fixed spacing, never one per sample: a fast hand outruns the digitizer. */
+        private val spacing = RADIUS * 0.5f
+        private var lastX = 0f; private var lastY = 0f; private var lastP = 0f; private var carry = 0f; private var down = false
         var flag = intent.getIntExtra("flag", ATELIER_FLAG)
         private val strokeRect = Rect()
         private var levels = ByteArray(0)          // screen-space truth, one 4-bit level per pixel, 15 = paper
@@ -126,11 +129,11 @@ class DrawActivity : Activity() {
         override fun onTouchEvent(e: MotionEvent): Boolean {
             if (e.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER) return e.actionMasked != MotionEvent.ACTION_DOWN || fingerTap(e.x, e.y)
             if (e.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS && e.getToolType(0) != MotionEvent.TOOL_TYPE_ERASER) return false
-            if (e.actionMasked == MotionEvent.ACTION_DOWN) strokeRect.setEmpty()
+            if (e.actionMasked == MotionEvent.ACTION_DOWN) { strokeRect.setEmpty(); down = false }
             val t0 = System.nanoTime()
             val dirty = Rect()
-            for (h in 0 until e.historySize) stamp(e.getHistoricalX(h), e.getHistoricalY(h), e.getHistoricalPressure(h), dirty)
-            stamp(e.x, e.y, e.pressure, dirty)
+            for (h in 0 until e.historySize) walk(e.getHistoricalX(h), e.getHistoricalY(h), e.getHistoricalPressure(h), dirty)
+            walk(e.x, e.y, e.pressure, dirty)
             samples += e.historySize + 1
             if (!dirty.isEmpty) {
                 dirty.intersect(0, 0, width, height)
@@ -146,6 +149,21 @@ class DrawActivity : Activity() {
                 samples = 0; events = 0; latencyUs = 0; maxUs = 0
             }
             return true
+        }
+
+        /** Advance the path to (x,y), stamping every [spacing] px along the way with interpolated pressure. */
+        private fun walk(x: Float, y: Float, p: Float, dirty: Rect) {
+            if (!down) { down = true; lastX = x; lastY = y; lastP = p; carry = 0f; stamp(x, y, p, dirty); return }
+            val dx = x - lastX; val dy = y - lastY
+            val len = Math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+            var t = spacing - carry
+            while (t <= len) {
+                val f = t / len
+                stamp(lastX + dx * f, lastY + dy * f, lastP + (p - lastP) * f, dirty)
+                t += spacing
+            }
+            carry = len - (t - spacing)
+            lastX = x; lastY = y; lastP = p
         }
 
         /** A round dab of radius RADIUS at (x,y); pressure 0→light, 1→black; darken-only. */
