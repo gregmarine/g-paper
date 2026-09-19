@@ -2526,6 +2526,38 @@ everywhere; pencil over an ink line is hidden by the ink.**
 - No API change; SN re-pins 0.1.44 and flips the same operator in its own two flatten copies
   (`SketchRaster`, `SketchCover`).
 
+### Phase 31 — Baked ink shows its true tone (post-v0.1.0)
+**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.45 · branch `ink-true`.
+Opened on the user's word during the arc 46 walk: *"I understand that we are dithering the pen to
+get the tone to work … But I see that the panel is capable of showing the true tone without
+dithering. So, if the dithering is just so the stroke keeps with the nib, can we have it rebake
+with the true tone of the pen? I'm only asking about the pen tool … not pencil."*
+
+**Design**
+- **One display rule, per pixel** — `DitherFlatten.coverage` (black coverage 0…255): a pixel the
+  **ink image** covers with **no live ink** on it answers `255 − luma` (its true tone); every
+  other pixel — bare graphite, and live ink under the nib — answers `255` or `0` through the
+  dither, exactly as `black` does. The band kernel writes the same bytes. So the panel under the
+  nib, the pen-up re-present and the window's frame all still come from one function.
+- **Live ink stays a dither**, deliberately: the panel's waveform reaches a grey only through
+  black, so a grey painted live trails the nib (Phase 28's second walk). At pen-up
+  `bakeCapturedStroke` composites the live alpha into the ink image (which zeroes the mask) and
+  then **posts each run again** through `toneAndPost`; with the mask gone the rule answers tone,
+  and the line lands solid. The window's `regenDitherRuns` for the same rects agrees.
+- **The display byte is now a coverage, not a bit.** The `ALPHA_8` display bitmap is drawn in
+  black, so its byte already *is* "how black"; `landDitherRect` writes the byte as the alpha,
+  `presentPageViaPanel` maps it through `LEVEL_OF_COVERAGE` (the compositor's grey → level table,
+  `RattaPanelTone`, back on the path for exactly this), and `DITHER_INK` is gone.
+- **Graphite is never shown in tone** — a pencil's grain is dots already, and a fleck's alpha
+  through the tone table would be a smear where the dither is grain. The two halves of a page
+  now look different on purpose, which is what Atelier does and what the user asked for.
+- `DitherFlattenTest`: the band-kernel mirror is pinned against `coverage`; a new test pins tone
+  for baked ink, dither for live ink and bare graphite, the blend at an anti-aliased ink edge.
+
+**What only a device can answer:** what the pen-up re-present looks like — a dithered run going
+to solid grey means its white dots pass through black on the way; whether a partly-opaque ink
+edge over dithered graphite reads clean; and whether a grey pen line's pen-up feels late.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

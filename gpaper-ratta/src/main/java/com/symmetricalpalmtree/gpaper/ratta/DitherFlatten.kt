@@ -128,6 +128,43 @@ internal object DitherFlatten {
     fun black(graphite: Int, liveAlpha: Int, liveColor: Int, ink: Int, x: Int, y: Int): Boolean =
         black(graphite, liveAlpha, liveColor, ink, 0, 0, x, y)
 
+    /**
+     * What page pixel ([x], [y]) **shows**, as black coverage 0…255 — the one display rule
+     * since Phase 31 (0.1.45), for the panel under the nib and for the window alike:
+     *
+     * - **Baked ink shows its true tone.** A pixel the ink image covers (any alpha) and no
+     *   live ink is on answers `255 − luma` — the panel can hold sixteen greys and a gel
+     *   pen's line reads better solid than as dots (the user's ask: *"can we have it rebake
+     *   with the true tone of the pen?"*). Where such a pixel's ink is only partly opaque
+     *   (an anti-aliased edge) the tone is of the ink over whatever graphite is under it.
+     * - **Everything else dithers** — bare graphite, and **live** ink under the nib —
+     *   answering `255` or `0` through [Dither], exactly as [black] does. Live ink stays a
+     *   dither on purpose: the panel's waveform reaches a grey only through black, so a
+     *   grey painted live trails the nib while black dots land at once. The pen-up bake
+     *   re-presents the mark's runs through this same rule, and they land in tone.
+     *
+     * The graphite is never shown in tone: a pencil's grain is dots already, and a
+     * fleck's alpha through the panel's tone table would be a smear where the dither is
+     * grain. The two halves of one page therefore differ on purpose — dots under the
+     * pencil, tone under the pen — which is what the user saw on Atelier and asked for.
+     */
+    fun coverage(
+        graphite: Int,
+        liveGraphite: Int,
+        graphiteColor: Int,
+        ink: Int,
+        liveInk: Int,
+        inkColor: Int,
+        x: Int,
+        y: Int,
+    ): Int {
+        val g = srcOver(graphite, graphiteColor, liveGraphite)
+        val k = srcOver(ink, inkColor, liveInk)
+        val grey = luma(g, k)
+        if (liveInk == 0 && (k ushr 24) != 0) return 255 - grey
+        return if (Dither.black(grey, x, y)) 255 else 0
+    }
+
     /** One channel of an unpremultiplied pixel composited over white paper. */
     private fun over(channel: Int, alpha: Int): Int =
         if (alpha == 255) channel else (channel * alpha + 255 * (255 - alpha)) / 255
@@ -197,8 +234,11 @@ internal object DitherFlatten {
 
     /**
      * Flatten and dither a whole band of the page: `[x0, x0 + w) × [y0, y0 + h)` in page
-     * coordinates, into [out] as [inked] where the pixel shows black and [blank] where it
-     * shows paper.
+     * coordinates, into [out] as [inked] where the pixel dithers black, [blank] where it
+     * dithers paper, and — since Phase 31 — the pixel's **black coverage** (`255 − luma`)
+     * where the ink image covers it, so a gel pen's line shows in its true tone
+     * ([coverage]'s rule; [inked] is expected to be `0xFF` and [blank] `0` so the three
+     * agree as one scale).
      *
      * [graphite] and [ink] are the two page images' pixels over exactly that band, row
      * major, [w] to a row — what `Bitmap.getPixels` leaves. Either may be absent
@@ -289,7 +329,9 @@ internal object DitherFlatten {
                     }
                     grey = (LUMA_R * r + LUMA_G * gg + LUMA_B * b) shr 8
                 }
-                out[dst + x] = if (limit[grey] < cut[phase]) inked else blank
+                out[dst + x] =
+                    if (kp ushr 24 != 0) (255 - grey).toByte()
+                    else if (limit[grey] < cut[phase]) inked else blank
                 x++
                 phase = (phase + 1) and (BlueNoise64.SIZE - 1)
             }

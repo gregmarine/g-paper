@@ -274,15 +274,42 @@ class DitherFlattenTest {
         )
         for (y in 0 until h) {
             for (x in 0 until w) {
-                val expected = DitherFlatten.black(
-                    graphite[y * w + x], 0, 0, ink[y * w + x], x0 + x, y0 + y,
+                val expected = DitherFlatten.coverage(
+                    graphite[y * w + x], 0, 0, ink[y * w + x], 0, 0, x0 + x, y0 + y,
                 )
                 assertEquals(
                     "pixel ($x, $y)",
-                    if (expected) ON else OFF,
+                    expected.toByte(),
                     out[offset + y * stride + x],
                 )
             }
+        }
+    }
+
+    @Test
+    fun `baked ink shows its true tone, live ink and graphite dither`() {
+        // Phase 31: a pixel the ink image covers answers 255 − luma; everything else is
+        // one of the two dither ends, exactly as `black` says.
+        val greyInk = 0xFF808080.toInt()
+        val greyLead = 0xFF808080.toInt()
+        for (y in intArrayOf(0, 5, 63)) for (x in intArrayOf(0, 7, 511)) {
+            assertEquals(255 - 0x80, DitherFlatten.coverage(transparent, 0, 0, greyInk, 0, 0, x, y))
+            assertEquals(255, DitherFlatten.coverage(transparent, 0, 0, black, 0, 0, x, y))
+            assertEquals(0, DitherFlatten.coverage(transparent, 0, 0, white, 0, 0, x, y))
+            // Ink over graphite: the ink's tone, the graphite under it hidden.
+            assertEquals(255 - 0x80, DitherFlatten.coverage(black, 0, 0, greyInk, 0, 0, x, y))
+            // Half-transparent ink over black graphite blends toward the graphite.
+            val half = DitherFlatten.coverage(black, 0, 0, 0x80808080.toInt(), 0, 0, x, y)
+            assertTrue("edge pixel $half", half in 190..200)
+            // Live ink dithers, whatever its colour.
+            val live = DitherFlatten.coverage(transparent, 0, 0, transparent, 255, greyInk, x, y)
+            assertTrue(live == 0 || live == 255)
+            assertEquals(if (DitherFlatten.black(transparent, 0, 0, transparent, 255, greyInk, x, y)) 255 else 0, live)
+            // Bare graphite dithers.
+            val lead = DitherFlatten.coverage(greyLead, 0, 0, transparent, 0, 0, x, y)
+            assertEquals(if (Dither.black(0x80, x, y)) 255 else 0, lead)
+            // A live fleck over baked ink: the pixel still has ink and no live ink → tone.
+            assertEquals(255 - 0x80, DitherFlatten.coverage(transparent, 255, black, greyInk, 0, 0, x, y))
         }
     }
 

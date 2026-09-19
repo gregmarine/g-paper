@@ -168,14 +168,18 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
          *  and allocates nothing after the first one. */
         const val DITHER_BAND_PX = 262144
 
-        /** An inked pixel of the dither image: opaque, and only the alpha is read
-         *  (`ALPHA_8` takes its colour from the paint). */
-        const val DITHER_INK = 0xFF000000.toInt()
-
-        /** The same two pixels as bytes — what the band kernel writes, and what an
-         *  `ALPHA_8` bitmap's own rows hold. */
+        /** The two ends of the display image's byte — **black coverage**, 0…255, which is
+         *  what the band kernel writes and what an `ALPHA_8` bitmap's own rows hold (the
+         *  bitmap is drawn in black, so a byte is how black that pixel is). A dithered pixel
+         *  is one of these two; a baked-ink pixel is its true tone between them (Phase 31). */
         const val DITHER_ON: Byte = -1 // 0xFF
         const val DITHER_OFF: Byte = 0
+
+        /** The panel level for a display byte: coverage `c` is grey `255 − c` through the
+         *  compositor's own grey → level table — so a dithered `0xFF` is [LEVEL_BLACK], a
+         *  `0` is [LEVEL_WHITE], and a baked-ink tone is the level the compositor would
+         *  have given that grey anyway. Tabled once: it is asked per pixel. */
+        private val LEVEL_OF_COVERAGE = ByteArray(256) { RattaPanelTone.level(255 - it).toByte() }
 
         /**
          * From what share of the page a rect rebuild lands through one whole-bitmap
@@ -1100,7 +1104,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * both land on the panel's first frame, so the mark is under the nib rather than a beat
      * behind it, and the whole-page dither the window presents at pen-up
      * ([regenDither]) is the same arithmetic at the same page coordinates, so it agrees
-     * pixel for pixel. [RattaPanelTone] is no longer on this path — see its KDoc.
+     * pixel for pixel. **Baked ink is the one thing painted in tone** (Phase 31,
+     * [DitherFlatten.coverage]): a pixel the ink image covers, with no live ink on it, goes
+     * to the panel at its grey's own level ([LEVEL_OF_COVERAGE], [RattaPanelTone]'s table
+     * back on this path for exactly that), so a gel pen's line is solid after its pen-up
+     * re-present and the window's own frame agrees.
      */
     private fun toneAndPost(rect: Rect) {
         val w = rect.width()
@@ -1127,7 +1135,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             val row = y * w
             val pageY = rect.top + y
             for (x in 0 until w) {
-                val black = DitherFlatten.black(
+                val coverage = DitherFlatten.coverage(
                     toneGraphite[row + x],
                     if (graphiteMask == null) 0 else graphiteMask[maskRow + x].toInt() and 0xFF,
                     leadColor,
@@ -1137,7 +1145,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     rect.left + x,
                     pageY,
                 )
-                toneLevels[row + x] = if (black) LEVEL_BLACK else LEVEL_WHITE
+                toneLevels[row + x] = LEVEL_OF_COVERAGE[coverage]
             }
         }
         toneScreenRect.set(rect)
@@ -1248,18 +1256,20 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     //
     // The live half above paints the panel under the nib. This half is what the window
     // presents afterwards, and the two must be the same picture — so the page is drawn to
-    // the glass as a blue-noise dither of exactly the flatten [toneAndPost] sends, through
-    // exactly the same [DitherFlatten] at exactly the same page coordinates. Then the
-    // compositor's rewrite of frame 0 is a no-op on every pixel and there is nothing to see
-    // at pen-up.
+    // the glass as exactly the flatten [toneAndPost] sends, through exactly the same
+    // [DitherFlatten] at exactly the same page coordinates: a blue-noise dither of the
+    // graphite, and — since Phase 31 — the baked ink in its **true tone**
+    // ([DitherFlatten.coverage]). Then the compositor's rewrite of frame 0 is a no-op on
+    // every pixel and there is nothing to see at pen-up.
     //
-    // It applies to the whole raster page while the panel is open, not only to the pencil:
-    // the window shows one page, and a page that were dithered under the pencil and true
-    // grey under the pen would change appearance at a tool push. Covers and exports are
-    // never dithered — that is what `forDisplay` is for.
+    // It applies to the whole raster page while the panel is open: the window shows one
+    // page, and the rule is per pixel, not per armed tool, so nothing changes appearance
+    // at a tool push. Covers and exports are never dithered — that is what `forDisplay`
+    // is for.
 
     /**
-     * The page as black-or-white, one byte a pixel — an `ALPHA_8` bitmap because the only
+     * The page as black coverage, one byte a pixel — dots for graphite, tone for baked ink
+     * (Phase 31) — an `ALPHA_8` bitmap because the only
      * thing being said about a pixel is whether it is inked, and a black [android.graphics.Paint]
      * at draw time supplies the colour. A quarter of the memory of the page it mirrors.
      *
@@ -1312,9 +1322,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /**
      * Draw the raster page for [forDisplay].
      *
-     * On the glass, with the panel ours, that is the dither and **not** the page images:
-     * every displayed pixel is black or white, which is what the panel was painted with
-     * under the nib. Anywhere else — a cover, an export, the host's own data — it is the
+     * On the glass, with the panel ours, that is the display image and **not** the page
+     * images: graphite as black-or-white dots and baked ink in its tone, which is what the
+     * panel was painted with under the nib and at pen-up. Anywhere else — a cover, an export, the host's own data — it is the
      * base's two blits and the artist's true greys. The dither is drawn with a black paint
      * because an `ALPHA_8` bitmap takes its colour from the paint.
      */
@@ -1435,8 +1445,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             }
             val src = y * stride
             for (x in 0 until pageW) {
-                pageLevels[row + x] =
-                    if (bytes[src + x] != DITHER_OFF) LEVEL_BLACK else LEVEL_WHITE
+                pageLevels[row + x] = LEVEL_OF_COVERAGE[bytes[src + x].toInt() and 0xFF]
             }
             if (pageW < w) java.util.Arrays.fill(pageLevels, row + pageW, row + w, LEVEL_WHITE)
         }
@@ -1582,7 +1591,8 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             for (y in top until bottom) {
                 var src = y * stride + area.left
                 for (x in 0 until w) {
-                    bandOut[i++] = if (out[src++] != DITHER_OFF) DITHER_INK else 0
+                    // The byte is the alpha: `ALPHA_8` reads one byte in four back out.
+                    bandOut[i++] = (out[src++].toInt() and 0xFF) shl 24
                 }
             }
             bitmap.setPixels(bandOut, 0, w, area.left, top, w, bottom - top)
@@ -1805,6 +1815,15 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         }
         val target = rasterForWrite(layer) ?: return false
         for (r in dirty) compositeLiveInto(target, mask, r, color)
+        if (layer == RasterLayer.INK) {
+            // The mark is baked and its live alpha is gone from the mask, so the same rule
+            // that dithered it under the nib now answers its true tone (Phase 31): show
+            // the runs again, in tone. One post per run, the shape the live path used.
+            for (r in dirty) {
+                toneRect.set(r)
+                if (toneRect.intersect(0, 0, liveAlphaW, liveAlphaH)) toneAndPost(toneRect)
+            }
+        }
         return true
     }
 
