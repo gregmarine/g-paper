@@ -1828,7 +1828,7 @@ change; `penColor` = `0xFFFFFFFF` is the whole host-side ask.
 consumer walk stands in for a demo walk — the demo's Shade cycler never reaches white).
 
 ### Phase 28 — Graphite on the panel: the pencil's live preview goes direct on Ratta (post-v0.1.0)
-**Status:** 🔄 In progress (opened 2026-09-18) · **Publishes:** 0.1.41 · branch `ebc-live` (from
+**Status:** ✅ Complete (2026-09-19, the user's hand on the Nomad and the Manta — *"we have ourselves a winner"*, *"let's freeze this. It works."*) · **Publishes:** 0.1.41 · branch `ebc-live` (from
 `ebc-probe`, which carries the `probe-ebc` app — the measurement door this phase is built on; its
 README is the reference for every number below).
 
@@ -2142,6 +2142,24 @@ pen, a rubber and a lasso look like on a page shown this way.
 
 **Still unwalked:** every number above is a starting value. The device gate at the head of
 this phase is open.
+
+**Outcome (2026-09-19).** Four walks. The direct path opened from inside the library on both
+devices at first launch. The first walk found alpha-graded flecks trailing the nib (the 16-grey
+waveform passes through black) and tilt widening a hairline — flecks went opaque, the pencil
+stayed upright by decision. The second found the whole-stroke grain recompute (3.5 ms/event,
+rising) — `GraphiteGrain.Sweep`, byte-identical, 6 ms per 1252-event stroke. The third found
+shade-as-density wrong by eye ("13 looks like a bug"). The fourth, with the page image kept grey
+and the **display** blue-noise dithered live and at pen-up, was the winner: every shade lands under
+the nib and keeps its shape. Measured against Atelier on the Nomad: our on-screen tone equals the
+swatch's grey within 2 % at every shade (`DITHER_GAMMA` stays 1.0); Atelier's HB ladder runs
+lighter overall and darker in the mids relative to its black — that is its pencil, not its shade
+map, and pencils are a later phase. Grain comparable: 1–1.5 px dots, ~1500 per 1000 px of stroke
+at mid tones, both merging as shades darken. Test counts at the freeze: core 264 · ratta 45.
+`probe-ebc/` stays in the tree as the measurement door and its README as the reference. Futures,
+each a fresh decision: a pencil library (Atelier's 4H/2H/HB/2B/4B/6B/8B as the base), live rubbing
+through the panel, the ink pen through the panel, the template dithered with the page, the
+provisional 50 px start replaced by a landing-free grain. 0.1.41 to mavenLocal by the user's hand;
+merge on the user's word.
 
 ## Standing Open Questions (ask as they become relevant)
 
