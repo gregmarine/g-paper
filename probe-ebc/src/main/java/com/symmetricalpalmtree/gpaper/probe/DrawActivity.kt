@@ -79,7 +79,10 @@ class DrawActivity : Activity() {
     enum class Mirror { OFF, UP, LIVE }
 
     private inner class DrawView(c: Context, var mirror: Mirror) : View(c) {
-        private val buttons = listOf("Dab", "Flag", "Mirror", "Clear", "Exit")
+        private val buttons = listOf("Mode", "Dab", "Flag", "Mirror", "Clear", "Exit")
+        /** Display mode + the value scale it takes: mode 7 is 0..15, mode 4 is 0..60 (level × 4). */
+        var mode = intent.getIntExtra("mode", MODE)
+        private val scale get() = if (mode == 4) 4 else 1
         /** Solid: one grey level per dab, from pressure. Flecks: black-only 1 px flecks, density from pressure. */
         var flecks = intent.getBooleanExtra("flecks", false)
         private val rng = java.util.Random(7)
@@ -107,7 +110,7 @@ class DrawActivity : Activity() {
                 paint.color = Color.BLACK; paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f
                 cv.drawRect(x, 10f, x + 200f, 90f, paint)
                 paint.style = Paint.Style.FILL
-                cv.drawText(when (name) { "Mirror" -> "Mirror: $mirror"; "Flag" -> "Flag: $flag"; "Dab" -> if (flecks) "Dab: flecks" else "Dab: solid"; else -> name }, x + 16f, 62f, label)
+                cv.drawText(when (name) { "Mirror" -> "Mirror: $mirror"; "Flag" -> "Flag: $flag"; "Dab" -> if (flecks) "Dab: flecks" else "Dab: solid"; "Mode" -> "Mode: $mode"; else -> name }, x + 16f, 62f, label)
             }
             cv.drawText("EBC live stroke", 20f, 62f, label)
         }
@@ -116,6 +119,7 @@ class DrawActivity : Activity() {
             if (y > 90f) return false
             val i = buttons.indices.firstOrNull { x >= width - (buttons.size - it) * 210f && x < width - (buttons.size - it) * 210f + 200f } ?: return false
             when (buttons[i]) {
+                "Mode" -> { mode = if (mode == 7) 4 else 7; Log.i(TAG, "mode=$mode") }
                 "Dab" -> { flecks = !flecks; Log.i(TAG, "flecks=$flecks") }
                 "Flag" -> { flag = intArrayOf(0, 1, 5, 4)[(intArrayOf(0, 1, 5, 4).indexOf(flag) + 1) % 4]; Log.i(TAG, "flag=$flag") }
                 "Mirror" -> { mirror = Mirror.values()[(mirror.ordinal + 1) % 3]; Log.i(TAG, "mirror=$mirror") }
@@ -192,12 +196,12 @@ class DrawActivity : Activity() {
             val m = map ?: return
             for (sy in r.top until r.bottom) for (sx in r.left until r.right) {
                 val i = if (rotated) (panelH - 1 - sx) * panelW + sy else sy * panelW + sx
-                m.put(i, levels[sy * width + sx])
+                m.put(i, (levels[sy * width + sx] * scale).toByte())
             }
             val arg = ByteBuffer.allocateDirect(24).order(ByteOrder.LITTLE_ENDIAN)
             if (rotated) { arg.putInt(0, r.top); arg.putInt(4, panelH - r.right); arg.putInt(8, r.bottom); arg.putInt(12, panelH - r.left) }
             else { arg.putInt(0, r.left); arg.putInt(4, r.top); arg.putInt(8, r.right); arg.putInt(12, r.bottom) }
-            arg.putInt(16, 0); arg.put(20, MODE.toByte()); arg.put(21, flag.toByte())
+            arg.putInt(16, 0); arg.put(20, mode.toByte()); arg.put(21, flag.toByte())
             val ret = Native.ioctl(fd, REQ_DISPAREA, arg)
             if (ret < 0) Log.w(TAG, "DISPAREA failed ${Native.strerror(-ret)}")
         }

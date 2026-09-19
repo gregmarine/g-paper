@@ -76,6 +76,22 @@ class MainActivity : Activity() {
         button("m8") { bands(mode = 8, frame = 0, flag = 0) }
         button("m9") { bands(mode = 9, frame = 0, flag = 0) }
         button("PW") { bands(mode = 9, frame = 1, flag = 1) }
+        buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }.also { root.addView(it) }
+        // Value-scale and packing experiments for the non-7 modes: 0..60 step 4 (the compositor
+        // config table's ramp), nibbles (2 px/byte, compact rows) and bits (8 px/byte, compact rows).
+        button("m4·60") { bands(mode = 4, frame = 0, flag = 1, v0 = 0, v1 = 60) }
+        button("m8·60") { bands(mode = 8, frame = 0, flag = 1, v0 = 0, v1 = 60) }
+        button("m9·60") { bands(mode = 9, frame = 0, flag = 1, v0 = 0, v1 = 60) }
+        button("m4·p2") { bands(mode = 4, frame = 0, flag = 1, pack = 2) }
+        button("m9·p8") { bands(mode = 9, frame = 0, flag = 1, pack = 8) }
+        button("m7·60") { bands(mode = 7, frame = 0, flag = 1, v0 = 0, v1 = 60) }
+        buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }.also { root.addView(it) }
+        // Per-pixel flag bits: the compositor was seen writing 0x40 and 0x80 into frame 0 pixels.
+        button("m7|40") { bands(mode = 7, frame = 0, flag = 1, orBits = 0x40) }
+        button("m7|80") { bands(mode = 7, frame = 0, flag = 1, orBits = 0x80) }
+        button("m7|C0") { bands(mode = 7, frame = 0, flag = 1, orBits = 0xC0) }
+        button("m7|10") { bands(mode = 7, frame = 0, flag = 1, orBits = 0x10) }
+        button("m7|20") { bands(mode = 7, frame = 0, flag = 1, orBits = 0x20) }
         button("Unmap") { unmap() }
         button("Draw") { startActivity(android.content.Intent(this, DrawActivity::class.java)) }
         button("Raw") { startActivity(android.content.Intent(this, DrawActivity::class.java).putExtra("mirror", false)) }
@@ -98,6 +114,7 @@ class MainActivity : Activity() {
             return
         }
         setContentView(root)
+        registerReceiver(dumpReceiver, android.content.IntentFilter("com.symmetricalpalmtree.gpaper.probe.DUMP"))
         // --ez fullscreen true: hide the system bars, so a status-bar repaint cannot be the
         // thing that recomposes frame 0 over a painted rect.
         if (intent.getBooleanExtra("fullscreen", false)) {
@@ -124,7 +141,14 @@ class MainActivity : Activity() {
         }
     }
 
+    /** `adb shell am broadcast -a com.symmetricalpalmtree.gpaper.probe.DUMP` dumps the frames
+     *  whenever asked — the probe may be in the background with another app drawing. */
+    private val dumpReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: android.content.Context, i: android.content.Intent) { dumpFrames() }
+    }
+
     override fun onDestroy() {
+        runCatching { unregisterReceiver(dumpReceiver) }
         map?.let { Native.munmap(it, frameBytes * FRAMES) }
         if (fd >= 0) Native.close(fd)
         super.onDestroy()
@@ -237,7 +261,7 @@ class MainActivity : Activity() {
      * Sixteen vertical bands of grey from [v0] to [v1] written into [frame], then one
      * DISPAREA for that rect with [mode]/[flag]. Panel coordinates, rotation ignored.
      */
-    private fun bands(mode: Int, frame: Int, flag: Int, v0: Int = 0, v1: Int = 15) {
+    private fun bands(mode: Int, frame: Int, flag: Int, v0: Int = 0, v1: Int = 15, pack: Int = 1, orBits: Int = 0) {
         if (map == null) { say("map first"); return }
         // Our own window must be still: a TextView append repaints it, and the compositor's
         // repaint of the screen would overwrite the rect before an eye could see it. So paint
@@ -245,7 +269,7 @@ class MainActivity : Activity() {
         val delay = intent.getIntExtra("paintDelay", 1000).toLong()
         say("painting in $delay ms, screen quiet for 3 s after")
         ui.postDelayed({
-            val line = paintBands(mode, frame, flag, v0, v1)
+            val line = paintBands(mode, frame, flag, v0, v1, pack, orBits)
             Log.i(TAG, line)
             watchRect(frame, System.nanoTime())
             // --ez quiet true: never touch the window again after the paint.
@@ -271,17 +295,26 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun paintBands(mode: Int, frame: Int, flag: Int, v0: Int, v1: Int): String {
+    private fun paintBands(mode: Int, frame: Int, flag: Int, v0: Int, v1: Int, pack: Int = 1, orBits: Int = 0): String {
         val m = map!!
         val l = panelW / 8; val t = panelH / 4; val r = panelW * 7 / 8; val b = panelH * 3 / 4
         val base = frame * frameBytes
         val bandW = (r - l) / 16
+        val bits = 8 / pack
+        val stride = panelW / pack   // compact rows: a packed row is panelW/pack bytes
         for (y in t until b) {
-            val row = base + y.toLong() * panelW
+            val row = base + y.toLong() * stride
             for (x in l until r) {
                 val k = ((x - l) / bandW).coerceAtMost(15)
                 val v = v0 + (v1 - v0) * k / 15
-                m.put((row + x).toInt(), v.toByte())
+                if (pack == 1) m.put((row + x).toInt(), (v or orBits).toByte())
+                else {
+                    val i = (row + x / pack).toInt()
+                    val shift = (x % pack) * bits
+                    val level = if (bits == 1) (if (v >= 8) 1 else 0) else v and ((1 shl bits) - 1)
+                    val old = m.get(i).toInt() and 0xFF
+                    m.put(i, ((old and ((1 shl bits) - 1 shl shift).inv()) or (level shl shift)).toByte())
+                }
             }
         }
         val arg = ByteBuffer.allocateDirect(24).order(ByteOrder.LITTLE_ENDIAN)
@@ -290,7 +323,7 @@ class MainActivity : Activity() {
         // --ez noDisp true: write the pixels but never tell the driver — does frame 0 still get rewritten?
         if (intent.getBooleanExtra("noDisp", false)) return "pixels written, NO DISPAREA (frame=$frame)"
         val ret = Native.ioctl(fd, REQ_DISPAREA, arg)
-        return "DISPAREA [$l,$t-$r,$b] frame=$frame mode=$mode flag=$flag v=$v0..$v1 -> " +
+        return "DISPAREA [$l,$t-$r,$b] frame=$frame mode=$mode flag=$flag v=$v0..$v1 pack=$pack or=0x${orBits.toString(16)} -> " +
             if (ret < 0) "FAILED errno=${-ret} ${Native.strerror(-ret)}" else "$ret"
     }
 
