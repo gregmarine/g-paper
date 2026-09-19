@@ -209,6 +209,29 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         const val DITHER_SLOW_RECT_MS = 20L
 
         /**
+         * Whether a page that has just been **loaded** is shown through the panel before
+         * the window presents it (2026-09-19, unwalked).
+         *
+         * The hypothesis, and it is a hypothesis: the user's 0.1.43 finding was that the
+         * rubber and the pen direct are solid, and that what ghosts now is a **page flip**
+         * on the sketch face — hardly ever on the notebook face. The HWC picks a waveform
+         * per frame from that frame's own content (`getBestDisplayMode` in `libeinkutils`).
+         * A dithered raster page is pure black and white with no grey anywhere in it, which
+         * is exactly the content that reads as "send it two-level" — the fast waveform, and
+         * the one that ghosts. The notebook face's anti-aliased greys ask for the clean
+         * sixteen-level one and get it.
+         *
+         * So the loaded page is put on the glass by this path first, through the same
+         * `MODE_GREY16` the flecks go out on, and the compositor's own post a moment later
+         * finds pixels identical to the ones already there and drives nothing.
+         *
+         * A full framework refresh at every turn cured it too and the user rolled that
+         * back — *"a bit much"*. Whether this is the quiet form of the same cure is the
+         * user's walk to decide; `false` restores 0.1.43 exactly.
+         */
+        const val PRESENT_LOADED_PAGE_VIA_PANEL = true
+
+        /**
          * Overlay-clear retry ladder (overlay law 2): a clear issued in the wake of a
          * pen-lift lands inside the daemon's stroke-finalization window and is eaten,
          * and the window's length varies by device and moment (450 ms reliable on the
@@ -1274,6 +1297,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private var ditherBytes: ByteArray? = null
     private var ditherBuffer: java.nio.ByteBuffer? = null
 
+    /** The view's levels for [presentPageViaPanel] — [toneLevels]'s whole-page twin, grown
+     *  once and kept, because the page it describes is the same size every turn. */
+    private var pageLevels = ByteArray(0)
+    private val pageScreenRect = Rect()
+
     /** Which whole-page rebuilds are pending, and which redraws wait for them. */
     private val ditherCoalescer = DitherCoalescer()
 
@@ -1354,12 +1382,70 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         }
     }
 
-    /** The posted whole-page rebuild: build it once, then present it once. */
+    /** The posted whole-page rebuild: build it once, show it on the panel, then present
+     *  it once. */
     private val ditherRebuild = Runnable {
         if (!ditherCoalescer.takeScheduled()) return@Runnable
         if (!ditherDisplayed) return@Runnable
         regenDither(null)
+        presentPageViaPanel()
         redrawCommitted()
+    }
+
+    /**
+     * Put the page the rebuild just made on the glass **ourselves**, before the window
+     * presents the same pixels — see [PRESENT_LOADED_PAGE_VIA_PANEL] for why.
+     *
+     * The whole view rect, in the panel's two levels, straight out of [ditherBytes]: that
+     * array is the page's truth and has just been rebuilt, so no flatten is repeated here
+     * and nothing is read out of a bitmap. Where the page does not reach the view — a page
+     * smaller than the glass — the levels are white, which is the paper the base draws
+     * there.
+     *
+     * **Whole-page rebuilds only.** A rect rebuild is a mark or a rub landing, and both of
+     * those have already posted their own rect under the nib ([toneAndPost]); posting the
+     * page again behind them would be a page-sized write per mark.
+     *
+     * **Never while a contact is down.** The compositor's frame is the one thing that can
+     * be behind the hand, so if a direct or rubbing contact is live this stands aside and
+     * lets the frame it has already posted stand. The screen offset is read here for the
+     * same reason [beginLivePreview] reads it — the panel speaks screen coordinates — and
+     * into the same field, which no live contact is using.
+     */
+    private fun presentPageViaPanel() {
+        if (!PRESENT_LOADED_PAGE_VIA_PANEL) return
+        if (!directRaster) return
+        if (contactDirect || contactRubbing) return
+        val bitmap = ditherDisplay ?: return
+        val bytes = ditherBytes ?: return
+        val w = width
+        val h = height
+        if (w <= 0 || h <= 0) return
+        val t0 = System.nanoTime()
+        val n = w * h
+        if (pageLevels.size < n) pageLevels = ByteArray(n)
+        val stride = bitmap.rowBytes
+        val pageW = minOf(w, bitmap.width)
+        val pageH = minOf(h, bitmap.height)
+        for (y in 0 until h) {
+            val row = y * w
+            if (y >= pageH) {
+                java.util.Arrays.fill(pageLevels, row, row + w, LEVEL_WHITE)
+                continue
+            }
+            val src = y * stride
+            for (x in 0 until pageW) {
+                pageLevels[row + x] =
+                    if (bytes[src + x] != DITHER_OFF) LEVEL_BLACK else LEVEL_WHITE
+            }
+            if (pageW < w) java.util.Arrays.fill(pageLevels, row + pageW, row + w, LEVEL_WHITE)
+        }
+        getLocationOnScreen(contactScreenLoc)
+        pageScreenRect.set(0, 0, w, h)
+        pageScreenRect.offset(contactScreenLoc[0], contactScreenLoc[1])
+        panel.post(pageScreenRect, pageLevels, w)
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        Log.i(TAG, "panel: page presented ${w}x$h in $ms ms")
     }
 
     /**

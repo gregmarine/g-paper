@@ -2408,6 +2408,26 @@ under ~300 ms, over-ink rubs unchanged (ink never erases), undo/redo, page turns
   (the Phase 28 bullets amended, a new standing rule for the bake) in the same commit.
 - Test counts: core **268**, ratta **73**. `./gradlew test` green, `:demo:assembleDebug` green.
 
+**A loaded page is presented through the panel first** (2026-09-19, same branch, unwalked,
+behind `PRESENT_LOADED_PAGE_VIA_PANEL`). The user's finding after the 0.1.43 build: the rubber
+and the pen direct are *"solid, much better"*, and what ghosts now is the **page flip** — on the
+sketch face, hardly ever on the notebook face. Fable's hypothesis is the HWC's per-frame waveform
+choice (`getBestDisplayMode` in `libeinkutils`): a dithered raster page is pure black and white
+with no grey in it, which is the content that reads as "two-level", and two-level is the waveform
+that ghosts; the notebook face's anti-aliased greys ask for the clean sixteen-level one. So the
+whole-page rebuild (`ditherRebuild`, the coalesced one a load or a content swap schedules) now
+converts the freshly rebuilt `ditherBytes` to the panel's two levels over the **view** rect and
+`panel.post`s it — the same `MODE_GREY16` every fleck goes out on — **before** `redrawCommitted()`
+presents the frame, so the compositor's own post a beat later finds identical pixels and drives
+nothing. No flatten is repeated (the bytes are the page's truth and were just written), the levels
+go in a page-sized scratch grown once, and where a page is smaller than the glass the levels are
+white. Whole-page rebuilds only — a mark's or a rub's rect has already posted itself under the
+nib — and never while a direct or rubbing contact is down, where the frame already on its way is
+the thing that must not be got behind. One log line, `panel: page presented WxH in N ms`. A full
+framework refresh at every turn cured the same ghosting and the user rolled it back (*"a bit
+much"*); whether this is the quiet form of that cure is the walk's to say, and the constant is
+there to take it back out in one line.
+
 **Deviations from the brief, and why**
 
 1. **The mirror is exact because the live half *calls* the bake's composite — not because two
