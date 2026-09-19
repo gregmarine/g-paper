@@ -2558,6 +2558,25 @@ with the true tone of the pen? I'm only asking about the pen tool … not pencil
 to solid grey means its white dots pass through black on the way; whether a partly-opaque ink
 edge over dithered graphite reads clean; and whether a grey pen line's pen-up feels late.
 
+### Phase 32 — Ink settles, not at pen-up (post-v0.1.0)
+**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.46 · branch `ink-true` (on Phase 31).
+The user's word after the Phase 31 walk: *"That looks okayish … Instead of on pen up, perhaps when
+the tool is changed, or when flipping pages, or anything other than drawing. Let's try that …
+anything other than drawing will rebake with the correct tone."*
+
+**Design**
+- The pen-up bake no longer re-presents; the mark stays on the glass as the dither it was drawn
+  as. Its runs go into `pendingInk`, and `DitherFlatten.coverage` / `band` take a `toneInk`
+  flag: false inside a waiting run (dither), true elsewhere (settled ink in tone).
+- **`settleInkTone()`** re-renders the waiting runs in tone (window via `regenDitherRuns`, panel
+  via `toneAndPost` when no contact is down) and forgets them. It is called from **every
+  non-drawing event the engine sees**: the `tool` / `penColor` / `penWidth` / `penStyle` setters
+  (a tool pick, a shade pick), and every `onRasterPixelsChanged` that is not the ink bake's own
+  announce (`inkJustBaked` marks that one) — a rub's batches, an undo/redo swap, a page load
+  (which clears the list, the whole page being rebuilt in tone anyway).
+- What the engine cannot see — a chrome flip, a finger gesture with no raster change — does not
+  settle; the host would need a door for that, which nobody has asked for.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

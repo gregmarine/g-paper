@@ -310,7 +310,25 @@ class DitherFlattenTest {
             assertEquals(if (Dither.black(0x80, x, y)) 255 else 0, lead)
             // A live fleck over baked ink: the pixel still has ink and no live ink → tone.
             assertEquals(255 - 0x80, DitherFlatten.coverage(transparent, 255, black, greyInk, 0, 0, x, y))
+            // Ink not yet settled (Phase 32) dithers exactly as `black` says.
+            val waiting = DitherFlatten.coverage(transparent, 0, 0, greyInk, 0, 0, x, y, toneInk = false)
+            assertEquals(if (Dither.black(0x80, x, y)) 255 else 0, waiting)
         }
+    }
+
+    @Test
+    fun `the band kernel dithers unsettled ink`() {
+        val w = 64
+        val h = 4
+        val ink = IntArray(w * h) { 0xFF808080.toInt() }
+        val blank = IntArray(w * h)
+        val out = ByteArray(w * h)
+        DitherFlatten.band(blank, false, ink, true, 0, 0, w, h, out, 0, w, ON, OFF, toneInk = false)
+        for (i in 0 until w * h) {
+            assertEquals(if (Dither.black(0x80, i % w, i / w)) ON else OFF, out[i])
+        }
+        DitherFlatten.band(blank, false, ink, true, 0, 0, w, h, out, 0, w, ON, OFF, toneInk = true)
+        assertTrue(out.all { it == (255 - 0x80).toByte() })
     }
 
     @Test

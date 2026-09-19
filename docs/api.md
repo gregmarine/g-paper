@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.45**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.46**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -242,8 +242,9 @@ simply appears at pen-up.
 **While that panel is ours the raster page is *shown* dithered** — a blue-noise dither
 of the same flatten, so every pixel on the glass is black or white — **except baked ink,
 which is shown in its true tone since 0.1.45**: a gel pen's line dithers while it is under
-the nib (so it lands at once) and is re-presented solid at pen-up, the grey the page holds;
-the pencil's graphite is dots throughout. This panel's greys arrive
+the nib (so it lands at once) and stays dithered at pen-up; it settles solid — the grey the
+page holds — at the next thing that is not a mark (0.1.46): a tool or pen-property change, a
+page load, an undo, a rub. The pencil's graphite is dots throughout. This panel's greys arrive
 a beat late and its black arrives at once, so a dither is the one picture it can show
 truthfully under a moving nib; it is how Supernote's own Atelier draws, and it is why a pale
 lead there keeps its whole shape. **It is a display decision and goes no further**: the
