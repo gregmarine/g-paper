@@ -30,7 +30,7 @@ import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
  *   [notifyContentChanged] for non-ink content.
  * - **Raster pages (0.1.25):** with [pageMode] = [PageMode.RASTER] the page is images
  *   rather than a list of strokes — **two of them since 0.1.39** ([RasterLayer]): graphite
- *   for the pencil, ink for everything else, seen as the two flattened with `DARKEN`,
+ *   for the pencil, ink for everything else, seen as the ink drawn over the graphite,
  *   because the rubber must lift graphite and leave ink and a pixel cannot say which tool
  *   laid it. Out: [PaperListener.onRasterWillChange] / [PaperListener.onRasterChanged]
  *   around every change, each naming its layer, plus [getPageRaster] / [copyPageRaster].
@@ -274,8 +274,8 @@ interface PaperView {
      * keeps drawing into the live one, which is only sound because this is a copy. Main
      * thread only; the copy costs about as long as a `memcpy` of the page.
      *
-     * This is one layer, not the picture. What the artist sees is the two flattened with
-     * `DARKEN`, which is what [renderToBitmap] renders; a host saving a page it means to
+     * This is one layer, not the picture. What the artist sees is the ink drawn over the
+     * graphite (0.1.44; `DARKEN` before it), which is what [renderToBitmap] renders; a host saving a page it means to
      * reload and keep drawing on saves both layers and reloads both, because a flatten
      * cannot be taken apart again.
      */
@@ -493,8 +493,8 @@ interface PaperView {
      * for host thumbnails/covers. Independent of the screen state and safe to call
      * while the EPD overlay is live. Returns null if the view is not laid out yet.
      *
-     * On a raster page this is the **flatten**: both [RasterLayer]s through the same
-     * `DARKEN` composite the panel shows, over the white and the template. It is the only
+     * On a raster page this is the **flatten**: both [RasterLayer]s, ink over graphite —
+     * the composite the panel shows — over the white and the template. It is the only
      * call that hands back the picture rather than a layer of it.
      */
     fun renderToBitmap(): Bitmap?

@@ -1087,7 +1087,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /**
      * Flatten [rect] the way the page will be seen, dither it, and show it: white paper, the
      * graphite image with this contact's flecks over it, and the ink image with this
-     * contact's ink over *it*, the two meeting through `DARKEN` — the same order and the
+     * contact's ink over *it*, ink on top (`SRC_OVER`, 0.1.44) — the same order and the
      * same operator `drawCommittedContent` uses, because anything else would be a second
      * opinion about what the page looks like and pen-up would be where the two met.
      *

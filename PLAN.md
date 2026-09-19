@@ -2497,6 +2497,35 @@ pencil lines less — the ghost is the fine dot field itself (thousands of isola
 transitions), not the waveform choice. Accepted as is; one future thread if ever wanted: a coarser
 dither (fewer, larger dots at the same tone). `direct-raster` merged to `main`; 0.1.43 published.
 
+### Phase 30 — Ink over graphite (post-v0.1.0)
+**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.44 · branch `ink-over`.
+Opened on the user's word during Notesprout's arc 46 "Palette" walk: *"The white pen should be able
+to write over the pencil. It correctly writes over the darker pen. In the real world, a white gel
+pen can write over anything."* — and the decision, asked plainly: **ink sits on top of graphite
+everywhere; pencil over an ink line is hidden by the ink.**
+
+**Design**
+- **The flatten is `SRC_OVER`, ink over graphite** — one operator change at the three sites that
+  are the one flatten: `CanvasPaperView.drawRasterLayers` (a `null` paint; `flattenPaint` and its
+  `DARKEN` xfermode are gone), `DitherFlatten.luma(graphite, ink)` (ink blended over the
+  graphite-over-white result rather than `min`'d against it) and the `band` kernel (the same
+  arithmetic written out). The live half is untouched: it still composites the live layer into its
+  own image with `srcOver` and asks the one `luma`, so live and baked still dither identically.
+- **Why `DARKEN` had to go:** it is `min` per channel, so a white or pale ink could never show over
+  darker graphite — the one thing the user asked for. `SRC_OVER` is the physical order the two
+  rasters were built to model (0.1.39: *ink is more permanent than pencil*): gel ink sits on the
+  sheet over graphite; graphite laid over dry ink mostly slides off.
+- **What moves and what does not:** on white paper with **black** ink the two operators are
+  pixel-identical, so every page drawn so far with the black gel pen renders exactly as before.
+  A page with pencil hatched *over* a black pen line now shows the line clean where the two cross
+  (the graphite is under it). A grey or white pen now covers pencil.
+- Prose everywhere `DARKEN` was named (`PaperView`, `RasterLayer`, `CanvasPaperView`,
+  `RattaPaperView`, `RattaPanelTone`, `docs/api.md`, `docs/host-responsibilities.md`) says the
+  new order and why. `DitherFlattenTest`'s darken test becomes the over test (a white pen covers a
+  black pencil; half-transparent ink blends over graphite, not over white).
+- No API change; SN re-pins 0.1.44 and flips the same operator in its own two flatten copies
+  (`SketchRaster`, `SketchCover`).
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

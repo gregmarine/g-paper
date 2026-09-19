@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.43**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.44**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -141,12 +141,14 @@ permanent than pencil.* So the fix is the page's data model. **The rubber reads 
 graphite only**; the ink image is never read, never allocated and never announced by an
 erase, and whether a firm rub should lift ink a little is a decision nobody has taken.
 
-**They flatten with `DARKEN`** — the darker of the two per channel — wherever the page is
-seen, which includes `renderToBitmap()`. `DARKEN` rather than an over-draw because these
-are not user-facing layers: there is no z-order to pick and no visibility to toggle, and
-`min` is commutative, so the picture is the same whichever image is painted first. It is
-also the right answer for a coloured ink later, and on white paper with grey marks it is
-pixel-identical to `SRC_OVER`, so nothing about a pencil-only page moves. **A flatten
+**The ink is drawn over the graphite** (`SRC_OVER`, 0.1.44) wherever the page is seen,
+which includes `renderToBitmap()`. 0.1.39–0.1.43 met the two through `DARKEN` — the darker
+per channel, so neither was on top — which could never show a white or pale ink over darker
+graphite; the user's decision is that *a white gel pen writes over anything*. The order is
+the media's: gel ink sits on the sheet over graphite, graphite over dry ink mostly slides
+off, so pencil over an ink line is hidden by the ink. These are still not user-facing
+layers — nothing to z-order, nothing to toggle — and on white paper with black ink the two
+operators are pixel-identical, so a page with a black pen does not move. **A flatten
 cannot be taken apart again**: a host that means to reload a page and keep drawing on it
 saves and reloads both layers, and uses `renderToBitmap()` for a cover or a share.
 

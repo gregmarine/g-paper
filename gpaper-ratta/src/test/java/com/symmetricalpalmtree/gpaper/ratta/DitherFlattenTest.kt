@@ -63,19 +63,22 @@ class DitherFlattenTest {
     }
 
     @Test
-    fun `ink darkens and never lightens`() {
-        // DARKEN, per channel: the pair has no top and no bottom.
+    fun `ink sits over graphite - a white pen covers a black pencil`() {
+        // SRC_OVER, ink on top (0.1.44): the ink side wins wherever it is opaque, lighter or
+        // darker, and a pale graphite never shows through a dark ink.
         assertEquals(0, DitherFlatten.luma(transparent, 0, black, black))
-        assertEquals(0, DitherFlatten.luma(black, 0, black, white))
+        assertEquals(255, DitherFlatten.luma(black, 0, black, white))
         assertEquals(255, DitherFlatten.luma(white, 0, black, transparent))
         val grey = 0xFF808080.toInt()
-        assertEquals(
-            DitherFlatten.luma(grey, 0, black, transparent),
-            DitherFlatten.luma(transparent, 0, black, grey),
-        )
-        // Order-independent: whichever is darker wins, either way round.
+        assertEquals(0x80, DitherFlatten.luma(grey, 0, black, transparent))
+        assertEquals(0x80, DitherFlatten.luma(transparent, 0, black, grey))
+        // Not order-independent any more: the ink side is on top either way round.
         val dark = 0xFF303030.toInt()
-        assertEquals(DitherFlatten.luma(dark, 0, black, grey), DitherFlatten.luma(grey, 0, black, dark))
+        assertEquals(0x80, DitherFlatten.luma(dark, 0, black, grey))
+        assertEquals(0x30, DitherFlatten.luma(grey, 0, black, dark))
+        // Half-transparent ink blends over the graphite, not over white.
+        val halfBlack = 0x80000000.toInt()
+        assertEquals(0x80 * (255 - 0x80) / 255, DitherFlatten.luma(grey, 0, black, halfBlack))
     }
 
     @Test
@@ -195,14 +198,14 @@ class DitherFlattenTest {
         val pen = 0xFF000000.toInt()
         val lead = 0xFF808080.toInt()
         val graphite = 0xFF909090.toInt()
-        // Live ink over bare ink paper: DARKEN against the graphite side.
+        // Live ink over bare ink paper: on top of the graphite side.
         assertEquals(0, DitherFlatten.luma(graphite, 0, lead, 0, 255, pen))
         // …and with no live ink at all the graphite side stands alone.
         assertEquals(
             DitherFlatten.luma(graphite, 0, lead, 0),
             DitherFlatten.luma(graphite, 0, lead, 0, 0, pen),
         )
-        // A live fleck on the graphite side, with ink present, still goes through DARKEN.
+        // A live fleck on the graphite side, with ink present, still goes under the ink.
         val ink = 0xFFC0C0C0.toInt()
         assertEquals(
             DitherFlatten.luma(0xFF404040.toInt(), 0, lead, ink),

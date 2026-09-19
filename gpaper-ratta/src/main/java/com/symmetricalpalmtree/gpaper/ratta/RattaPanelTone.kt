@@ -58,7 +58,7 @@ internal object RattaPanelTone {
      * colour at the tone of its luminance) through [level].
      *
      * The caller flattens first: white paper, then graphite, then the live flecks, then ink
-     * through `DARKEN` — exactly what `drawCommittedContent` will draw a moment later. Alpha
+     * over all of it — exactly what `drawCommittedContent` will draw a moment later. Alpha
      * is not read here; a pixel handed over half-composited would be a bug in the caller.
      *
      * Rounded, never truncated: the three luma weights sum to one, so a plain grey should

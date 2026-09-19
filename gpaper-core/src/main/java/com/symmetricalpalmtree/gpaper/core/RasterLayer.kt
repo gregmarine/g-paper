@@ -19,12 +19,13 @@ import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
  * and writes [GRAPHITE] only — the ink raster is never read, never allocated and never
  * announced by an erase.
  *
- * **These are not user-facing layers.** There is no z-order to choose, no visibility to
- * toggle, no "which one is on top": the page is seen as the two flattened with
- * `PorterDuff.Mode.DARKEN`, the darker of the two per channel, which is commutative and
- * therefore has no top and no bottom. It is also what a coloured ink will want later
- * (min per channel is the answer a real overlay of two transparent media gives), and on
- * white paper it is pixel-identical to drawing one over the other.
+ * **These are not user-facing layers.** There is no z-order to choose and no visibility to
+ * toggle. The page is seen as the ink image drawn **over** the graphite image (`SRC_OVER`,
+ * 0.1.44 — the user's decision that a white gel pen writes over anything; 0.1.39–0.1.43
+ * met the two through `DARKEN`, which could never show a pale ink over darker graphite).
+ * The order is the media's, not a choice: gel ink sits on the sheet over graphite, and
+ * graphite laid over dry ink mostly slides off, so pencil over an ink line is hidden by it.
+ * On white paper with black ink the two operators are pixel-identical.
  *
  * **An un-layered raster call means [GRAPHITE]** — every `loadPageRaster(bitmap)`,
  * `getPageRaster()`, `copyPageRaster(rect)`, `readPageRaster(rect)`,

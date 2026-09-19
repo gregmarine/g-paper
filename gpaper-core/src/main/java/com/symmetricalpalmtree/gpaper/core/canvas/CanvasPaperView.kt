@@ -7,8 +7,6 @@ import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.RenderNode
@@ -75,7 +73,7 @@ import java.util.UUID
  *   composited into at pen-up through the very same [StrokeRenderer]. Everything before
  *   pen-up is shared with stroke mode; only what is *kept* differs. See [pageMode].
  *   **Two images since 0.1.39** ([RasterLayer]): [graphiteRaster] and [inkRaster],
- *   routed by style, flattened with `DARKEN` — so the rubber can lift graphite and leave
+ *   routed by style, ink drawn over graphite — so the rubber can lift graphite and leave
  *   ink, which one bitmap could never do because a pixel does not know what laid it.
  *
  * Input is stylus-only: finger events are never consumed, so host gestures work above and
@@ -208,9 +206,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * know which tool laid it**: the rubber lifts alpha wherever it sweeps, so one image
      * meant a gel pen came up exactly as graphite did, and no colour key can separate a
      * black pen from a black pencil honestly. The artist's rule is the physical one — ink
-     * is more permanent than pencil — so the answer is the page's data model. The two are
-     * flattened with `DARKEN` wherever the page is seen ([drawCommittedContent]), which is
-     * order-independent: there is no top layer here and nothing for a host to z-order.
+     * is more permanent than pencil — so the answer is the page's data model. The ink image
+     * is drawn **over** the graphite one wherever the page is seen ([drawCommittedContent],
+     * Phase 30): ink sits on top of graphite as gel ink sits on pencil, and there is still
+     * nothing for a host to z-order — the order is the media's, not a choice.
      *
      * The cost is a second page-sized bitmap **only once ink lands** — a pencil-only page
      * never allocates it, and neither does an erase, which never reads this image at all.
@@ -218,23 +217,19 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var inkRaster: Bitmap? = null
 
     /**
-     * The flatten (0.1.39): the ink image goes over the graphite one through
-     * `PorterDuff.Mode.DARKEN` — the darker of the two per channel.
+     * The flatten (0.1.39, reordered 0.1.44): the ink image goes **over** the graphite one —
+     * plain `SRC_OVER`, ink on top.
      *
-     * `DARKEN` rather than the ordinary over-draw because a flatten must not have a top
-     * and a bottom. Neither raster is "above" the other in anything the artist did: they
-     * are two media on one sheet, and `min` is commutative, so the picture is the same
-     * whichever is painted first. It is also the right answer for a coloured ink later
-     * (two transparent media overlaid darken each channel independently), and on white
-     * paper with grey marks it is pixel-identical to `SRC_OVER`, so nothing about the
-     * pencil-only page the artist already approved moves.
-     *
-     * Allocated once and reused; a `Paint` per frame is a page's worth of garbage on a
-     * panel that re-records whenever anything changes.
+     * 0.1.39–0.1.43 flattened with `DARKEN` (the darker of the two per channel) so the
+     * pair had no top and no bottom. Phase 30 puts ink on top by the user's decision — *"a
+     * white gel pen can write over anything"* — which `DARKEN` cannot give: a white or pale
+     * ink could never show over darker graphite. The physical model is the same one the
+     * two rasters were built for (ink is more permanent than pencil): gel ink sits on the
+     * sheet over the graphite, and graphite laid over dry ink mostly slides off, so pencil
+     * over an ink line is hidden by the ink. On white paper with black ink over grey
+     * graphite the two operators are pixel-identical, so nothing about a page with a black
+     * pen moves. A `null` paint is the over-draw; nothing is allocated for it.
      */
-    private val flattenPaint = Paint().apply {
-        xfermode = PorterDuffXfermode(PorterDuff.Mode.DARKEN)
-    }
 
     private val contentRenderers = ArrayList<ContentRenderer>()
 
@@ -735,7 +730,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      *
      * It exists for Ratta's direct panel preview (Phase 28), which must work out the grey a
      * pixel is about to show — white, then graphite, then the live flecks, then ink through
-     * `DARKEN` — outside the window's own drawing, because on that path there is no frame.
+     * ink over graphite — outside the window's own drawing, because on that path there is no frame.
      * Everything else asks [drawCommittedContent] for the page and lets Canvas do it.
      */
     protected fun rasterFor(layer: RasterLayer): Bitmap? = raster(layer)
@@ -1429,8 +1424,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * Draw the raster page onto [canvas]: two blits where the stroke loop would run. The
      * page images sit at the page origin, over the paper and under the host's
      * above-strokes content, exactly where the baked strokes would have been. The ink goes
-     * on through `DARKEN` — the darker of the two per channel — so the pair flattens with
-     * no top and no bottom (see [flattenPaint]); a page with only one of them is one blit.
+     * on **over** the graphite — `SRC_OVER`, ink on top (Phase 30; see the note on
+     * [inkRaster]); a page with only one of them is one blit.
      *
      * **The seam exists because a panel may not be able to show the page as it is**
      * (Phase 28). Supernote's direct path shows the artist a *dither* of this same
@@ -1442,7 +1437,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      */
     protected open fun drawRasterLayers(canvas: Canvas, forDisplay: Boolean) {
         graphiteRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
-        inkRaster?.let { canvas.drawBitmap(it, 0f, 0f, flattenPaint) }
+        inkRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
     }
 
     /**

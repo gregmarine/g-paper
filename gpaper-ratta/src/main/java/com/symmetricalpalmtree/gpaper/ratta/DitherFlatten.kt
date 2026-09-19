@@ -19,10 +19,10 @@ import com.symmetricalpalmtree.gpaper.core.geometry.Dither
  *
  * The flatten is `drawCommittedContent`'s own, in the same order and with the same
  * operator: white paper, the graphite image with this contact's flecks over it, and the ink
- * image with this contact's ink over *it*, the two meeting through `DARKEN` — the darker of
- * the two per channel, which is commutative, so the pair has no top and no bottom to get
- * wrong. The display half simply passes live alphas of zero, because by then the mark is in
- * the image it belongs to.
+ * image with this contact's ink over *it*, the ink laid **over** the graphite (`SRC_OVER`,
+ * Phase 30 — ink is on top, the way gel ink sits on graphite; until 0.1.43 the two met
+ * through `DARKEN`). The display half simply passes live alphas of zero, because by then the
+ * mark is in the image it belongs to.
  *
  * **Since Phase 29 the bake is here too** ([srcOver]). The live layer is composited into
  * the page image with the very arithmetic the live flatten applied to it, so the mirror is
@@ -45,8 +45,8 @@ internal object DitherFlatten {
     /**
      * The grey (0…255) a page pixel shows, with a live layer over **each** image: the
      * graphite side is the graphite image plus [liveGraphite] flecks in [graphiteColor],
-     * the ink side is the ink image plus [liveInk] in [inkColor], and the two meet through
-     * `DARKEN`. See the class KDoc for the order.
+     * the ink side is the ink image plus [liveInk] in [inkColor], and the ink side goes
+     * **over** the graphite side. See the class KDoc for the order.
      *
      * Both live alphas are `0` for the display half, where whatever was live has been
      * baked into the image beside it, and at most one of them is ever non-zero under the
@@ -66,7 +66,7 @@ internal object DitherFlatten {
 
     /**
      * The grey (0…255) the two page images alone show: white paper, the graphite image
-     * over it, the ink image through `DARKEN`.
+     * over it, the ink image **over that** (`SRC_OVER` — Phase 30; `DARKEN` before it).
      *
      * **This is the only flatten there is.** The live half above does not have a second
      * one: it composites its live layer into the page pixel with [srcOver] — the very call
@@ -88,13 +88,15 @@ internal object DitherFlatten {
             b = over(graphite and 0xFF, ga)
         }
         val ia = ink ushr 24
-        if (ia != 0) {
-            val ir = over(ink ushr 16 and 0xFF, ia)
-            val ig = over(ink ushr 8 and 0xFF, ia)
-            val ib = over(ink and 0xFF, ia)
-            if (ir < r) r = ir
-            if (ig < g) g = ig
-            if (ib < b) b = ib
+        if (ia == 255) {
+            r = ink ushr 16 and 0xFF
+            g = ink ushr 8 and 0xFF
+            b = ink and 0xFF
+        } else if (ia != 0) {
+            val inv = 255 - ia
+            r = ((ink ushr 16 and 0xFF) * ia + r * inv) / 255
+            g = ((ink ushr 8 and 0xFF) * ia + g * inv) / 255
+            b = ((ink and 0xFF) * ia + b * inv) / 255
         }
         return (LUMA_R * r + LUMA_G * g + LUMA_B * b) shr 8
     }
@@ -258,8 +260,8 @@ internal object DitherFlatten {
                 val kp = if (k) ink[src + x] else 0
                 var grey = 255
                 if ((gp or kp) ushr 24 != 0) {
-                    // White paper, the graphite image over it, the ink image through
-                    // DARKEN — [luma]'s own order, written out so nothing is called here.
+                    // White paper, the graphite image over it, the ink image OVER that —
+                    // [luma]'s own order, written out so nothing is called here.
                     var r = 255
                     var gg = 255
                     var b = 255
@@ -275,19 +277,15 @@ internal object DitherFlatten {
                         b = ((gp and 0xFF) * ga + inv) / 255
                     }
                     val ia = kp ushr 24
-                    if (ia != 0) {
-                        var ir = kp ushr 16 and 0xFF
-                        var ig = kp ushr 8 and 0xFF
-                        var ib = kp and 0xFF
-                        if (ia != 255) {
-                            val inv = 255 * (255 - ia)
-                            ir = (ir * ia + inv) / 255
-                            ig = (ig * ia + inv) / 255
-                            ib = (ib * ia + inv) / 255
-                        }
-                        if (ir < r) r = ir
-                        if (ig < gg) gg = ig
-                        if (ib < b) b = ib
+                    if (ia == 255) {
+                        r = kp ushr 16 and 0xFF
+                        gg = kp ushr 8 and 0xFF
+                        b = kp and 0xFF
+                    } else if (ia != 0) {
+                        val inv = 255 - ia
+                        r = ((kp ushr 16 and 0xFF) * ia + r * inv) / 255
+                        gg = ((kp ushr 8 and 0xFF) * ia + gg * inv) / 255
+                        b = ((kp and 0xFF) * ia + b * inv) / 255
                     }
                     grey = (LUMA_R * r + LUMA_G * gg + LUMA_B * b) shr 8
                 }
