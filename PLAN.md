@@ -2307,6 +2307,16 @@ a pen-up is now invisible **for a scribble as well as for a line** (the line is 
 138–198 ms), which is what the batch's log line at 20 ms and the kept `slow touch` timer are
 there to answer.
 
+**Maintenance closed (2026-09-19, the user's Nomad walk — "It all works great").** Measured on the
+final build: page turns wait 12–15 ms for the pixel copy (encodes of 0.5–0.9 s run behind them —
+the face change is Notesprout's, § sketch.md "Saves"); pen-up 100–190 ms for lines and ordinary
+marks, a 39-run scribble's batch landing 129 ms by page copy; **one dense scribble's pen-up 1185 ms,
+of which the dither was 129 — the rest is the bake of the grain itself plus the host's before-image
+reads, a known cost for a later phase (an asynchronous bake).** The temporary `slow touch` /
+`slow firmware transact` timers are removed. The eraser / page-flip ghosting remains the open
+question (candidates: an automatic full refresh at page turn; the rubber through the panel).
+`ebc-maint` merged to `main`; 0.1.42 published.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
