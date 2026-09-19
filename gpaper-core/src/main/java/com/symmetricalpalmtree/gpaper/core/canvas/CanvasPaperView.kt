@@ -789,7 +789,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             }
             StrokeRenderer.draw(
                 canvas, bakePoints(s), s.color, s.width, s.style, scratchPaint, s.id.hashCode(),
-                opaqueFlecks = opaquePencilFlecks,
+                pencilInk = pencilInk(s.color),
             )
         }
     }
@@ -1232,7 +1232,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             StrokeRenderer.draw(
                 canvas, activePoints, penColor, penWidth, penStyle, scratchPaint,
                 pendingStrokeId().hashCode(),
-                opaqueFlecks = opaquePencilFlecks,
+                pencilInk = pencilInk(penColor),
             )
         }
         // Lasso trail (engines with hardware trails set rendersLiveTrail = false).
@@ -1261,8 +1261,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             for (s in dragStrokes) {
                 StrokeRenderer.draw(
                     canvas, s.points, s.color, s.width, s.style, scratchPaint, s.id.hashCode(),
-                opaqueFlecks = opaquePencilFlecks,
-            )
+                    pencilInk = pencilInk(s.color),
+                )
             }
             for ((renderer, target) in dragContentTargets) {
                 if (!renderer.drawObject(canvas, target.contentId)) {
@@ -1353,8 +1353,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 StrokeRenderer.draw(
                     canvas, stroke.points, stroke.color, stroke.width, stroke.style, scratchPaint,
                     stroke.id.hashCode(),
-                opaqueFlecks = opaquePencilFlecks,
-            )
+                    pencilInk = pencilInk(stroke.color),
+                )
             }
         }
         for (renderer in contentRenderers) {
@@ -1510,10 +1510,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         canvas: Canvas,
         grain: GraphiteGrain.Grain,
         from: Int,
-        color: Int,
+        ink: PencilInk,
         width: Float,
     ) {
-        StrokeRenderer.drawPencilFlecks(canvas, grain, from, color, width, scratchPaint, opaquePencilFlecks)
+        StrokeRenderer.drawPencilFlecks(canvas, grain, from, ink, width, scratchPaint)
     }
 
     // ── Pen-gesture recognizers (smart lasso / scribble erase) ───────────────
@@ -1720,13 +1720,18 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected open fun onLiveStrokeExtended(points: List<StrokePoint>) {}
 
     /**
-     * Whether `PENCIL` renders its flecks opaque — darkness from density and size only —
-     * rather than alpha-graded (Phase 28). False here and on every engine but Supernote's
-     * direct panel path, where the panel's own physics demands it (see
-     * `StrokeRenderer.drawPencilFlecks`). Read at every pencil render — bake, live, drag,
-     * committed — so a page never mixes the two.
+     * How `PENCIL` lays its graphite on this engine for a stroke of [color] — the stroke's own
+     * colour, alpha-graded, at full density, unless a device engine overrides it (see
+     * [PencilInk]).
+     *
+     * Read at **every** pencil render — the raster bake, the committed record, the live layer
+     * and a drag's — because a page that rendered the same mark two ways would show the
+     * difference at exactly the moments it must not: pen-up, and a page reload. It is asked per
+     * stroke rather than read as a flag so an engine can answer from the shade that was picked;
+     * the [com.symmetricalpalmtree.gpaper.core.model.Stroke]'s stored colour is never touched.
      */
-    protected open val opaquePencilFlecks: Boolean get() = false
+    protected open fun pencilInk(color: Int): PencilInk =
+        PencilInk(color, opaque = false, density = 1f)
 
     /** Start a fresh eraser sweep: the next [eraseAlong] batch won't chain to the last. */
     protected fun beginEraseSweep() {

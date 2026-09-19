@@ -461,12 +461,35 @@ object GraphiteGrain {
      * invariant above). A caller drawing successive prefixes therefore draws each fleck once,
      * from `count` of the previous call to `count` of this one, and never has to take one
      * back — which is the whole point on a panel painted directly.
+     *
+     * [density] (`0`..`1`, clamped) thins the mark: it scales the **coverage** every site is
+     * tested against, and nothing else. Not the levels, not the fleck sizes, not where the
+     * stations fall — so a paler mark is the same mark with fewer of its flecks, and because
+     * [catches] weighs a site's own fixed toss against that coverage, **the flecks at density
+     * `d` are an ordered subset of the flecks at density `1`**: the same specks, in the same
+     * places, at the same darknesses, with some of them left out. (Below [MAX_FLECKS], which
+     * a thinned mark reaches later than a full one if it reaches it at all.)
+     *
+     * That is what a shade *is* on a panel whose greys arrive late. A 16-grey e-ink waveform
+     * lands black on its first frame and reaches a grey only by passing through black, so a
+     * pale grey fleck trails the nib while a black one is simply there; a pencil that asks
+     * for a lighter lead by laying **fewer black flecks** can be previewed truthfully and a
+     * pencil that asks for it by laying paler ones cannot (Phase 28, the second Nomad walk:
+     * every pixel Atelier hands the panel for a light shade is level 0, pure black). Engines
+     * whose preview can carry tone pass `1` and grade the flecks by alpha as they always have.
      */
-    fun of(points: List<StrokePoint>, width: Float, seed: Int, prefix: Boolean = false): Grain {
+    fun of(
+        points: List<StrokePoint>,
+        width: Float,
+        seed: Int,
+        prefix: Boolean = false,
+        density: Float = 1f,
+    ): Grain {
         if (points.isEmpty()) return EMPTY
+        val d = density.coerceIn(0f, 1f)
         val base = (if (width < MIN_WIDTH_PX) MIN_WIDTH_PX else width) / 2f
-        if (points.size == 1) return if (prefix) EMPTY else tap(points[0], base, seed)
-        return sweep(points, base, seed, prefix)
+        if (points.size == 1) return if (prefix) EMPTY else tap(points[0], base, seed, d)
+        return sweep(points, base, seed, prefix, d)
     }
 
     /**
@@ -552,6 +575,7 @@ object GraphiteGrain {
         seed: Int,
         station0: Int,
         sign: Float,
+        density: Float,
     ) {
         if (half <= TOOTH_PITCH_PX) return
         var d = TOOTH_PITCH_PX
@@ -573,6 +597,7 @@ object GraphiteGrain {
                     lanes = lanes,
                     half = shrunk,
                     seed = seed,
+                    density = density,
                 )
             }
             d += TOOTH_PITCH_PX
@@ -701,7 +726,7 @@ object GraphiteGrain {
      * what makes the loop resumable: the caller keeps the whole stroke so far and this says
      * how much of it has already been laid.
      */
-    private class SweepState(val base: Float, val seed: Int) {
+    private class SweepState(val base: Float, val seed: Int, val density: Float) {
         /** Set once the arrival trim and the two filter seeds have been decided. */
         var seeded = false
         var from = 0
@@ -752,11 +777,12 @@ object GraphiteGrain {
      *
      * Not thread-safe, and not meant to be: it belongs to one contact.
      */
-    class Sweep internal constructor(width: Float, seed: Int) {
+    class Sweep internal constructor(width: Float, seed: Int, density: Float) {
 
         private val state = SweepState(
             base = (if (width < MIN_WIDTH_PX) MIN_WIDTH_PX else width) / 2f,
             seed = seed,
+            density = density.coerceIn(0f, 1f),
         )
 
         /** How many flecks this sweep has handed out since it began. */
@@ -780,19 +806,26 @@ object GraphiteGrain {
 
     /**
      * Begin a resumable sweep of a [width] px lead seeded by [seed] — the stroke's stable id,
-     * the same one [of] will be called with when the mark commits. See [Sweep].
+     * the same one [of] will be called with when the mark commits — at [density], the same
+     * one [of] will be called with too. See [Sweep] and [of].
      */
-    fun begin(width: Float, seed: Int): Sweep = Sweep(width, seed)
+    fun begin(width: Float, seed: Int, density: Float = 1f): Sweep = Sweep(width, seed, density)
 
-    private fun sweep(points: List<StrokePoint>, base: Float, seed: Int, prefix: Boolean): Grain {
-        val state = SweepState(base, seed)
+    private fun sweep(
+        points: List<StrokePoint>,
+        base: Float,
+        seed: Int,
+        prefix: Boolean,
+        density: Float,
+    ): Grain {
+        val state = SweepState(base, seed, density)
         val out = Sink()
         // A prefix that has not travelled far enough to decide these things the way the
         // finished stroke will lays nothing: see [prefixDecidable].
         if (!advance(state, points, out, prefix)) return EMPTY
         // A path shorter than one pitch never reaches a station; it still left graphite —
         // but a tap is not a prefix of a sweep, so prefix mode waits for the first station.
-        if (state.station == 0) return if (prefix) EMPTY else tap(points[state.from], base, seed)
+        if (state.station == 0) return if (prefix) EMPTY else tap(points[state.from], base, seed, density)
         // And the lifting end gets its dome too — except under the pen, where that end is
         // the tip of the lead and has not come to rest anywhere yet. (Nor past MAX_FLECKS,
         // where the sweep gave up mid-stroke and a dome would cap nothing.)
@@ -800,7 +833,7 @@ object GraphiteGrain {
             cap(
                 out, state.lastCx, state.lastCy, state.travelX, state.travelY,
                 state.lastPress, state.lastLean, state.lastArc, state.lastHalf,
-                seed, state.station + 1, 1f,
+                seed, state.station + 1, 1f, state.density,
             )
         }
         return out.grain()
@@ -869,6 +902,7 @@ object GraphiteGrain {
         }
         if (state.full) return true
         val base = state.base
+        val density = state.density
         // Exponential, one pole, walked forward with the stations — so each depends only on
         // the path already covered and a prefix of the stroke renders identically to the
         // whole of it.
@@ -945,6 +979,7 @@ object GraphiteGrain {
                     lanes = laneCount(half),
                     half = half,
                     seed = seed,
+                    density = density,
                 )
                 lastCx = cx
                 lastCy = cy
@@ -958,7 +993,7 @@ object GraphiteGrain {
                     capped = true
                     cap(
                         out, cx, cy, travelX, travelY, pressure, coverLean, nextAt, half,
-                        seed, -1, -1f,
+                        seed, -1, -1f, density,
                     )
                 }
                 station++
@@ -1007,6 +1042,7 @@ object GraphiteGrain {
         lanes: Int,
         half: Float,
         seed: Int,
+        density: Float,
     ) {
         val nx = -ty
         val ny = tx
@@ -1021,7 +1057,10 @@ object GraphiteGrain {
         for (lane in 0 until lanes) {
             val u = laneOffset(lane, lanes, phase)
             val site = u * half
-            val cover = coverage(press, u) * skate(arc, site, seed) * lean
+            // [density] multiplies the coverage and only the coverage — see [of]. A site's own
+            // toss in [catches] does not move with it, so thinning a mark removes flecks and
+            // never relocates one.
+            val cover = coverage(press, u) * skate(arc, site, seed) * lean * density
             if (cover <= 0f) continue
             val alongJitter = (unit(hash(seed, station, lane)) - 0.5f) *
                 (JITTER * TOOTH_PITCH_PX + 2f * LEVER_JITTER * abs(site))
@@ -1036,7 +1075,7 @@ object GraphiteGrain {
     }
 
     /** A tap: the same tooth lattice, filled over a disc instead of swept along a path. */
-    private fun tap(p: StrokePoint, base: Float, seed: Int): Grain {
+    private fun tap(p: StrokePoint, base: Float, seed: Int, density: Float): Grain {
         val out = Sink()
         val half = base * widthFactor(p.tilt)
         val lean = coverageFactor(p.tilt)
@@ -1048,7 +1087,7 @@ object GraphiteGrain {
                 val u = laneOffset(lane, lanes, unit(hash(seed, row, 0x2e8)))
                 val r = sqrt(u * u + v * v)
                 if (r > 1f) continue
-                val cover = coverage(press, r) * lean
+                val cover = coverage(press, r) * lean * density
                 if (cover <= 0f) continue
                 val jx = (unit(hash(seed, row, lane)) - 0.5f) * JITTER * TOOTH_PITCH_PX
                 val jy = (unit(hash(seed, row, lane xor 0x5bf0)) - 0.5f) * JITTER * TOOTH_PITCH_PX
@@ -1099,6 +1138,12 @@ object GraphiteGrain {
      * site's own coin toss [h]. The toss and the sheet's tooth under the site are blended by
      * [TOOTH_WEIGHT]; a hollow needs more coverage to fill than a peak does, and at full coverage
      * everything fills.
+     *
+     * **The toss is independent of [cover]**, which is what makes the whole thing monotone in
+     * coverage: lower the coverage and a site that caught may stop catching, but no site that
+     * did not catch can start. That is the property `density` rests on ([of]) — and it is a
+     * property of this shape, not an accident, so a future `catches` that mixed the coverage
+     * into the toss would break a thinned mark's promise to be a subset of the full one.
      */
     private fun catches(cover: Float, x: Float, y: Float, h: Int): Boolean {
         val draw = unit(h) * (1f - TOOTH_WEIGHT) + (1f - tooth(x, y)) * TOOTH_WEIGHT

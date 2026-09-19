@@ -125,6 +125,19 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   **black flecks land at once** — so a scatter is the one thing this panel can preview
   truthfully, and a pencil is a scatter. `probe-ebc/README.md` holds every number; the
   fallback when the driver is unavailable is 0.1.40's needle, one log line, no host change.
+  **(4) On that path a pencil's shade is a DENSITY of black flecks, live and baked — grey
+  pixels are never sent to the panel by the pencil.** The first walk made the flecks opaque
+  and the black lead stopped trailing; the pale leads did not, because the fault was the
+  *grey*, not the alpha. Atelier's own frame, read back, settles it: a light-grey stroke is
+  **3401 stroke pixels, every one level 0** — its sixteen shades are sixteen densities of one
+  ink. So `GraphiteGrain.of(…, density)` scales the **coverage** and nothing else, which makes
+  a thinned mark an *ordered subset* of the full one (`catches` weighs a fixed per-site toss
+  against the coverage), and `PencilInk(color, opaque, density)` — asked per stroke through
+  `CanvasPaperView.pencilInk(color)` — carries the answer to every pencil render on an engine,
+  so a page can never mix two. `RattaPencilInk` fits Atelier's measured ladder
+  (`1 − 0.85·(luma/221)^1.5`, floor 0.15, white ≥ 224 staying the full-density lightener). The
+  **stroke's stored colour never moves**: this is a rendering decision belonging to one panel,
+  and BOOX, the generic engine and Paintsprout keep the alpha-graded pencil at density 1.
 - **A live preview may lay a fleck only where the bake will put one — which makes
   `GraphiteGrain`'s PREFIX the contract, not the whole (Phase 28).** `of(points, …,
   prefix = true)` returns an exact ordered prefix of the finished stroke's grain, so a

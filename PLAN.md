@@ -2003,6 +2003,53 @@ of the loop that lays every pencil mark on every engine needs something that fai
 one fleck moves, `GraphiteGrainPinTest` pins nine strokes' grain as a checksum over every
 coordinate's raw bits: **it was written and made green before the refactor, and never moved.**
 
+**Second walk (2026-09-18/19, Nomad): a shade is a DENSITY, not a grey.** The first walk's
+fix made the flecks opaque and the marks stopped trailing — for black. The paler the lead,
+the worse it still was: *shade 0 perfect, 5 laggy, 9 more, 13 "starts black then switches"*.
+The panel's own frame, read back while **Atelier** drew a light-grey pencil, says why in one
+number: **3401 stroke pixels, every one of them level 0, pure black.** Atelier never sends the
+panel a grey for a pencil at all. Its sixteen shades are sixteen *densities* of the one ink —
+which is exactly what the probe's physics had already said and nobody had followed through:
+the 16-grey waveform passes **through** black on its way to a grey, so a grey pixel lands
+black and lightens over the next second or so while a black pixel is simply there. Opaque grey
+flecks are no better than alpha-graded ones; the fault was never the alpha, it was the *grey*.
+**The user's decision: on Supernote's direct path the pencil's shade becomes fleck density and
+every fleck is black — live preview and bake alike. BOOX and Paintsprout untouched.**
+
+What changed. `GraphiteGrain.of(…, density)` and `begin(…, density)` scale the **coverage**
+each site is tested against and nothing else — never a level, never a fleck size, never where
+a station falls. That makes a thinned mark an **ordered subset** of the full one, because
+`catches` weighs a site's own fixed coin toss against the coverage and the toss does not move
+with it: the same specks, in the same places, at the same darknesses, with some left out
+(`GraphiteGrainDensityTest`, 8 cases — density 1 identical to today, the subset property, the
+sweep/prefix agreement in every chunking at three densities, density 0 laying nothing, and the
+clamp). `GraphiteGrainPinTest` never moved, which is the byte-identity guard for density 1.
+The stop-gap `opaquePencilFlecks` boolean from the first walk is gone, replaced by
+`PencilInk(color, opaque, density)` and `CanvasPaperView.pencilInk(color)` — a `protected open
+fun`, asked **per stroke** at every pencil render (raster bake, committed record, live layer,
+drag) so an engine can answer from the shade that was picked. `StrokeRenderer.draw` takes a
+`pencilInk: PencilInk? = null`; null is the stroke's own colour, alpha-graded, at density 1,
+which is every other engine and `StrokeRasterizer`. `RattaPencilInk.of(argb)` is the Ratta
+answer: luma ≥ 224 → **white, opaque, density 1** (the lightener lead — Phase 27 — and white
+lands as fast as black), otherwise **black, opaque**, at the density its luma asks for.
+`RattaPaperView` latches the contact's `PencilInk` at ACTION_DOWN and uses it for the sweep,
+the fleck rasterisation and the flatten (`toneAndPost` composites the live alpha with the
+**ink's** colour, not `penColor`, or the panel would see a grey no fleck on it is).
+
+**The curve is Atelier's own, measured (Nomad, 2026-09-19).** `probe-ebc`'s dump was pointed
+at one Atelier stroke per shade of its sixteen-step palette and the black panel pixels counted
+per pixel of stroke length, relative to the black lead's 2.67: luma 80→0.82 · 96→0.77 ·
+104→0.72 · 112→0.69 · 128→0.63 · 136→0.58 · 144→0.56 · 160→0.48 · 170→0.42 · 182→0.37 ·
+192→0.32 · 200→0.27 · 208→0.25 · 221→0.15. `density = 1 − 0.85 · (luma / 221)^1.5`, floored at
+0.15, sits within a few percent of all fourteen (`RattaPencilInkTest` pins them). The three
+constants are named and their KDoc says what they are: a fit to **Atelier's** HB pencil, not
+to ours — what is borrowed is the *shape of the ladder*, how much paler each rung is than the
+one below, which is what a hand judges when it picks a shade. Whether our own grain at 0.51
+looks like a `#999999` lead is a question for the walk.
+
+**Still unwalked:** every number above is a starting value. The device gate at the head of
+this phase is open.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

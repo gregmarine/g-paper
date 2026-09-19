@@ -13,6 +13,7 @@ import com.symmetricalpalmtree.gpaper.core.PageMode
 import com.symmetricalpalmtree.gpaper.core.RasterLayer
 import com.symmetricalpalmtree.gpaper.core.Tool
 import com.symmetricalpalmtree.gpaper.core.canvas.CanvasPaperView
+import com.symmetricalpalmtree.gpaper.core.canvas.PencilInk
 import com.symmetricalpalmtree.gpaper.core.geometry.GraphiteGrain
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
@@ -538,15 +539,19 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (style == StrokeStyle.PENCIL && firmware) 0f else tilt
 
     /**
-     * On the direct panel path the pencil's flecks are opaque, for the bake and the live
-     * preview alike (Phase 28, the user's Nomad walk of 2026-09-18): the panel's 16-grey
-     * waveform lands a black pixel on its first frame but reaches a grey only by passing
-     * through black, so alpha-graded flecks trailed the nib and read as a solid line, while
-     * black ones landed under it — the probe's finding, repeated inside the engine. Tone is
-     * density and fleck size, which is what pressure already drives in `GraphiteGrain`.
-     * The needle fallback keeps the alpha-graded bake it was measured with.
+     * On the direct panel path a pencil shade is a **density of black flecks**, for the bake
+     * and the live preview alike ([RattaPencilInk], whose KDoc holds the read-back and the
+     * fit). The panel's 16-grey waveform lands a black pixel on its first frame but reaches a
+     * grey only by passing through black, so alpha-graded flecks trailed the nib on the first
+     * walk and opaque grey ones trailed it on the second — Atelier, read back off the panel,
+     * sends level 0 and nothing else for every shade it has.
+     *
+     * The needle fallback keeps 0.1.40's behaviour exactly: the lead's own colour,
+     * alpha-graded, at full density, previewed by the firmware's nearest grey.
      */
-    override val opaquePencilFlecks: Boolean get() = firmware && panel.isOpen
+    override fun pencilInk(color: Int): PencilInk =
+        if (firmware && panel.isOpen) RattaPencilInk.of(color)
+        else PencilInk(color, opaque = false, density = 1f)
 
     // ── The direct pencil: graphite painted onto the panel (Phase 28, 0.1.41) ──
     //
@@ -611,6 +616,14 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      */
     private var liveSweep: GraphiteGrain.Sweep? = null
 
+    /**
+     * How this contact lays graphite — read once at ACTION_DOWN, like every other thing this
+     * path latches, because the flecks already on the panel were laid with it and the flatten
+     * at pen-up has to agree with them. A shade picked mid-contact is not a thing a hand can
+     * do; a shade picked between contacts is, and [beginLivePreview] is where it takes.
+     */
+    private var contactInk: PencilInk = PencilInk(0xFF000000.toInt(), opaque = true, density = 1f)
+
     /** How many of this stroke's flecks are already on the panel — the log's measure of the
      *  contact, and no longer an index into anything: what [liveSweep] hands back IS the new
      *  graphite, so there is nothing left to slice. */
@@ -654,7 +667,8 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // preview that reaches the renderer by a different road is a preview that can drift.
         val baked = bakePoints(points, StrokeStyle.PENCIL)
         val sweep = liveSweep
-            ?: GraphiteGrain.begin(penWidth, pendingStrokeSeed()).also { liveSweep = it }
+            ?: GraphiteGrain.begin(penWidth, pendingStrokeSeed(), contactInk.density)
+                .also { liveSweep = it }
         val grain = sweep.extend(baked)
         if (grain.count == 0 && laidFlecks == 0) {
             // Not yet decidable (the first ~50 px of arc): show the hand something NOW. A
@@ -662,8 +676,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             // end cap, but under the nib — replaced wholesale the moment the sweep starts
             // laying. It is the one place the whole stroke is still swept per event, and it
             // costs nothing: a stroke that short has barely any stations to decide.
-            val provisionalGrain =
-                GraphiteGrain.of(baked, penWidth, pendingStrokeSeed(), prefix = false)
+            val provisionalGrain = GraphiteGrain.of(
+                baked, penWidth, pendingStrokeSeed(), prefix = false, density = contactInk.density,
+            )
             if (provisionalGrain.count == 0) return
             provisional = true
             clearMaskRect(mask, liveRect)
@@ -698,7 +713,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         canvas.clipRect(0, 0, rect.width(), rect.height())
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-        drawPencilGrain(canvas, grain, 0, penColor, penWidth)
+        drawPencilGrain(canvas, grain, 0, contactInk, penWidth)
         canvas.restoreToCount(save)
         laidFlecks = sweep.count
         mergeBatchIntoLive(scratch, rect, mask)
@@ -717,7 +732,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         canvas.clipRect(0, 0, rect.width(), rect.height())
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-        drawPencilGrain(canvas, grain, from, penColor, penWidth)
+        drawPencilGrain(canvas, grain, from, contactInk, penWidth)
         canvas.restoreToCount(save)
         mergeBatchIntoLive(scratch, rect, mask)
     }
@@ -803,9 +818,13 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 if (p ushr 24 != 0) toneRgb[i] = overWhite(p)
             }
         }
-        val penR = Color.red(penColor)
-        val penG = Color.green(penColor)
-        val penB = Color.blue(penColor)
+        // The ink the flecks were laid in, never [penColor]: on this path a grey lead is
+        // painted as black at a lower density, and flattening its alpha with the lead's own
+        // grey would show the panel a colour no fleck on it is.
+        val inkColor = contactInk.color
+        val penR = Color.red(inkColor)
+        val penG = Color.green(inkColor)
+        val penB = Color.blue(inkColor)
         for (y in 0 until h) {
             val maskRow = (rect.top + y) * liveAlphaW + rect.left
             val row = y * w
@@ -908,6 +927,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private fun beginLivePreview() {
         liveEvents = 0
         laidFlecks = 0
+        contactInk = pencilInk(penColor)
         // The sweep itself is minted on the first sample: only then is there a pending
         // stroke id to seed it from without asking for one and throwing it away.
         liveSweep = null
