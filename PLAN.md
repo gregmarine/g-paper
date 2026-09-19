@@ -1827,6 +1827,73 @@ change; `penColor` = `0xFFFFFFFF` is the whole host-side ask.
 **Gate:** `./gradlew test` green; the white lead on the artist's Nomad through NSE · Sketch (the
 consumer walk stands in for a demo walk — the demo's Shade cycler never reaches white).
 
+### Phase 28 — Graphite on the panel: the pencil's live preview goes direct on Ratta (post-v0.1.0)
+**Status:** 🔄 In progress (opened 2026-09-18) · **Publishes:** 0.1.41 · branch `ebc-live` (from
+`ebc-probe`, which carries the `probe-ebc` app — the measurement door this phase is built on; its
+README is the reference for every number below).
+
+**Why.** On Supernote the pencil's live preview is the firmware daemon's needle in one grey, and
+the mark it lays lands at pen-up through a bake + overlay clear — the flash. Atelier has no
+flash and sixteen greys because it never uses the daemon for a stroke: it paints straight into
+the panel driver (`/dev/ebc`), which the vendor SELinux policy lets any app open (`allow appdomain
+rga_device`). `probe-ebc` proved it from an `untrusted_app` on the Nomad and the Manta: 16-grey
+pixels in frame 0, one `HTEINK_IOC_DISPAREA` (mode 7, flag 1 — Atelier's own call) per event, no
+flash. And it found the physics: **a solid grey lands black and lightens** (the 16-grey waveform
+passes through black), while **black flecks land at once** — which is exactly what `GraphiteGrain`
+lays. The user's hand on both devices: *"works perfectly, very much like Atelier."*
+
+**The user's decisions (2026-09-18):** native code lives **inside `gpaper-ratta`** (a small C
+file; building g-paper needs the NDK, consumers get the `.so` in the AAR); **pressure returns to
+the Ratta pencil** (the constant 0.5 bake existed only because the needle could not show tone);
+**pencil only** — pen, rubber and stroke-mode pages keep the firmware path; Opus codes on Fable's
+brief, Fable reviews, the user walks both devices.
+
+**Design**
+- `gpaper-ratta` gains `EbcPanel` (internal): opens `/dev/ebc` `O_RDWR|O_CLOEXEC`, `HTEINK_IOC_GETINFO`
+  (`0x48545201`, 24 B: `[1] = h<<16 | w`, `[3] = frameBytes`), `mmap(frameBytes)` of frame 0,
+  and `display(rect, mode 7, flag 1)` through `HTEINK_IOC_DISPAREA` (`0x48545701`, the 24-byte
+  `{l,t,r,b; bufOffset=0; u8 mode; u8 flag}`), via a JNI pass-through `ebc_jni.c`
+  (open/close/ioctl/mmap/munmap). Frame pixels are one byte each, 4-bit grey `0x00`…`0x0f`.
+  Absent or refused → the pencil keeps today's needle preview, `Log.w` once.
+- **Rotation by geometry** (measured): panel ≠ screen size → Nomad's `panelX = screenY`,
+  `panelY = panelH−1 − screenX`; equal → Manta's identity. Screen coordinates, so the view's
+  `getLocationOnScreen` offset applies first.
+- **`RattaPanelTone`** (pure Kotlin, tested): the compositor's Android-grey → 4-bit table, identical
+  on both devices: 0–75→0 · 76–87→1 · 88–99→2 · 100–107→3 · 108–119→4 · 120–131→5 · 132–139→6 ·
+  140–151→7 · 152–167→8 · 168–187→10 · 188–195→11 · 196–203→12 · 204–215→13 · 216–223→14 ·
+  224–255→15 (level 9 is never produced). Live pixels go through it so the pen-up recompose writes
+  the same levels back — the mirror is invisible.
+- **The live layer.** One page-sized `ALPHA_8` scratch (`liveGraphite`) in `CanvasPaperView`'s
+  Ratta subclass. Per event the stroke so far runs through `GraphiteGrain.of(points, width, seed,
+  prefix = true)` with the stroke's pending id and the engine's bake parameters, and only the
+  flecks past the count already laid are drawn by `StrokeRenderer` into the scratch — same flecks,
+  same rasteriser as the bake. The dirty rect is flattened as `drawCommittedContent` flattens
+  (graphite ⊕ scratch-as-shade, `DARKEN` ink, over white), toned, rotated, written, displayed.
+- **`GraphiteGrain` prefix mode** (pure, tested): the filters are causal by design; prefix mode
+  omits the **end cap** and lays nothing until the arc passes the landing window (`2 × LANDING_TRIM_PX`),
+  so a prefix's flecks are exactly the first N of the whole stroke's. Test: for every prefix of a
+  recorded stroke, `of(prefix, prefix=true)` ⊂ `of(whole)` as an ordered prefix.
+- **A paint thread** owns the ioctl (it blocks up to ~65 ms while an update is in flight):
+  the UI thread posts fleck batches; the thread unions whatever accumulated and sends one DISPAREA.
+- **The firmware is kept off the pencil**: with the pencil armed on a raster page and the panel
+  open, the tool push issues a full-screen disable instead of arming the needle (Atelier's
+  `sendFullScreenDisableArea`). Pen-up: the stroke bakes as today (`compositeIntoRaster`), the
+  scratch is cleared in the mark's rect, and `bakeAfterCommit` records + presents at once — no
+  `pendingBake`, no ladder, there is no overlay ink to drop. The window is **never invalidated
+  mid-stroke** (the compositor would overwrite fresh dabs with older pixels — measured).
+- `bakePressure` / `bakeTilt` return identity for the direct path (pressure is back; tilt too —
+  the preview can now show a leaned lead), and stay 0.5 / 0 when the panel is unavailable.
+- Demo: the raster page shows `panel: direct` / `panel: needle` in the status head. `docs/api.md`
+  (Ratta section: what the pencil does now), `CLAUDE.md` (the standing rules: never invalidate
+  mid-stroke, tone through the table, the daemon disabled for the pencil) in the same commit.
+
+**Known limits (this phase):** a fleck over a template line previews over white and darkens a
+little at pen-up; live rubbing through the panel and the ink pen are later phases.
+
+**Gate:** `./gradlew test` green (core + ratta); `:demo:assembleDebug`; the user's hand on the
+Nomad and the Manta through the demo's raster page — light and hard, fast and slow, over ink, undo;
+no flash, no change at pen-up; 0.1.41 to mavenLocal by the user.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
