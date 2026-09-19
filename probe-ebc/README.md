@@ -37,5 +37,52 @@ so the driver's framebuffer is 8 bpp grey, panel-sized, and `initEbc` maps five 
 `GETCFG` returned a version word `0x00010002` followed by byte ramps `04 04 08 08 … 3c 3c`
 (grey-level lookup tables; see `get_config_tbl` / `rgba888_to_gray8bitx_functions`).
 
-Not yet wired: `mmap` of the frame buffers, `DISPAREA`, `MISCCTL` — their struct layouts
-come next, from `postEinkHostBmpRect*` / `postEinkPWRectFast*` in the same library.
+## Painting — what the panel and the driver's memory told us (Nomad, 2026-09-18)
+
+`R1` is `HTEINK_IOC_GETINFO` (the kernel logs its name). `mmap(fd, 5 × frameBytes, 0)` works
+from `untrusted_app`. `DISPAREA`'s argument, from `postEinkHostBmpRectFast` / `postEinkPWRectFast`:
+
+    struct { int32 left, top, right, bottom;   // PANEL coordinates
+             int32 bufOffset;                  // byte offset of the source frame in the mapping
+             uint8 mode;                       // host path 4 / 7 / 8 / 9 (app modes 3 / 4–14 / 15 / 16)
+             uint8 flag;                       // host path 0; pen-write path 1 or 5
+             uint8 pad[2]; }                   // 24 bytes
+
+Pixels are one byte each holding a 4-bit grey, `0x00` black … `0x0f` white; the driver keeps
+flags in the upper bits (`0x40`, `0x80` seen mid-compose) — write plain 0–15.
+
+**Sixteen bands of grey, frame 0, mode 7: drawn on the panel, cleanly, no flash, no bake**
+(the user's eyes, twice). Modes 4 / 8 / 9 draw something else with the same data (shrunken or
+shifted copies of the pattern) — not decoded; mode 7 is the 16-grey one.
+
+The five frames:
+
+| frame | what it is |
+|---|---|
+| 0 | the compositor's output — the current screen, rewritten by the HWC every ~0.2–1.4 s **whether or not we call DISPAREA** |
+| 1 | the firmware pen daemon's ink overlay: **1-bit**, `0x00` ink / `0xff` clear (your sketch strokes were still in it) |
+| 2 | a copy of the last displayed image (double buffer / shadow of 0) |
+| 3, 4 | RGA scratch — zeroed by the system within ~1.4 s of a write |
+
+So nothing in the mapping is ours to keep. The Atelier model follows from that: **paint direct
+for latency, then draw the same pixels into your own window** so the compositor's periodic
+rewrite changes nothing the eye can see. For that mirror to be invisible, two calibrations
+(read back from frame 2 after composing a card — `--ez ramp true [--ez full256 true]`):
+
+- **Rotation (Nomad, portrait UI on a landscape panel):** `panelX = screenY`,
+  `panelY = 1403 − screenX`.
+- **Compositor grey → 4-bit level** (Android grey value ranges): 0–75 → 0 · 76–87 → 1 ·
+  88–99 → 2 · 100–107 → 3 · 108–119 → 4 · 120–131 → 5 · 132–139 → 6 · 140–151 → 7 ·
+  152–167 → 8 · **168–187 → 10 (level 9 is never produced)** · 188–195 → 11 · 196–203 → 12 ·
+  204–215 → 13 · 216–223 → 14 · 224–255 → 15. Draw the mirror with one grey from the matching
+  range and the recompose is a no-op on the panel.
+
+Other doors seen but not walked: `MISCCTL` (`CLERA_PW_RECT`, `SYNCWIN`), the pen-write path
+(frame 1, mode 9, flag 1|5 — only black showed, consistent with a 1-bit overlay), and the
+boot-classpath `EinkPWCoreController` (`nativeAddPWRect` → `set_pw_fsb` / `postEinkPWRectFastHL`
+in `libeinkpwcorejni.so`, which also drives the RGA blitter).
+
+Intent extras for adb: `--ez auto true` (open, GETINFO, GETCFG, map) · `--ei mode/frame/flag/v0/v1`
+(paint the band rect) · `--ei paintDelay ms` · `--ez quiet true` · `--ez noDisp true` ·
+`--ez dump true --ei dumpAt ms` (frames → external cache dir) · `--ez cadence true` ·
+`--ez fullscreen true` · `--ez ramp true [--ez full256 true]`.

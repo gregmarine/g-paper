@@ -51,6 +51,7 @@ class MainActivity : Activity() {
     private var panelH = 0
     private var map: ByteBuffer? = null
 
+    private val ui = android.os.Handler(android.os.Looper.getMainLooper())
     private lateinit var log: TextView
     private lateinit var scroll: ScrollView
     private var fd = -1
@@ -58,7 +59,9 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        var buttons = row1
         fun button(label: String, onClick: () -> Unit) = buttons.addView(
             Button(this).apply { text = label; setOnClickListener { runCatching(onClick).onFailure { say("!! ${it}") } } }
         )
@@ -67,6 +70,7 @@ class MainActivity : Activity() {
         button("R1") { ioctlDump("R1", REQ_R1) }
         button("GETCFG") { ioctlDump("GETCFG", REQ_GETCFG) }
         button("Map") { mapFrames() }
+        buttons = row2
         button("m7") { bands(mode = 7, frame = 0, flag = 0) }
         button("m4") { bands(mode = 4, frame = 0, flag = 0) }
         button("m8") { bands(mode = 8, frame = 0, flag = 0) }
@@ -75,11 +79,30 @@ class MainActivity : Activity() {
         button("Unmap") { unmap() }
         button("Close") { close() }
         button("Clear") { log.text = "" }
-        root.addView(buttons)
+        root.addView(row1)
+        root.addView(row2)
         log = TextView(this).apply { typeface = android.graphics.Typeface.MONOSPACE; textSize = 11f; setPadding(16, 16, 16, 16) }
         scroll = ScrollView(this).apply { addView(log) }
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        // --ez ramp true: the window becomes a calibration card — sixteen grey bars (Android
+        // greys 0, 17, … 255) and two black marker squares — so a frame-0 dump reveals the
+        // compositor's grey→4-bit mapping and the screen→panel rotation, no eyes needed.
+        if (intent.getBooleanExtra("ramp", false)) {
+            setContentView(RampView(this))
+            if (intent.getBooleanExtra("auto", false)) {
+                open(); mapFrames()
+                ui.postDelayed({ dumpFrames(); Log.i(TAG, "ramp dumped") }, 4000)
+            }
+            return
+        }
         setContentView(root)
+        // --ez fullscreen true: hide the system bars, so a status-bar repaint cannot be the
+        // thing that recomposes frame 0 over a painted rect.
+        if (intent.getBooleanExtra("fullscreen", false)) {
+            window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or
+                android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        }
         whoAmI()
         // adb shell am start -n com.symmetricalpalmtree.gpaper.probe/.MainActivity --ez auto true
         // runs the read-only sequence hands-free; results land in logcat under EbcProbe.
@@ -90,6 +113,11 @@ class MainActivity : Activity() {
             val mode = intent.getIntExtra("mode", -1)
             if (mode >= 0) bands(mode, intent.getIntExtra("frame", 0), intent.getIntExtra("flag", 0),
                 intent.getIntExtra("v0", 0), intent.getIntExtra("v1", 15))
+            // --ez dump true writes every mapped frame to the cache dir 2 s later (after the
+            // paint), for adb pull + offline viewing: what the driver holds, frame by frame.
+            if (intent.getBooleanExtra("dump", false))
+                ui.postDelayed({ dumpFrames() }, intent.getIntExtra("dumpAt", 2500).toLong())
+            if (intent.getBooleanExtra("cadence", false)) cadence()
             say("-- auto done (still open + mapped)")
         }
     }
@@ -104,6 +132,44 @@ class MainActivity : Activity() {
         Log.i(TAG, line)
         log.append(line + "\n")
         scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
+    }
+
+    /** Calibration card. Bars: 16 vertical, each screenW/16 wide, from y=200 to y=600, grey k*17. Markers: 60 px black squares at (100,100) and (400,100). */
+    private inner class RampView(c: android.content.Context) : android.view.View(c) {
+        private val p = android.graphics.Paint()
+        override fun onDraw(cv: android.graphics.Canvas) {
+            cv.drawColor(android.graphics.Color.WHITE)
+            val w = width / 16f
+            // --ez full256 true: all 256 greys as a 16×16 grid of 40 px-high cells from y=200.
+            if (intent.getBooleanExtra("full256", false)) {
+                for (g in 0 until 256) {
+                    p.color = android.graphics.Color.rgb(g, g, g)
+                    val c = g % 16; val r = g / 16
+                    cv.drawRect(c * w, 200f + r * 40, (c + 1) * w, 240f + r * 40, p)
+                }
+            } else for (k in 0 until 16) {
+                p.color = android.graphics.Color.rgb(k * 17, k * 17, k * 17)
+                cv.drawRect(k * w, 200f, (k + 1) * w, 600f, p)
+            }
+            p.color = android.graphics.Color.BLACK
+            cv.drawRect(100f, 100f, 160f, 160f, p)
+            cv.drawRect(400f, 100f, 460f, 160f, p)
+            Log.i(TAG, "ramp drawn: screen ${width}x${height}, bar width ${w}")
+        }
+    }
+
+    /** --ez cadence true: rewrite one frame-0 pixel every 50 ms and log each time it was overwritten. */
+    private fun cadence() {
+        val m = map ?: return
+        val idx = (panelH / 2).toLong() * panelW + panelW / 2
+        var last = System.nanoTime(); var n = 0
+        val r = object : Runnable { override fun run() {
+            val v = m.get(idx.toInt()).toInt() and 0xFF
+            if (v != 7) { val now = System.nanoTime(); Log.i(TAG, "frame0 overwritten (+${(now - last) / 1_000_000} ms, value $v)"); last = now; n++ }
+            m.put(idx.toInt(), 7)
+            if (n < 15) ui.postDelayed(this, 50)
+        } }
+        ui.postDelayed(r, 50)
     }
 
     private fun whoAmI() {
@@ -147,6 +213,17 @@ class MainActivity : Activity() {
         say("  frame0 samples: ${sample.joinToString(" ")}")
     }
 
+    private fun dumpFrames() {
+        val m = map ?: run { say("map first"); return }
+        val dir = externalCacheDir ?: cacheDir
+        for (f in 0 until FRAMES) {
+            val bytes = ByteArray(frameBytes.toInt())
+            val dup = m.duplicate(); dup.position((f * frameBytes).toInt()); dup.get(bytes)
+            File(dir, "frame$f.raw").writeBytes(bytes)
+        }
+        Log.i(TAG, "dumped $FRAMES frames to $dir")
+    }
+
     private fun unmap() {
         val m = map ?: run { say("not mapped"); return }
         val r = Native.munmap(m, frameBytes * FRAMES)
@@ -163,12 +240,33 @@ class MainActivity : Activity() {
         // Our own window must be still: a TextView append repaints it, and the compositor's
         // repaint of the screen would overwrite the rect before an eye could see it. So paint
         // after the UI has settled and keep the screen log silent for three seconds after.
-        say("painting in 1 s, screen quiet for 3 s after")
-        log.postDelayed({
+        val delay = intent.getIntExtra("paintDelay", 1000).toLong()
+        say("painting in $delay ms, screen quiet for 3 s after")
+        ui.postDelayed({
             val line = paintBands(mode, frame, flag, v0, v1)
             Log.i(TAG, line)
-            log.postDelayed({ say(line) }, 3000)
+            watchRect(frame, System.nanoTime())
+            // --ez quiet true: never touch the window again after the paint.
+            if (!intent.getBooleanExtra("quiet", false)) ui.postDelayed({ say(line) }, 3000)
         }, 1000)
+    }
+
+    /** Polls one row of the painted rect every 200 ms and logs when the bands are gone. */
+    private fun watchRect(frame: Int, t0: Long) {
+        val m = map ?: return
+        val y = panelH / 2; val row = frame * frameBytes + y.toLong() * panelW
+        val l = panelW / 8; val r = panelW * 7 / 8
+        val distinct = HashSet<Int>()
+        for (x in l until r step 7) distinct.add(m.get((row + x).toInt()).toInt() and 0xFF)
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        if (distinct.size >= 12) {
+            if (ms < 60_000) ui.postDelayed({ watchRect(frame, t0) }, 200) else Log.i(TAG, "bands still present at ${ms} ms — stop watching")
+        } else Log.i(TAG, "bands GONE from frame $frame at ${ms} ms (row $y now $distinct)")
+        if (frame != 2 && ms in 2900..3200) {
+            val d2 = HashSet<Int>(); val row2 = 2 * frameBytes + y.toLong() * panelW
+            for (x in l until r step 7) d2.add(m.get((row2 + x).toInt()).toInt() and 0xFF)
+            Log.i(TAG, "shadow frame 2 at ${ms} ms: ${if (d2.size >= 12) "bands present" else "no bands $d2"}")
+        }
     }
 
     private fun paintBands(mode: Int, frame: Int, flag: Int, v0: Int, v1: Int): String {
@@ -187,6 +285,8 @@ class MainActivity : Activity() {
         val arg = ByteBuffer.allocateDirect(24).order(ByteOrder.LITTLE_ENDIAN)
         arg.putInt(0, l); arg.putInt(4, t); arg.putInt(8, r); arg.putInt(12, b)
         arg.putInt(16, base.toInt()); arg.put(20, mode.toByte()); arg.put(21, flag.toByte())
+        // --ez noDisp true: write the pixels but never tell the driver — does frame 0 still get rewritten?
+        if (intent.getBooleanExtra("noDisp", false)) return "pixels written, NO DISPAREA (frame=$frame)"
         val ret = Native.ioctl(fd, REQ_DISPAREA, arg)
         return "DISPAREA [$l,$t-$r,$b] frame=$frame mode=$mode flag=$flag v=$v0..$v1 -> " +
             if (ret < 0) "FAILED errno=${-ret} ${Native.strerror(-ret)}" else "$ret"
