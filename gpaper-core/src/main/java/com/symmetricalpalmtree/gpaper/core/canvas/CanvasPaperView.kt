@@ -31,6 +31,7 @@ import com.symmetricalpalmtree.gpaper.core.Tool
 import com.symmetricalpalmtree.gpaper.core.engine.GPaper
 import com.symmetricalpalmtree.gpaper.core.geometry.EraseHitTest
 import com.symmetricalpalmtree.gpaper.core.geometry.GestureRecognizer
+import com.symmetricalpalmtree.gpaper.core.geometry.GraphiteGrain
 import com.symmetricalpalmtree.gpaper.core.geometry.LassoHitTest
 import com.symmetricalpalmtree.gpaper.core.geometry.RasterDirty
 import com.symmetricalpalmtree.gpaper.core.geometry.RasterErase
@@ -51,6 +52,8 @@ import com.symmetricalpalmtree.gpaper.core.render.ContentLayer
 import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
 import com.symmetricalpalmtree.gpaper.core.render.HitTarget
 import java.util.UUID
+import kotlin.math.ceil
+import kotlin.math.floor
 
 /**
  * The generic Canvas engine — core's [PaperView] implementation and the shared base the
@@ -523,7 +526,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 paperListener?.onRasterWillChange(RasterLayer.INK, it)
             }
             dropRasters()
-            compositeIntoRaster(strokes)
+            // Silent on the engine seam: the whole page changed here, images and all, so
+            // one whole-page call after the bake says more than one rect per stroke.
+            compositeIntoRaster(strokes, announcePixels = false)
+            onRasterPixelsChanged(null)
             redrawCommitted()
             dirty?.let {
                 paperListener?.onRasterChanged(RasterLayer.GRAPHITE, it)
@@ -591,6 +597,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 paperListener?.onRasterWillChange(RasterLayer.INK, it)
             }
             dropRasters()
+            onRasterPixelsChanged(null)
             redrawCommitted()
             dirty?.let {
                 paperListener?.onRasterChanged(RasterLayer.GRAPHITE, it)
@@ -611,6 +618,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         strokeList.clear()
         modelChanged()
         dropRasters()
+        // No re-record and no invalidate, so the pixels on the panel hold; an engine
+        // keeping a second image of the page must drop it the same way rather than
+        // blanking the one the display list is still holding (see [graphiteRaster]).
+        onRasterPixelsChanged(null)
     }
 
     // ── PaperView: the raster page (0.1.25) ──────────────────────────────────
@@ -634,6 +645,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             // to reuse), and we keep one that nothing but this view writes to.
             ensureRaster(layer)?.let { Canvas(it).drawBitmap(bitmap, 0f, 0f, null) }
         }
+        onRasterPixelsChanged(null)
         redrawCommitted()
     }
 
@@ -657,8 +669,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun readPageRaster(layer: RasterLayer, rect: Rect): RasterPatch? {
         if (pageMode != PageMode.RASTER) return null
-        val w = if (pageWidth > 0) pageWidth else width
-        val h = if (pageHeight > 0) pageHeight else height
+        val w = rasterPageWidth
+        val h = rasterPageHeight
         val clipped = Rect(rect)
         if (!clipped.intersect(0, 0, w, h) || clipped.isEmpty) return null
         val pixels = IntArray(clipped.width() * clipped.height())
@@ -707,6 +719,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 System.arraycopy(row, 0, px, offset, w)
             }
             swapped = true
+            onRasterPixelsChanged(r)
         }
         if (swapped) redrawCommitted()
     }
@@ -714,6 +727,29 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     /** [layer]'s page image as it stands, or null when nothing has landed on it yet. */
     private fun raster(layer: RasterLayer): Bitmap? =
         if (layer == RasterLayer.GRAPHITE) graphiteRaster else inkRaster
+
+    /**
+     * [layer]'s page image for a device engine that has to flatten the page itself —
+     * **read-only**, null when nothing has landed on that layer, and never to be held
+     * across a content swap (the images are dropped, not erased; see [graphiteRaster]).
+     *
+     * It exists for Ratta's direct panel preview (Phase 28), which must work out the grey a
+     * pixel is about to show — white, then graphite, then the live flecks, then ink through
+     * `DARKEN` — outside the window's own drawing, because on that path there is no frame.
+     * Everything else asks [drawCommittedContent] for the page and lets Canvas do it.
+     */
+    protected fun rasterFor(layer: RasterLayer): Bitmap? = raster(layer)
+
+    /**
+     * The page's size in pixels: the rect the host set with [setPageSize] if it did, else
+     * the laid-out view — the one answer every page-sized image is made against, the two
+     * raster layers and a device engine's own ([drawRasterLayers]) alike. Zero before
+     * layout, which is when there is no page to keep anything for.
+     */
+    protected val rasterPageWidth: Int get() = if (pageWidth > 0) pageWidth else width
+
+    /** The page's height — see [rasterPageWidth]. */
+    protected val rasterPageHeight: Int get() = if (pageHeight > 0) pageHeight else height
 
     /**
      * [layer]'s page image, allocated if it is not there yet, or null when there is no
@@ -726,8 +762,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      */
     private fun ensureRaster(layer: RasterLayer): Bitmap? {
         raster(layer)?.let { return it }
-        val w = if (pageWidth > 0) pageWidth else width
-        val h = if (pageHeight > 0) pageHeight else height
+        val w = rasterPageWidth
+        val h = rasterPageHeight
         if (w <= 0 || h <= 0) {
             Log.w(TAG, "raster page has no size yet (setPageSize or layout first); content dropped")
             return null
@@ -763,9 +799,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * per layer anything actually lands in, so a page of pencil never touches the ink
      * image and never allocates it.
      */
-    private fun compositeIntoRaster(strokes: List<Stroke>) {
+    private fun compositeIntoRaster(strokes: List<Stroke>, announcePixels: Boolean = true) {
         if (strokes.isEmpty()) return
         val canvases = HashMap<RasterLayer, Canvas>(2)
+        val laid = if (announcePixels) Rect() else null
         for (s in strokes) {
             val layer = RasterLayer.of(s.style)
             val canvas = canvases[layer] ?: run {
@@ -776,8 +813,49 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             }
             StrokeRenderer.draw(
                 canvas, bakePoints(s), s.color, s.width, s.style, scratchPaint, s.id.hashCode(),
+                pencilInk = pencilInk(s.color),
             )
+            laid?.let { union -> strokeBounds(s, scratchRect); union.union(scratchRect) }
         }
+        // One rect for the batch: the engine seam is about what a second image of the
+        // page has to catch up on, and the union of a few marks is a cheaper thing to
+        // redo than a call apiece. (The HOST's news is still per run of each mark —
+        // that one is paying for a before-image and the diagonal matters.)
+        laid?.let { if (!it.isEmpty) onRasterPixelsChanged(it) }
+    }
+
+    /** Scratch for [strokeBounds] — one rect, main-thread only, like every other here. */
+    private val scratchRect = Rect()
+
+    /**
+     * The page rect [stroke] can have touched, into [out]: its points' box grown by the
+     * widest the renderer can lay at that width, and clipped to nothing — generosity
+     * outward is free here (it costs a repaint of empty pixels) and a rect that misses a
+     * fleck would leave a mark the panel never shows.
+     */
+    private fun strokeBounds(stroke: Stroke, out: Rect) {
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+        for (p in stroke.points) {
+            if (p.x < minX) minX = p.x
+            if (p.x > maxX) maxX = p.x
+            if (p.y < minY) minY = p.y
+            if (p.y > maxY) maxY = p.y
+        }
+        if (minX > maxX) {
+            out.setEmpty()
+            return
+        }
+        // Half the widest mark, plus the slack a textured style's outermost fleck needs.
+        val pad = stroke.width + 4f
+        out.set(
+            floor(minX - pad).toInt(),
+            floor(minY - pad).toInt(),
+            ceil(maxX + pad).toInt(),
+            ceil(maxY + pad).toInt(),
+        )
     }
 
     /**
@@ -790,20 +868,27 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * digitizer reported, because in stroke mode that object is the host's data and the
      * host owns it.
      */
-    private fun bakePoints(stroke: Stroke): List<StrokePoint> {
-        val pts = stroke.points
+    private fun bakePoints(stroke: Stroke): List<StrokePoint> =
+        bakePoints(stroke.points, stroke.style)
+
+    /**
+     * [bakePoints]'s other half, for points that are not a [Stroke] yet: an engine drawing
+     * its own live preview of the stroke under the pen runs its samples through here, so
+     * the preview goes through exactly the seams the bake will and the two cannot drift.
+     */
+    protected fun bakePoints(points: List<StrokePoint>, style: StrokeStyle): List<StrokePoint> {
         // Identity by default, so nothing is copied on an engine that doesn't override
         // the seam. Raw bits rather than ==, so an unreported NaN pressure compares
         // equal to itself instead of faking a change and copying the whole polyline.
-        val differs = pts.any {
-            bakePressure(stroke.style, it.pressure).toRawBits() != it.pressure.toRawBits() ||
-                bakeTilt(stroke.style, it.tilt).toRawBits() != it.tilt.toRawBits()
+        val differs = points.any {
+            bakePressure(style, it.pressure).toRawBits() != it.pressure.toRawBits() ||
+                bakeTilt(style, it.tilt).toRawBits() != it.tilt.toRawBits()
         }
-        if (!differs) return pts
-        return pts.map {
+        if (!differs) return points
+        return points.map {
             it.copy(
-                pressure = bakePressure(stroke.style, it.pressure),
-                tilt = bakeTilt(stroke.style, it.tilt),
+                pressure = bakePressure(style, it.pressure),
+                tilt = bakeTilt(style, it.tilt),
             )
         }
     }
@@ -987,7 +1072,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         val h = height
         if (w == 0 || h == 0) return null
         val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        drawCommittedContent(Canvas(bitmap))
+        // The host's own data, never the glass: an engine whose panel needs the page
+        // shown some other way (Ratta's dither, Phase 28) draws the true page here.
+        drawCommittedContent(Canvas(bitmap), forDisplay = false)
         return bitmap
     }
 
@@ -1204,13 +1291,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (canvas.isHardwareAccelerated && committedNode.hasDisplayList()) {
             canvas.drawRenderNode(committedNode)
         } else {
-            drawCommittedContent(canvas)
+            drawCommittedContent(canvas, forDisplay = true)
         }
         // Live layer: the in-progress stroke through the same renderer as the bake.
         if (rendersLiveStrokes && gestureMode == GestureMode.DRAW && activePoints.isNotEmpty()) {
             StrokeRenderer.draw(
                 canvas, activePoints, penColor, penWidth, penStyle, scratchPaint,
                 pendingStrokeId().hashCode(),
+                pencilInk = pencilInk(penColor),
             )
         }
         // Lasso trail (engines with hardware trails set rendersLiveTrail = false).
@@ -1238,7 +1326,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             canvas.translate(dragDx, dragDy)
             for (s in dragStrokes) {
                 StrokeRenderer.draw(
-                    canvas, s.points, s.color, s.width, s.style, scratchPaint, s.id.hashCode()
+                    canvas, s.points, s.color, s.width, s.style, scratchPaint, s.id.hashCode(),
+                    pencilInk = pencilInk(s.color),
                 )
             }
             for ((renderer, target) in dragContentTargets) {
@@ -1291,7 +1380,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         committedNode.setPosition(0, 0, w, h)
         val recordingCanvas = committedNode.beginRecording(w, h)
         try {
-            drawCommittedContent(recordingCanvas)
+            drawCommittedContent(recordingCanvas, forDisplay = true)
         } finally {
             committedNode.endRecording()
         }
@@ -1302,8 +1391,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * Paint the full committed page: white → template (into the page rect) →
      * below-strokes host content → baked strokes → above-strokes host content.
      * Serves the node recording, the software fallback, and [renderToBitmap].
+     *
+     * [forDisplay] says which of those it is: true for the window (the record and the
+     * software fallback), false for [renderToBitmap] — a cover, an export, the host's own
+     * data. Only [drawRasterLayers] reads it, and only one engine answers it differently
+     * (see there); everything above and below the page images is the same picture either
+     * way.
      */
-    protected open fun drawCommittedContent(canvas: Canvas) {
+    protected open fun drawCommittedContent(canvas: Canvas, forDisplay: Boolean = true) {
         canvas.drawColor(Color.WHITE)
         templateBitmap?.let { canvas.drawBitmap(it, null, templateDestRect(), null) }
         // Renderers get the drag exclusion set (empty outside a drag) so opted-in hosts
@@ -1316,13 +1411,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             }
         }
         if (pageMode == PageMode.RASTER) {
-            // Two blits where the stroke loop would run: the page images sit at the page
-            // origin, over the paper and under the host's above-strokes content, exactly
-            // where the baked strokes would have been. The ink goes on through DARKEN —
-            // the darker of the two per channel — so the pair flattens with no top and no
-            // bottom (see [flattenPaint]); a page with only one of them is one blit.
-            graphiteRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
-            inkRaster?.let { canvas.drawBitmap(it, 0f, 0f, flattenPaint) }
+            drawRasterLayers(canvas, forDisplay)
         } else {
             for (stroke in strokeList) {
                 // Mid-drag, the selected strokes live in the translated drag layer instead.
@@ -1330,6 +1419,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 StrokeRenderer.draw(
                     canvas, stroke.points, stroke.color, stroke.width, stroke.style, scratchPaint,
                     stroke.id.hashCode(),
+                    pencilInk = pencilInk(stroke.color),
                 )
             }
         }
@@ -1339,6 +1429,41 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             }
         }
     }
+
+    /**
+     * Draw the raster page onto [canvas]: two blits where the stroke loop would run. The
+     * page images sit at the page origin, over the paper and under the host's
+     * above-strokes content, exactly where the baked strokes would have been. The ink goes
+     * on through `DARKEN` — the darker of the two per channel — so the pair flattens with
+     * no top and no bottom (see [flattenPaint]); a page with only one of them is one blit.
+     *
+     * **The seam exists because a panel may not be able to show the page as it is**
+     * (Phase 28). Supernote's direct path shows the artist a *dither* of this same
+     * flatten, because its waveform reaches black at once and a grey only through black,
+     * so a grey pixel trails the nib while a black one does not. [forDisplay] is what
+     * keeps that confined to the glass: false is a cover, an export, the host's own data,
+     * and there the page is drawn exactly as it is stored. An engine overriding this must
+     * honour that, or an artist's pencil page would export as a screen of dots.
+     */
+    protected open fun drawRasterLayers(canvas: Canvas, forDisplay: Boolean) {
+        graphiteRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+        inkRaster?.let { canvas.drawBitmap(it, 0f, 0f, flattenPaint) }
+    }
+
+    /**
+     * The raster page's pixels have just changed over [rect] (page coordinates, which are
+     * the view's — the images sit at the view origin), or over the whole page when it is
+     * null: a load, a clear or a content swap.
+     *
+     * A no-op here, and nothing to do with [PaperListener.onRasterChanged], which is the
+     * *host's* news about its own data and is deliberately silent for changes the host
+     * made itself (0.1.33). This is the engine's own news, fires for every change without
+     * exception, and exists for an engine keeping a second image of the page for its panel
+     * (Ratta's dither, Phase 28) — such an image is wrong the instant the page moves, and
+     * **it is called before the redraw that presents the change**, so the record can use
+     * what it rebuilt. It must not present anything itself; its callers do that.
+     */
+    protected open fun onRasterPixelsChanged(rect: Rect?) {}
 
     /** Content ids the committed record leaves to a live layer: a drag's, plus the
      *  object under transform (its whole mode is a live layer, not just its gestures). */
@@ -1465,6 +1590,32 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     /** The pending id, consumed — the next stroke starts fresh. */
     private fun takePendingStrokeId(): String = pendingStrokeId().also { pendingStrokeId = null }
+
+    /**
+     * The texture seed the stroke under the pen will be committed with — the same value
+     * [drawCommittedContent] and the raster bake will use for it, for the same reason the
+     * id is minted at contact start rather than at commit ([pendingStrokeId]).
+     *
+     * An engine previewing a textured style itself must seed from here, or its preview is
+     * a different stroke from the one that lands.
+     */
+    protected fun pendingStrokeSeed(): Int = pendingStrokeId().hashCode()
+
+    /**
+     * Lay the flecks of [grain] from index [from] onward onto [canvas] — the bake's own
+     * rasteriser, for an engine painting a live pencil preview of its own (Ratta's direct
+     * panel path, Phase 28). Same call the bake makes, same scratch paint, so the preview
+     * and the mark that commits are the same pixels.
+     */
+    protected fun drawPencilGrain(
+        canvas: Canvas,
+        grain: GraphiteGrain.Grain,
+        from: Int,
+        ink: PencilInk,
+        width: Float,
+    ) {
+        StrokeRenderer.drawPencilFlecks(canvas, grain, from, ink, width, scratchPaint)
+    }
 
     // ── Pen-gesture recognizers (smart lasso / scribble erase) ───────────────
 
@@ -1636,6 +1787,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private fun appendDrawPoints(points: List<StrokePoint>) {
         if (exclusionRects.isEmpty()) {
             activePoints.addAll(points)
+            onLiveStrokeExtended(activePoints)
             return
         }
         for (p in points) {
@@ -1649,7 +1801,38 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 activePoints.add(p)
             }
         }
+        onLiveStrokeExtended(activePoints)
     }
+
+    /**
+     * The stroke under the pen has grown: [points] is everything captured for it so far,
+     * in order, and every call is a superset of the last until the contact ends.
+     *
+     * A no-op here, and not part of the host-facing surface — it exists for an engine whose
+     * live ink it draws **itself, outside the window**, and which therefore needs to know
+     * what to draw without the base presenting frames (Ratta's direct panel preview, Phase
+     * 28: the same flecks the bake will lay, painted straight into the panel driver). An
+     * engine that draws its live ink in [onDraw] ([rendersLiveStrokes]) needs nothing here,
+     * and neither does one whose firmware paints it.
+     *
+     * The list is the live capture buffer, valid for the duration of the call only — read
+     * it, never retain it. Called on the input thread that delivered the samples.
+     */
+    protected open fun onLiveStrokeExtended(points: List<StrokePoint>) {}
+
+    /**
+     * How `PENCIL` lays its graphite on this engine for a stroke of [color] — the stroke's own
+     * colour, alpha-graded, at full density, unless a device engine overrides it (see
+     * [PencilInk]).
+     *
+     * Read at **every** pencil render — the raster bake, the committed record, the live layer
+     * and a drag's — because a page that rendered the same mark two ways would show the
+     * difference at exactly the moments it must not: pen-up, and a page reload. It is asked per
+     * stroke rather than read as a flag so an engine can answer from the shade that was picked;
+     * the [com.symmetricalpalmtree.gpaper.core.model.Stroke]'s stored colour is never touched.
+     */
+    protected open fun pencilInk(color: Int): PencilInk =
+        PencilInk(color, opaque = false, density = 1f)
 
     /** Start a fresh eraser sweep: the next [eraseAlong] batch won't chain to the last. */
     protected fun beginEraseSweep() {
@@ -1782,6 +1965,11 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (changed) target.setPixels(rubPixels, 0, w, dirty.left, dirty.top, w, h)
         rubPassRect = rubPassRect?.apply { union(dirty) } ?: Rect(dirty)
         paperListener?.onRasterChanged(RasterLayer.GRAPHITE, dirty)
+        // The engine seam takes the rub as it happens rather than at the redraw: the
+        // pixels have moved now, and the mid-sweep redraw is throttled while the artist's
+        // hand is not. A cadence that presents every fourth batch still presents a page
+        // that is right about all four.
+        if (changed) onRasterPixelsChanged(dirty)
         rasterErasePending = rasterErasePending?.apply { union(dirty) } ?: Rect(dirty)
         throttledEraseRedraw()
     }

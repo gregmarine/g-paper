@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.39**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.41**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -218,6 +218,33 @@ lightest code was trialled for them and rejected, because the line could not be 
 a white pencil lays nothing on bare paper and pales the graphite under it — flecks go down over
 the raster — so the faintest trail is the honest preview of a lightener, and a grey trail that
 vanished at pen-lift would have said the opposite.
+
+**On Supernote the raster pencil previews by painting the panel itself (0.1.41).** With a
+raster page and `PENCIL` armed, `gpaper-ratta` opens the panel driver (`/dev/ebc`, which the
+vendor's own SELinux policy lets any app open — Supernote's Atelier draws the same way) and
+paints each mark's graphite straight into the panel, **with pressure live and nothing to see
+at pen-up**: the flecks on the panel are the flecks the bake lays, so the commit changes no
+pixel. **While that panel is ours the raster page is *shown* dithered** — a blue-noise dither
+of the same flatten, so every pixel on the glass is black or white. This panel's greys arrive
+a beat late and its black arrives at once, so a dither is the one picture it can show
+truthfully under a moving nib; it is how Supernote's own Atelier draws, and it is why a pale
+lead there keeps its whole shape. **It is a display decision and goes no further**: the
+`Stroke` a host persists, the page image it reads back, and every cover and export
+(`renderToBitmap`) keep the artist's true greys, exactly as on every other engine.
+The firmware ink daemon is switched off while that pencil is armed, and the constant the
+one-tone daemon forced on the bake — the pressure 0.5 above — goes back to the hand's own
+pressure on this path; it still applies wherever the daemon is what previews. (The upright
+bake of 0.1.35 stays on both paths: the panel could show a leaned lead now, but the artist's
+Manta walk kept the Supernote pencil upright.) **The pen, the
+rubber, the lasso and stroke-mode pages are unchanged**, on the firmware path exactly as
+before. Hosts need nothing new: no call, no flag, no dependency — `gpaper-ratta` still adds
+none, and the small native library it now carries for those syscalls ships inside the AAR
+(arm64, the whole Supernote fleet). Where the driver is unavailable — refused, an unexpected
+geometry, a stripped `.so` — the pencil keeps the firmware needle preview and one line says
+so in logcat (`GPaperRatta`: `panel: direct …` / `panel: needle …`). Two known edges of this
+first release: a fleck laid over a *template* line previews over white and darkens a little
+at the bake, the template itself is not dithered with the page, and live **rubbing** still
+goes through the ordinary raster path.
 
 The images are a layer *over* the paper (white + template still draw under them), so the
 eraser clears to transparent rather than painting white. Format is ARGB_8888; about

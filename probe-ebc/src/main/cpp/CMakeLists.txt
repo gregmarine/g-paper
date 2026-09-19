@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(ebcprobe C)
+add_library(ebcprobe SHARED ebc_probe.c)
+find_library(log-lib log)
+target_link_libraries(ebcprobe ${log-lib})

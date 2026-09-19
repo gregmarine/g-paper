@@ -104,6 +104,77 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   only the un-layered half hears **nothing** of ink on purpose: its `readPageRaster(rect)`
   reads graphite, so forwarding an ink change would hand it the wrong before-image and its
   undo would paint graphite where ink was. Silence beats a corrupted history.
+- **On Supernote the pencil's live ink is ours, not the daemon's — and three rules keep it
+  honest (Phase 28, 0.1.41).** `/dev/ebc` is openable by any app (the vendor policy line
+  `allow appdomain rga_device chr_file { open ioctl map … }`, proved from an `untrusted_app`
+  on a Nomad and a Manta), one byte per pixel of 4-bit grey in frame 0, shown by one
+  `HTEINK_IOC_DISPAREA` (`0x48545701`, mode 7, flag 1 — Atelier's own call). So the raster
+  pencil paints `GraphiteGrain`'s flecks into the panel itself: the lead's own shade,
+  pressure back, and **no change at pen-up**, because what the bake lays is what is already
+  there. **(1) The window is never invalidated mid-stroke on that path.** The compositor
+  rewrites frame 0 from the window every ~0.2–1.4 s regardless, and a frame presented
+  mid-stroke is that copy — *older than the dabs just painted*, which it overwrites; the
+  panel only refreshes when someone asks, so with no frames the preview simply stands.
+  **(2) The live pixel and the displayed pixel are decided by ONE pure function at the same
+  page coordinates** (`DitherFlatten` — see (4)) — that is what makes the pen-up recompose a
+  no-op instead of every mark settling a shade a beat after it is drawn. It was
+  `RattaPanelTone`, the measured compositor grey→level table (irregular bands, level 9 never
+  produced, identical on both devices), while the panel was still being sent greys; that
+  table stays as the record of a measurement nothing else holds. **(3) The daemon is
+  full-screen-disabled while that pencil is armed**, from the same tool push that would have
+  armed the needle, or it paints its one flat grey over the grain. The physics behind the
+  whole thing: **a solid grey dab lands black and lightens toward its target** (the 16-grey
+  waveform passes through black) while **black flecks land at once** — so a scatter of black
+  is the one thing this panel can preview truthfully, a pencil is a scatter, and a dither is
+  how a *grey* one becomes black. `probe-ebc/README.md` holds every number; the
+  fallback when the driver is unavailable is 0.1.40's needle, one log line, no host change.
+  **(4) The pencil stays GREY in the page image; on that path the window and the panel show a
+  blue-noise DITHER of the flatten, live and at pen-up — so no grey pixel ever reaches the
+  panel from the pencil, and covers and exports stay true grey.** The read-back was right
+  (Atelier sends the panel level 0 and nothing else) and the conclusion drawn from it was
+  wrong: Atelier **dithers** a grey stroke into an even pattern of black dots, so a light
+  stroke keeps its whole shape and reads as a flat light grey. The second walk instead thinned
+  the grain — shade as fleck *density* — which lands cleanly under the nib and is still wrong,
+  because **a density changes the MARK and the fault is in how the panel SHOWS one**
+  (*"Atelier uses greyscale colours; this just leaves less graphite down, so shade 13 looks
+  like a bug"*). The fix belongs to the display and stays there: `Dither` over `BlueNoise64`
+  (pure, position-keyed, stateless — so two renderers looking at the same grey at the same page
+  pixel always agree), `DitherFlatten` as the **one** per-pixel flatten+dither both halves call,
+  and a core seam that keeps it off the data — `drawRasterLayers(canvas, forDisplay)`, false
+  from `renderToBitmap`, plus `onRasterPixelsChanged(rect)` firing after every raster mutation
+  and **before** the redraw that presents it. Its ends are exact by construction (`grey/255 <
+  (threshold+0.5)/256`, not `grey < threshold`, or pure black would speckle). `DITHER_GAMMA` is
+  the one knob and is 1 until a hand says otherwise. `PencilInk` and `GraphiteGrain`'s density
+  dial stay as an unused seam; the stroke's stored colour never moved through any of this, and
+  BOOX, the generic engine and Paintsprout were never touched.
+- **A live preview may lay a fleck only where the bake will put one — which makes
+  `GraphiteGrain`'s PREFIX the contract, not the whole (Phase 28).** `of(points, …,
+  prefix = true)` returns an exact ordered prefix of the finished stroke's grain, so a
+  direct-panel preview draws each fleck once and never moves it. Getting there needed the
+  file to be honest about lookahead: the running filters were always causal, but the two
+  filter **seeds** were means over the first 40 and 150 px of travel, and a seed read from
+  150 px ahead makes the opening of a mark depend on path the pen has not travelled yet.
+  Both are now capped at `SEED_WINDOW_PX` (50 px, the reach the arrival trim already
+  needed), in **both** modes — a prefix and a whole stroke must not take different paths
+  through the file, or the invariant belongs to the caller rather than to the grain. Below
+  that much settled travel prefix mode lays **nothing**: not yet decidable beats laid in the
+  wrong place when the paper cannot be repainted. **Anything that looks ahead is a lookahead
+  even when it is called a seed** — and the cost of this one was invisible for fifteen
+  releases because every renderer drew whole strokes.
+- **A preview that re-derives the whole stroke each event is quadratic in the stroke, and the
+  hand feels it (Phase 28).** Asking `GraphiteGrain.of(…, prefix = true)` per MotionEvent
+  re-decides every station already on the panel to find the one or two that are new: 4352 ms
+  of UI thread over a 1252-event slow stroke on a Nomad, 3.5 ms an event and rising with the
+  length. `GraphiteGrain.Sweep` resumes the station loop instead and returns only the new
+  flecks (3402 ms → 6 ms for the same stroke on a JVM). **The loop stayed one loop** — `of`
+  and `Sweep.extend` both run it over a `SweepState`, because two copies of a loop that lays
+  every pencil mark on every engine is a thing that drifts, and the day one of them misses a
+  later constant the preview and the bake stop being the same mark. What *permits* the resume
+  is that nothing in the file looks ahead: a station decided now is the station the finished
+  stroke will have. And before touching it, nine strokes' committed grain was pinned as a
+  checksum over every coordinate's raw bits (`GraphiteGrainPinTest`) — every other test there
+  states a *property*, and a property can go on holding while the mark it describes quietly
+  moves.
 - **The raster eraser's mid-sweep cadence is PER ENGINE, because a redraw does not cost the
   same thing on two panels (Phase 19, 0.1.32).** `rasterEraseRedrawIntervalMs` is a
   `protected open val` the base reads in `throttledEraseRedraw`; `RASTER_ERASE_REDRAW_END_ONLY`

@@ -1827,6 +1827,340 @@ change; `penColor` = `0xFFFFFFFF` is the whole host-side ask.
 **Gate:** `./gradlew test` green; the white lead on the artist's Nomad through NSE · Sketch (the
 consumer walk stands in for a demo walk — the demo's Shade cycler never reaches white).
 
+### Phase 28 — Graphite on the panel: the pencil's live preview goes direct on Ratta (post-v0.1.0)
+**Status:** ✅ Complete (2026-09-19, the user's hand on the Nomad and the Manta — *"we have ourselves a winner"*, *"let's freeze this. It works."*) · **Publishes:** 0.1.41 · branch `ebc-live` (from
+`ebc-probe`, which carries the `probe-ebc` app — the measurement door this phase is built on; its
+README is the reference for every number below).
+
+**Why.** On Supernote the pencil's live preview is the firmware daemon's needle in one grey, and
+the mark it lays lands at pen-up through a bake + overlay clear — the flash. Atelier has no
+flash and sixteen greys because it never uses the daemon for a stroke: it paints straight into
+the panel driver (`/dev/ebc`), which the vendor SELinux policy lets any app open (`allow appdomain
+rga_device`). `probe-ebc` proved it from an `untrusted_app` on the Nomad and the Manta: 16-grey
+pixels in frame 0, one `HTEINK_IOC_DISPAREA` (mode 7, flag 1 — Atelier's own call) per event, no
+flash. And it found the physics: **a solid grey lands black and lightens** (the 16-grey waveform
+passes through black), while **black flecks land at once** — which is exactly what `GraphiteGrain`
+lays. The user's hand on both devices: *"works perfectly, very much like Atelier."*
+
+**The user's decisions (2026-09-18):** native code lives **inside `gpaper-ratta`** (a small C
+file; building g-paper needs the NDK, consumers get the `.so` in the AAR); **pressure returns to
+the Ratta pencil** (the constant 0.5 bake existed only because the needle could not show tone);
+**pencil only** — pen, rubber and stroke-mode pages keep the firmware path; Opus codes on Fable's
+brief, Fable reviews, the user walks both devices.
+
+**Design**
+- `gpaper-ratta` gains `EbcPanel` (internal): opens `/dev/ebc` `O_RDWR|O_CLOEXEC`, `HTEINK_IOC_GETINFO`
+  (`0x48545201`, 24 B: `[1] = h<<16 | w`, `[3] = frameBytes`), `mmap(frameBytes)` of frame 0,
+  and `display(rect, mode 7, flag 1)` through `HTEINK_IOC_DISPAREA` (`0x48545701`, the 24-byte
+  `{l,t,r,b; bufOffset=0; u8 mode; u8 flag}`), via a JNI pass-through `ebc_jni.c`
+  (open/close/ioctl/mmap/munmap). Frame pixels are one byte each, 4-bit grey `0x00`…`0x0f`.
+  Absent or refused → the pencil keeps today's needle preview, `Log.w` once.
+- **Rotation by geometry** (measured): panel ≠ screen size → Nomad's `panelX = screenY`,
+  `panelY = panelH−1 − screenX`; equal → Manta's identity. Screen coordinates, so the view's
+  `getLocationOnScreen` offset applies first.
+- **`RattaPanelTone`** (pure Kotlin, tested): the compositor's Android-grey → 4-bit table, identical
+  on both devices: 0–75→0 · 76–87→1 · 88–99→2 · 100–107→3 · 108–119→4 · 120–131→5 · 132–139→6 ·
+  140–151→7 · 152–167→8 · 168–187→10 · 188–195→11 · 196–203→12 · 204–215→13 · 216–223→14 ·
+  224–255→15 (level 9 is never produced). Live pixels go through it so the pen-up recompose writes
+  the same levels back — the mirror is invisible.
+- **The live layer.** One page-sized `ALPHA_8` scratch (`liveGraphite`) in `CanvasPaperView`'s
+  Ratta subclass. Per event the stroke so far runs through `GraphiteGrain.of(points, width, seed,
+  prefix = true)` with the stroke's pending id and the engine's bake parameters, and only the
+  flecks past the count already laid are drawn by `StrokeRenderer` into the scratch — same flecks,
+  same rasteriser as the bake. The dirty rect is flattened as `drawCommittedContent` flattens
+  (graphite ⊕ scratch-as-shade, `DARKEN` ink, over white), toned, rotated, written, displayed.
+- **`GraphiteGrain` prefix mode** (pure, tested): the filters are causal by design; prefix mode
+  omits the **end cap** and lays nothing until the arc passes the landing window (`2 × LANDING_TRIM_PX`),
+  so a prefix's flecks are exactly the first N of the whole stroke's. Test: for every prefix of a
+  recorded stroke, `of(prefix, prefix=true)` ⊂ `of(whole)` as an ordered prefix.
+- **A paint thread** owns the ioctl (it blocks up to ~65 ms while an update is in flight):
+  the UI thread posts fleck batches; the thread unions whatever accumulated and sends one DISPAREA.
+- **The firmware is kept off the pencil**: with the pencil armed on a raster page and the panel
+  open, the tool push issues a full-screen disable instead of arming the needle (Atelier's
+  `sendFullScreenDisableArea`). Pen-up: the stroke bakes as today (`compositeIntoRaster`), the
+  scratch is cleared in the mark's rect, and `bakeAfterCommit` records + presents at once — no
+  `pendingBake`, no ladder, there is no overlay ink to drop. The window is **never invalidated
+  mid-stroke** (the compositor would overwrite fresh dabs with older pixels — measured).
+- `bakePressure` / `bakeTilt` return identity for the direct path (pressure is back; tilt too —
+  the preview can now show a leaned lead), and stay 0.5 / 0 when the panel is unavailable.
+- Demo: the raster page shows `panel: direct` / `panel: needle` in the status head. `docs/api.md`
+  (Ratta section: what the pencil does now), `CLAUDE.md` (the standing rules: never invalidate
+  mid-stroke, tone through the table, the daemon disabled for the pencil) in the same commit.
+
+**Known limits (this phase):** a fleck over a template line previews over white and darkens a
+little at pen-up; live rubbing through the panel and the ink pen are later phases.
+
+**Gate:** `./gradlew test` green (core + ratta); `:demo:assembleDebug`; the user's hand on the
+Nomad and the Manta through the demo's raster page — light and hard, fast and slow, over ink, undo;
+no flash, no change at pen-up; 0.1.41 to mavenLocal by the user.
+
+**Landed** (2026-09-18, branch `ebc-live`, unwalked — the device gate above is still open).
+
+- **`gpaper-ratta` builds native code now.** `src/main/cpp/{CMakeLists.txt,ebc_jni.c}` →
+  `libgpaper_ebc.so` (arm64-v8a only), `ndkVersion 28.2.13676358` + cmake 3.22.1 in the module's
+  Gradle. Seven pass-through entries (open / close / ioctl-with-direct-ByteBuffer / mmap / munmap /
+  lastErrno / strerror), the probe's shapes, no shared code with `probe-ebc`. `EbcNative` guards
+  `System.loadLibrary` with `catch (Throwable)` and gates every call on `available`. Verified: the
+  `.so` is in `demo-debug.apk` and its symbols carry the `…gpaper.ratta.EbcNative` names.
+- **`EbcPanel`** (internal): fd + GETINFO geometry + mmap of frame 0 + a `HandlerThread`
+  ("gpaper-ebc") that owns every DISPAREA, unioning whatever queued while the previous ioctl
+  blocked. Pixels are written into the mapping on the **calling** thread before the rect is
+  queued — the display call only says "show what is there", and writing on the panel thread would
+  put the newest dab behind the current wait. Refusals are one `Log.w` and `isOpen` stays false.
+- **`RattaPanelTone`** (pure, 7 tests): the measured table, every boundary pinned from both sides,
+  level 9 proved unreachable. `levelOf` **rounds** the luma rather than truncating — the weights
+  sum to one, so a plain 188 grey comes back as 187.99998 and truncation would drop it a level at
+  exactly the boundary where a level changes.
+- **`EbcGeometry`** (pure, 8 tests) and **`EbcDisplayArg`** (pure, 5 tests): the rotation as a
+  bijection over a whole small panel, the turned rect's area and orientation, the 24-byte struct
+  byte for byte, and mode 7 / flag 1 / both request codes pinned as *found*, not chosen.
+- **`GraphiteGrain.of(…, prefix)`** (pure, 7 new tests): no end cap, nothing until the path has
+  settled past `2 × LANDING_TRIM_PX`, and every prefix of three synthetic strokes (straight,
+  curved-and-rolling, landing excursion) proved an exact ordered prefix of the whole at **every**
+  k. The decidability test is stated against the arc to the **second-to-last** point, because every
+  window in the file is walked with a `while (i < size …)` bound and a window that runs out of
+  samples answers from a shorter stretch than the whole stroke will.
+- **Core seams** (nothing public): `onLiveStrokeExtended(points)`, `rasterFor(layer)`,
+  `pendingStrokeSeed()`, a `bakePoints(points, style)` overload beside the `Stroke` one, and
+  `drawPencilGrain(canvas, grain, from, color, width)` onto the shared
+  `StrokeRenderer.drawPencilFlecks` — one rasteriser, the bake's, called with `from = 0` by the
+  bake and with the laid count by the preview.
+- **`RattaPaperView`**: `directPencil` (panel open ∧ raster ∧ PENCIL ∧ PEN), the daemon
+  full-screen-disabled for it from `applyToolToFirmware` / `rearmPenIfLive` / `setExclusionRects`,
+  a `pageMode` override so a mode change re-pushes, `bakePressure`/`bakeTilt` identity while the
+  panel is open, a page-sized live **alpha mask** + a grown-as-needed batch bitmap, per-batch
+  flatten (white → graphite → live flecks → ink by `DARKEN`) → tone → `panel.post`, and
+  `bakeAfterCommit` recording + presenting at once with no `pendingBake` for a direct contact.
+  Cancel, and a stroke consumed as a gesture, drop the live layer and re-tone the rect from the
+  page images alone.
+
+**Deviations from the design above, and why**
+
+1. **The two filter seeds are capped at 50 px for every caller, not only for prefixes.**
+   `seedLean`'s windows (40 px for width, **150 px** for darkness) are lookaheads, so the design's
+   "lays nothing until the arc passes `2 × LANDING_TRIM_PX`" was not on its own enough to make a
+   prefix agree with the whole. Two ways out: gate prefixes at 150 px instead — a centimetre of
+   dead hand at the start of every stroke, and short strokes never previewing at all — or cap the
+   seeds, which the brief's "make it prefix-safe by the same rule: decided from the first 50 px
+   only" authorises. Capped. **This moves the committed pencil very slightly on every engine**:
+   the darkness filter now starts from the mean lean over the first 50 px instead of the first
+   150. Invisible on a stroke drawn at one angle, and nothing at all past the first filter window,
+   but it is a change to an approved bake and the walk should be looked at with it in mind. All 35
+   existing `GraphiteGrainTest` cases still pass unchanged.
+2. **The live layer is a `ByteArray` alpha mask plus a small ARGB batch scratch**, not a
+   page-sized `ALPHA_8` bitmap. Same memory, same flecks, same renderer — but reading a rect back
+   out of an `ALPHA_8` bitmap rests on a Skia conversion (`getPixels` from A8 to N32) that nothing
+   here can verify without a device, and a silent wrong answer there is a preview that never
+   appears. The batch is rasterised into an ordinary ARGB bitmap, read with the plain call, and
+   composited into the mask with the `SRC_OVER` arithmetic a Canvas would have done.
+3. **`mmap` falls back to the whole five-frame length** if mapping frame 0 alone is refused. The
+   design says map frame 0; the probe proved only the five-frame call, and a driver that validates
+   the length would leave the pencil dead for a saving of nothing. Same address, same first frame.
+4. **The demo shows the path as a log line, not in the status head** — the brief's stated
+   alternative. `panel: direct …` / `panel: needle …` at `Log.i`/`Log.w` on `GPaperRatta`, plus a
+   paragraph in the demo's capability notes. Putting it in the status head would have meant
+   widening `RattaEngine` with a public probe to serve one line of demo chrome.
+5. **`EbcPanel.close()` allows a later re-open** when the session had actually opened (a *refused*
+   one is still never retried). A view detached and re-attached is ordinary, and it must not cost
+   the pencil its panel for the rest of the process.
+6. **`onGestureStrokeConsumed` gained a direct branch.** A smart-lasso or scribble-erase stroke
+   commits nothing, so a direct contact's graphite would have stayed on the panel belonging to no
+   mark; it drops the live layer and re-tones instead of running the overlay ladder (there is no
+   overlay ink — the daemon was off).
+
+**What no one can know without the devices:** that the driver still answers from inside an AAR in
+a host process the way it did from the probe; that mapping one frame is accepted (hence 3); that
+the preview and the bake agree to the eye at pen-up; that a mid-stroke frame from a *host's* own
+chrome does not spoil the preview (the engine presents none, but nothing stops a host); that the
+per-batch flatten keeps up with a fast hand on a Nomad; and every question of feel.
+
+**First walk (2026-09-18, Nomad + Manta, both direct in the log):** *"feels like solid mode, not
+flecks; too wide for 1.2 px on the Manta."* Two causes, both fixed the same evening: (1) the
+flecks were alpha-graded greys and the panel's waveform trails on a grey — **flecks are now
+opaque on the direct path**, bake and preview alike (`opaquePencilFlecks` seam, false everywhere
+else); (2) tilt had come back with pressure and a leaned hairline widened — **the user's
+decision: the Supernote pencil stays upright** (`bakeTilt` 0 on both paths).
+
+**The lag was the grain, and the grain was being asked the wrong question (2026-09-18,
+Nomad).** `onLiveStrokeExtended` called `GraphiteGrain.of(points, …, prefix = true)` on the
+**whole** stroke at every MotionEvent, so a mark a thousand samples long re-decided every
+station already on the panel in order to find the one or two that were new: a 1252-event slow
+stroke cost **4352 ms of grain on the UI thread**, 3.5 ms an event and climbing with the
+length, which the hand feels as the ink dragging behind the nib. Toning and posting the batch
+were under a millisecond an event throughout — the grain was the whole of it. The fix is
+`GraphiteGrain.Sweep` (`begin(width, seed)` → `extend(points)` returns **only** the flecks
+newly decided): the station loop now runs on a resumable state object, `of` and `Sweep.extend`
+share that one loop rather than keeping two copies of it that would drift apart, and the same
+1252-event stroke measures **3402 ms → 6 ms** on a JVM. `RattaPaperView` keeps the
+provisional lay for the undecidable first ~50 px exactly as it was — it is the one place the
+whole stroke is still swept per event, and a stroke that short has barely any stations.
+`GraphiteGrainIncrementalTest` pins the invariant that earns the resume: for five synthetic
+strokes (straight, curved-and-rolling, a landing excursion, one full of zero-length steps, one
+with pressure and tilt both moving) and for every way the points can arrive — one at a time,
+in random bites, all at once, two halves — the concatenation of every `extend` equals
+`of(points, …, prefix = true)` on the whole list, element for element. And because a refactor
+of the loop that lays every pencil mark on every engine needs something that fails loudly if
+one fleck moves, `GraphiteGrainPinTest` pins nine strokes' grain as a checksum over every
+coordinate's raw bits: **it was written and made green before the refactor, and never moved.**
+
+**Second walk (2026-09-18/19, Nomad): a shade is a DENSITY, not a grey.** The first walk's
+fix made the flecks opaque and the marks stopped trailing — for black. The paler the lead,
+the worse it still was: *shade 0 perfect, 5 laggy, 9 more, 13 "starts black then switches"*.
+The panel's own frame, read back while **Atelier** drew a light-grey pencil, says why in one
+number: **3401 stroke pixels, every one of them level 0, pure black.** Atelier never sends the
+panel a grey for a pencil at all. Its sixteen shades are sixteen *densities* of the one ink —
+which is exactly what the probe's physics had already said and nobody had followed through:
+the 16-grey waveform passes **through** black on its way to a grey, so a grey pixel lands
+black and lightens over the next second or so while a black pixel is simply there. Opaque grey
+flecks are no better than alpha-graded ones; the fault was never the alpha, it was the *grey*.
+**The user's decision: on Supernote's direct path the pencil's shade becomes fleck density and
+every fleck is black — live preview and bake alike. BOOX and Paintsprout untouched.**
+
+What changed. `GraphiteGrain.of(…, density)` and `begin(…, density)` scale the **coverage**
+each site is tested against and nothing else — never a level, never a fleck size, never where
+a station falls. That makes a thinned mark an **ordered subset** of the full one, because
+`catches` weighs a site's own fixed coin toss against the coverage and the toss does not move
+with it: the same specks, in the same places, at the same darknesses, with some left out
+(`GraphiteGrainDensityTest`, 8 cases — density 1 identical to today, the subset property, the
+sweep/prefix agreement in every chunking at three densities, density 0 laying nothing, and the
+clamp). `GraphiteGrainPinTest` never moved, which is the byte-identity guard for density 1.
+The stop-gap `opaquePencilFlecks` boolean from the first walk is gone, replaced by
+`PencilInk(color, opaque, density)` and `CanvasPaperView.pencilInk(color)` — a `protected open
+fun`, asked **per stroke** at every pencil render (raster bake, committed record, live layer,
+drag) so an engine can answer from the shade that was picked. `StrokeRenderer.draw` takes a
+`pencilInk: PencilInk? = null`; null is the stroke's own colour, alpha-graded, at density 1,
+which is every other engine and `StrokeRasterizer`. `RattaPencilInk.of(argb)` is the Ratta
+answer: luma ≥ 224 → **white, opaque, density 1** (the lightener lead — Phase 27 — and white
+lands as fast as black), otherwise **black, opaque**, at the density its luma asks for.
+`RattaPaperView` latches the contact's `PencilInk` at ACTION_DOWN and uses it for the sweep,
+the fleck rasterisation and the flatten (`toneAndPost` composites the live alpha with the
+**ink's** colour, not `penColor`, or the panel would see a grey no fleck on it is).
+
+**The curve is Atelier's own, measured (Nomad, 2026-09-19).** `probe-ebc`'s dump was pointed
+at one Atelier stroke per shade of its sixteen-step palette and the black panel pixels counted
+per pixel of stroke length, relative to the black lead's 2.67: luma 80→0.82 · 96→0.77 ·
+104→0.72 · 112→0.69 · 128→0.63 · 136→0.58 · 144→0.56 · 160→0.48 · 170→0.42 · 182→0.37 ·
+192→0.32 · 200→0.27 · 208→0.25 · 221→0.15. `density = 1 − 0.85 · (luma / 221)^1.5`, floored at
+0.15, sits within a few percent of all fourteen (`RattaPencilInkTest` pins them). The three
+constants are named and their KDoc says what they are: a fit to **Atelier's** HB pencil, not
+to ours — what is borrowed is the *shape of the ladder*, how much paler each rung is than the
+one below, which is what a hand judges when it picks a shade. Whether our own grain at 0.51
+looks like a `#999999` lead is a question for the walk.
+
+**Third walk (2026-09-19, Nomad): the shade must stay a shade — the DISPLAY is what
+dithers.** The density landed cleanly under the nib. It was still wrong, and the artist's
+words say why in one line: *"Atelier uses greyscale colours; this just leaves less graphite
+down, so shade 13 looks like a bug."* A density is a change to the **mark**; what the second
+walk was chasing is a fault in how the panel **shows** one, and the two must not be traded
+for each other. The panel read-back was right — Atelier sends the panel nothing but black
+pixels — and the conclusion drawn from it was wrong: Atelier **dithers** a grey stroke into
+an even pattern of black dots (its own Floyd–Steinberg/Atkinson ditherers), so a light
+stroke keeps its whole shape and reads as a flat light grey. We thinned the grain instead.
+
+**The user's decision:** the pencil stays grey in the data; on the direct path **the display
+is a blue-noise dither of the flattened page**, live and at pen-up alike, so every displayed
+pixel is black or white — both of which land on the panel's first frame — and the live
+preview and the pen-up mirror agree pixel for pixel.
+
+What changed.
+
+- **Shade-as-density is reverted on Ratta.** `RattaPencilInk` and its test are gone, the
+  `pencilInk` override with them: the pencil is the core's own answer on every path — the
+  lead's colour, alpha-graded, anti-aliased, density 1 — and `contactInk` is that. The
+  `PencilInk` seam and `GraphiteGrain`'s density dial stay (tested, harmless, and unused by
+  anything shipped): the seam is how an engine says how the pencil must be drawn on its
+  glass, and this engine no longer needs to say anything. `bakePressure` / `bakeTilt` are
+  untouched, and `GraphiteGrainPinTest` never moved.
+- **`Dither` + `BlueNoise64`** (core `geometry/`, pure, 11 tests): a 64 × 64 void-and-cluster
+  threshold matrix, every value 0…255 exactly sixteen times, tiled over the page, and
+  `black(grey, x, y)`. Position-keyed and stateless, which is the whole point — two
+  renderers looking at the same grey at the same page pixel always answer the same.
+  `DITHER_GAMMA` (1.0) is the one knob for a walk, documented as such: Atelier's light
+  shades read darker than linear, so the ladder a hand judges may not be the ladder the
+  arithmetic gives, and that is not a thing to guess at from a desk.
+- **A display seam in core, nothing public.** `drawCommittedContent(canvas, forDisplay)` —
+  true from the window record and the software fallback, **false from `renderToBitmap`**, so
+  covers and exports stay the artist's true greys — splits its raster half into
+  `drawRasterLayers(canvas, forDisplay)`. And `onRasterPixelsChanged(rect)` (null = the whole
+  page) fires after **every** raster mutation and **before** the redraw that presents it:
+  the stroke bake, a `loadStrokes` or `addStrokes` bake, `loadPageRaster`, each
+  `swapPageRaster` patch, every erase batch, `clear` and `clearForContentSwap`. It is the
+  engine's own news, unlike `PaperListener.onRasterChanged`, which is deliberately silent
+  for changes the host made itself. `rasterPageWidth`/`rasterPageHeight` come out of
+  `ensureRaster` as the one definition of the page's size.
+- **`DitherFlatten`** (Ratta, pure, 7 tests): the per-pixel flatten — white paper, graphite,
+  the live alpha in the lead's colour, ink through `DARKEN` — and `Dither` over it, in **one
+  function both halves call**, because two copies of this arithmetic would drift apart on a
+  panel rather than in a test. Its last test is the mirror itself: for four leads, four page
+  greys, three inks, seven alphas and sixteen positions, the live half's answer and the
+  display half's answer (reading the graphite image the bake will have left, modelled as the
+  `SRC_OVER` the flecks composite with) are the same black-and-white picture, pixel for
+  pixel.
+- **`RattaPaperView`'s two halves.** The live one keeps its flatten and sends
+  `LEVEL_BLACK` / `LEVEL_WHITE` per pixel instead of a `RattaPanelTone` level. The display
+  one is a page-sized `ALPHA_8` `ditherDisplay`, rebuilt over exactly the rects
+  `onRasterPixelsChanged` names, in 256 K-pixel horizontal bands so a whole-page rebuild
+  allocates a megabyte rather than the page's four (the ms is logged); `drawRasterLayers`
+  draws it with a black paint **instead of** the two rasters while the panel is open on a
+  raster page, and defers to the base everywhere else. It is **dropped rather than cleared**
+  when the page goes, because the committed display list holds its own reference to it and
+  blanking one in place would wipe the panel a frame before the next page lands — the same
+  courtesy the base extends to the page images.
+- **`RattaPanelTone` stays** with its test and a KDoc saying no live pixel goes through it
+  any more. It is a measurement, and the only record of one; black and white are also the
+  two greys it maps without argument, so nothing it says has been contradicted.
+
+**Deviations from the brief, and why**
+
+1. **The dither compares `grey/255 < (threshold + 0.5)/256`, not `grey < threshold`.** The
+   matrix holds every value 0…255, so under the plain form a page of **pure black** comes out
+   with sixteen white pixels in every 64 × 64 tile — visible speckle in a black pen's ink, and
+   the one thing a dither must never do to an end. The integer form makes both ends exact and
+   leaves a flat grey within half a percent of `grey/255` white.
+2. **`onRasterPixelsChanged` takes a nullable rect** (null = the whole page), which the
+   brief's own "a null/whole-page call" allows, rather than a `Rect` plus a second entry.
+3. **The erase fires it per rubbed batch, not at the progress/finalize redraws.** The pixels
+   move in `eraseRasterAlong`; the redraw is throttled and the hand is not, and a cadence
+   that presents every fourth batch still has to present a page that is right about all four.
+   Same rects, strictly earlier.
+4. **A `pageMode` flip drops the dither but presents nothing.** The brief asks for a redraw;
+   the base's setter is a content swap, whose whole point is that the pixels hold until the
+   host loads the new page. A redraw there would blank the panel a frame early — the bug
+   0.1.25's "dropped, not erased" rule exists to prevent. The **panel opening** does
+   rebuild and present (`refreshDitherDisplay`), because that one changes how the page is
+   shown rather than what it holds.
+5. **`compositeIntoRaster` announces one rect for the batch** (the union of the marks'
+   bounds), where the *host's* news is one per run of each mark. The host's rects pay for a
+   before-image, where the diagonal matters; this one pays for a repaint of empty pixels.
+
+**What only a device can answer:** whether the dithered page reads as the greys the artist
+picked (and so whether `DITHER_GAMMA` needs bending); whether a dithered *window* under a
+dithered *panel* is as invisible at pen-up as the arithmetic says; how a page of dots looks
+on the panel's own waveform after a full refresh, next to Atelier's; whether the whole-page
+rebuild stays under a page turn's budget on a Nomad and a Manta (it is logged); and what a
+pen, a rubber and a lasso look like on a page shown this way.
+
+**Still unwalked:** every number above is a starting value. The device gate at the head of
+this phase is open.
+
+**Outcome (2026-09-19).** Four walks. The direct path opened from inside the library on both
+devices at first launch. The first walk found alpha-graded flecks trailing the nib (the 16-grey
+waveform passes through black) and tilt widening a hairline — flecks went opaque, the pencil
+stayed upright by decision. The second found the whole-stroke grain recompute (3.5 ms/event,
+rising) — `GraphiteGrain.Sweep`, byte-identical, 6 ms per 1252-event stroke. The third found
+shade-as-density wrong by eye ("13 looks like a bug"). The fourth, with the page image kept grey
+and the **display** blue-noise dithered live and at pen-up, was the winner: every shade lands under
+the nib and keeps its shape. Measured against Atelier on the Nomad: our on-screen tone equals the
+swatch's grey within 2 % at every shade (`DITHER_GAMMA` stays 1.0); Atelier's HB ladder runs
+lighter overall and darker in the mids relative to its black — that is its pencil, not its shade
+map, and pencils are a later phase. Grain comparable: 1–1.5 px dots, ~1500 per 1000 px of stroke
+at mid tones, both merging as shades darken. Test counts at the freeze: core 264 · ratta 45.
+`probe-ebc/` stays in the tree as the measurement door and its README as the reference. Futures,
+each a fresh decision: a pencil library (Atelier's 4H/2H/HB/2B/4B/6B/8B as the base), live rubbing
+through the panel, the ink pen through the panel, the template dithered with the page, the
+provisional 50 px start replaced by a landing-free grain. 0.1.41 to mavenLocal by the user's hand;
+merge on the user's word.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

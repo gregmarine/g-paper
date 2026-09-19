@@ -48,6 +48,10 @@ internal object StrokeRenderer {
      * [paint] (fully re-configured here). [points] may be a single sample — a tap renders
      * as a dot/mark. Coordinates are paper-space; the caller has applied any transform.
      *
+     * [pencilInk] is how this engine lays graphite (see [PencilInk]) — `null`, the normal
+     * case, means the stroke's own colour, alpha-graded, at full density. It is read only by
+     * [StrokeStyle.PENCIL].
+     *
      * [seed] identifies this stroke to the styles whose appearance is textured rather than
      * geometric — today only [StrokeStyle.PENCIL]. It must be **stable for the life of the
      * stroke**: the same value while it is being drawn, when it is baked, after the host
@@ -65,6 +69,7 @@ internal object StrokeRenderer {
         style: StrokeStyle,
         paint: Paint,
         seed: Int = 0,
+        pencilInk: PencilInk? = null,
     ) {
         if (points.isEmpty()) return
         resetPaint(paint, color, width)
@@ -74,7 +79,10 @@ internal object StrokeRenderer {
             StrokeStyle.CALLIGRAPHY,
             -> drawPen(canvas, points, paint)
 
-            StrokeStyle.PENCIL -> drawPencil(canvas, points, color, width, seed, paint)
+            StrokeStyle.PENCIL -> drawPencil(
+                canvas, points, width, seed, paint,
+                pencilInk ?: PencilInk(color, opaque = false, density = 1f),
+            )
             StrokeStyle.MARKER -> drawMarker(canvas, points, color, width, paint)
             StrokeStyle.DASH -> drawDash(canvas, points, width, paint)
             StrokeStyle.CROSS -> drawCross(canvas, points, width, paint)
@@ -100,18 +108,46 @@ internal object StrokeRenderer {
     private fun drawPencil(
         canvas: Canvas,
         points: List<StrokePoint>,
-        color: Int,
         width: Float,
         seed: Int,
         paint: Paint,
+        ink: PencilInk,
     ) {
-        val grain = GraphiteGrain.of(points, width, seed)
-        if (grain.count == 0) return
+        val grain = GraphiteGrain.of(points, width, seed, density = ink.density)
+        drawPencilFlecks(canvas, grain, 0, ink, width, paint)
+    }
+
+    /**
+     * Put down the flecks of [grain] from index [from] onward — the bake's own rasteriser,
+     * reachable on its own so a live preview lays **the same pixels the bake will**.
+     *
+     * The bake calls it with `from = 0` for a whole stroke; Phase 28's Supernote panel
+     * preview calls it per batch with the count it has already laid, because
+     * [GraphiteGrain.of] with `prefix = true` guarantees those earlier flecks are exactly
+     * the ones already on the paper. One rasteriser, never two: a second one is a second
+     * answer to "what does this mark look like", and the pen-lift handoff is the moment
+     * the two would be compared.
+     */
+    fun drawPencilFlecks(
+        canvas: Canvas,
+        grain: GraphiteGrain.Grain,
+        from: Int,
+        ink: PencilInk,
+        width: Float,
+        paint: Paint,
+    ) {
+        if (from >= grain.count) return
+        val color = ink.color
+        val opaque = ink.opaque
+        resetPaint(paint, color, width)
         paint.strokeCap = Paint.Cap.ROUND
-        val packed = FloatArray(grain.count * 2)
+        // Opaque flecks are also aliased: an anti-aliased edge is a ring of light greys, and
+        // on the panel that ring trails the nib exactly as a grey fleck did.
+        paint.isAntiAlias = !opaque
+        val packed = FloatArray((grain.count - from) * 2)
         for (level in 0 until GraphiteGrain.LEVELS) {
             var n = 0
-            for (i in 0 until grain.count) {
+            for (i in from until grain.count) {
                 if (grain.level[i] != level) continue
                 packed[n++] = grain.xy[i * 2]
                 packed[n++] = grain.xy[i * 2 + 1]
@@ -121,7 +157,13 @@ internal object StrokeRenderer {
             // grouped, so this costs nothing and is what stops mid-tones chaining into bristle.
             // Capped at the lead's width, so a hairline lead bakes as the hairline it previewed as.
             paint.strokeWidth = GraphiteGrain.fleckPx(level, width)
-            paint.color = withAlphaFactor(color, GraphiteGrain.levelAlpha(level))
+            // Opaque flecks (Phase 28, Supernote): darkness from density and size alone.
+            // A 16-grey e-ink panel reaches black on its first frame and a grey only by
+            // passing through black, so a grey fleck trails the nib while a black one lands —
+            // tone must come from how many flecks catch, never from what shade each is. On
+            // that engine the shade the artist picked is [PencilInk.density]; here every
+            // fleck is the one ink.
+            paint.color = if (opaque) color else withAlphaFactor(color, GraphiteGrain.levelAlpha(level))
             canvas.drawPoints(packed, 0, n, paint)
         }
     }
