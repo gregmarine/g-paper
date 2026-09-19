@@ -79,7 +79,12 @@ class DrawActivity : Activity() {
     enum class Mirror { OFF, UP, LIVE }
 
     private inner class DrawView(c: Context, var mirror: Mirror) : View(c) {
-        private val buttons = listOf("Mode", "Dab", "Flag", "Mirror", "Clear", "Exit")
+        private val buttons = listOf("Clean", "Mode", "Dab", "Flag", "Mirror", "Clear", "Exit")
+        /** Idle clean pass: 1.5 s after the last pen-up, re-display everything drawn since the
+         *  last clean in mode 4 (levels × 4) — a full-waveform drive of every pixel in the rect. */
+        var cleanOn = intent.getBooleanExtra("clean", true)
+        private val cleanRect = Rect()
+        private val cleanRunnable = Runnable { cleanPass() }
         /** Display mode + the value scale it takes: mode 7 is 0..15, mode 4 is 0..60 (level × 4). */
         var mode = intent.getIntExtra("mode", MODE)
         private val scale get() = if (mode == 4) 4 else 1
@@ -110,7 +115,7 @@ class DrawActivity : Activity() {
                 paint.color = Color.BLACK; paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f
                 cv.drawRect(x, 10f, x + 200f, 90f, paint)
                 paint.style = Paint.Style.FILL
-                cv.drawText(when (name) { "Mirror" -> "Mirror: $mirror"; "Flag" -> "Flag: $flag"; "Dab" -> if (flecks) "Dab: flecks" else "Dab: solid"; "Mode" -> "Mode: $mode"; else -> name }, x + 16f, 62f, label)
+                cv.drawText(when (name) { "Mirror" -> "Mirror: $mirror"; "Flag" -> "Flag: $flag"; "Dab" -> if (flecks) "Dab: flecks" else "Dab: solid"; "Mode" -> "Mode: $mode"; "Clean" -> "Clean: ${if (cleanOn) "on" else "off"}"; else -> name }, x + 16f, 62f, label)
             }
             cv.drawText("EBC live stroke", 20f, 62f, label)
         }
@@ -119,6 +124,7 @@ class DrawActivity : Activity() {
             if (y > 90f) return false
             val i = buttons.indices.firstOrNull { x >= width - (buttons.size - it) * 210f && x < width - (buttons.size - it) * 210f + 200f } ?: return false
             when (buttons[i]) {
+                "Clean" -> { cleanOn = !cleanOn; Log.i(TAG, "clean=$cleanOn") }
                 "Mode" -> { mode = if (mode == 7) 4 else 7; Log.i(TAG, "mode=$mode") }
                 "Dab" -> { flecks = !flecks; Log.i(TAG, "flecks=$flecks") }
                 "Flag" -> { flag = intArrayOf(0, 1, 5, 4)[(intArrayOf(0, 1, 5, 4).indexOf(flag) + 1) % 4]; Log.i(TAG, "flag=$flag") }
@@ -139,9 +145,11 @@ class DrawActivity : Activity() {
             for (h in 0 until e.historySize) walk(e.getHistoricalX(h), e.getHistoricalY(h), e.getHistoricalPressure(h), dirty)
             walk(e.x, e.y, e.pressure, dirty)
             samples += e.historySize + 1
+            if (e.actionMasked == MotionEvent.ACTION_DOWN) removeCallbacks(cleanRunnable)
             if (!dirty.isEmpty) {
                 dirty.intersect(0, 0, width, height)
                 post(dirty)
+                cleanRect.union(dirty)
                 val us = (System.nanoTime() - t0) / 1000
                 latencyUs += us; if (us > maxUs) maxUs = us; events++
                 strokeRect.union(dirty)
@@ -149,6 +157,7 @@ class DrawActivity : Activity() {
             }
             if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) {
                 if (mirror == Mirror.UP && !strokeRect.isEmpty) { refreshMirror(strokeRect); invalidate(strokeRect) }
+                if (cleanOn) postDelayed(cleanRunnable, 1500)
                 Log.i(TAG, "stroke: $samples samples in $events events, event→panel avg ${latencyUs / maxOf(1, events)} µs max $maxUs µs (input→event ${SystemClock.uptimeMillis() - e.eventTime} ms at up)")
                 samples = 0; events = 0; latencyUs = 0; maxUs = 0
             }
@@ -204,6 +213,29 @@ class DrawActivity : Activity() {
             arg.putInt(16, 0); arg.put(20, mode.toByte()); arg.put(21, flag.toByte())
             val ret = Native.ioctl(fd, REQ_DISPAREA, arg)
             if (ret < 0) Log.w(TAG, "DISPAREA failed ${Native.strerror(-ret)}")
+        }
+
+        /** Re-display [cleanRect] in mode 4 at the 0..60 scale: same pixels, every one driven. */
+        private fun cleanPass() {
+            val m = map ?: return
+            if (cleanRect.isEmpty) return
+            val r = Rect(cleanRect); cleanRect.setEmpty()
+            for (sy in r.top until r.bottom) for (sx in r.left until r.right) {
+                val i = if (rotated) (panelH - 1 - sx) * panelW + sy else sy * panelW + sx
+                m.put(i, (levels[sy * width + sx] * 4).toByte())
+            }
+            val arg = ByteBuffer.allocateDirect(24).order(ByteOrder.LITTLE_ENDIAN)
+            if (rotated) { arg.putInt(0, r.top); arg.putInt(4, panelH - r.right); arg.putInt(8, r.bottom); arg.putInt(12, panelH - r.left) }
+            else { arg.putInt(0, r.left); arg.putInt(4, r.top); arg.putInt(8, r.right); arg.putInt(12, r.bottom) }
+            arg.putInt(16, 0); arg.put(20, 4.toByte()); arg.put(21, flag.toByte())
+            val t0 = System.nanoTime()
+            val ret = Native.ioctl(fd, REQ_DISPAREA, arg)
+            Log.i(TAG, "clean pass $r mode 4 -> $ret in ${(System.nanoTime() - t0) / 1_000_000} ms")
+            // Put the mode-7 scale back under the rect for whatever the next stroke touches.
+            for (sy in r.top until r.bottom) for (sx in r.left until r.right) {
+                val i = if (rotated) (panelH - 1 - sx) * panelW + sy else sy * panelW + sx
+                m.put(i, (levels[sy * width + sx] * scale).toByte())
+            }
         }
 
         private fun refreshMirror(r: Rect) {

@@ -52,8 +52,6 @@ import com.symmetricalpalmtree.gpaper.core.render.ContentLayer
 import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
 import com.symmetricalpalmtree.gpaper.core.render.HitTarget
 import java.util.UUID
-import kotlin.math.ceil
-import kotlin.math.floor
 
 /**
  * The generic Canvas engine — core's [PaperView] implementation and the shared base the
@@ -528,7 +526,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             dropRasters()
             // Silent on the engine seam: the whole page changed here, images and all, so
             // one whole-page call after the bake says more than one rect per stroke.
-            compositeIntoRaster(strokes, announcePixels = false)
+            compositeIntoRaster(strokes, announce = null)
             onRasterPixelsChanged(null)
             redrawCommitted()
             dirty?.let {
@@ -551,12 +549,13 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             // Every mark announces itself as its own run of rects (0.1.33) on its own
             // layer (0.1.39), and the strokes go in as one composite — so all the
             // will-changes first, in the order the runs will be laid down, then the
-            // pixels, then all the changed in that same order.
+            // pixels, then all the changed in that same order. The engine seam takes the
+            // same rects (2026-09-19) — see [compositeIntoRaster].
             val dirty = strokes.map { RasterLayer.of(it.style) to rasterDirtyAlong(it) }
             for ((layer, rects) in dirty) {
                 for (r in rects) paperListener?.onRasterWillChange(layer, r)
             }
-            compositeIntoRaster(strokes)
+            compositeIntoRaster(strokes, dirty.flatMap { it.second })
             redrawCommitted()
             for ((layer, rects) in dirty) {
                 for (r in rects) paperListener?.onRasterChanged(layer, r)
@@ -798,11 +797,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * Each stroke goes to the layer its style routes to ([RasterLayer.of]) — one `Canvas`
      * per layer anything actually lands in, so a page of pencil never touches the ink
      * image and never allocates it.
+     *
+     * [announce] is the engine's news ([onRasterPixelsChanged]) once the pixels are
+     * down: the caller's own per-run rects ([rasterDirtyAlong]), or null where the
+     * caller says the whole page changed itself.
      */
-    private fun compositeIntoRaster(strokes: List<Stroke>, announcePixels: Boolean = true) {
+    private fun compositeIntoRaster(strokes: List<Stroke>, announce: List<Rect>?) {
         if (strokes.isEmpty()) return
         val canvases = HashMap<RasterLayer, Canvas>(2)
-        val laid = if (announcePixels) Rect() else null
         for (s in strokes) {
             val layer = RasterLayer.of(s.style)
             val canvas = canvases[layer] ?: run {
@@ -815,47 +817,27 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 canvas, bakePoints(s), s.color, s.width, s.style, scratchPaint, s.id.hashCode(),
                 pencilInk = pencilInk(s.color),
             )
-            laid?.let { union -> strokeBounds(s, scratchRect); union.union(scratchRect) }
         }
-        // One rect for the batch: the engine seam is about what a second image of the
-        // page has to catch up on, and the union of a few marks is a cheaper thing to
-        // redo than a call apiece. (The HOST's news is still per run of each mark —
-        // that one is paying for a before-image and the diagonal matters.)
-        laid?.let { if (!it.isEmpty) onRasterPixelsChanged(it) }
-    }
-
-    /** Scratch for [strokeBounds] — one rect, main-thread only, like every other here. */
-    private val scratchRect = Rect()
-
-    /**
-     * The page rect [stroke] can have touched, into [out]: its points' box grown by the
-     * widest the renderer can lay at that width, and clipped to nothing — generosity
-     * outward is free here (it costs a repaint of empty pixels) and a rect that misses a
-     * fleck would leave a mark the panel never shows.
-     */
-    private fun strokeBounds(stroke: Stroke, out: Rect) {
-        var minX = Float.MAX_VALUE
-        var minY = Float.MAX_VALUE
-        var maxX = -Float.MAX_VALUE
-        var maxY = -Float.MAX_VALUE
-        for (p in stroke.points) {
-            if (p.x < minX) minX = p.x
-            if (p.x > maxX) maxX = p.x
-            if (p.y < minY) minY = p.y
-            if (p.y > maxY) maxY = p.y
+        // Per RUN of each mark, and never a union of them (2026-09-19). The seam was
+        // announcing one rect for the whole batch — the union of the marks' bounds — on
+        // the reasoning that a second image of the page is cheap to redo and the
+        // diagonal only matters to a before-image. It is not cheap: an engine rebuilding
+        // a dithered mirror of the union pays for every pixel inside it, so a long or
+        // diagonal mark cost a large fraction of the page and the pen-up of one held a
+        // Nomad's main thread for **848 ms** inside this call (measured through NSE ·
+        // Sketch). These are the same rects the host is told about ([rasterDirtyAlong]),
+        // which is the point: a mark costs its ink's area on both seams or on neither.
+        //
+        // And they go in ONE call (2026-09-19): a mark lands once. An engine that has to
+        // put the runs somewhere — Ratta's dithered mirror — pays a fixed cost per
+        // landing, and a scribble filling the middle of the page arrives as up to
+        // [RASTER_DIRTY_MAX_RECTS] runs, none of them big enough to be worth a log line
+        // and all of them together most of a **651 ms** pen-up on a Nomad. The batch
+        // lets it flatten each run and land them once.
+        if (announce != null) {
+            val rects = announce.filter { !it.isEmpty }
+            if (rects.isNotEmpty()) onRasterPixelsChanged(rects)
         }
-        if (minX > maxX) {
-            out.setEmpty()
-            return
-        }
-        // Half the widest mark, plus the slack a textured style's outermost fleck needs.
-        val pad = stroke.width + 4f
-        out.set(
-            floor(minX - pad).toInt(),
-            floor(minY - pad).toInt(),
-            ceil(maxX + pad).toInt(),
-            ceil(maxY + pad).toInt(),
-        )
     }
 
     /**
@@ -1462,8 +1444,36 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * (Ratta's dither, Phase 28) — such an image is wrong the instant the page moves, and
      * **it is called before the redraw that presents the change**, so the record can use
      * what it rebuilt. It must not present anything itself; its callers do that.
+     *
+     * **A mark arrives as its RUNS, in one batched call** (2026-09-19) — see the list
+     * form, [onRasterPixelsChanged]. This single-rect form is what everything else uses:
+     * an erase batch as it is rubbed, an undo patch as it is swapped, a load or a clear
+     * (null).
      */
     protected open fun onRasterPixelsChanged(rect: Rect?) {}
+
+    /**
+     * The raster page's pixels have just changed over [rects] — **one mark's runs, as one
+     * piece of news**, the same rects the host hears ([rasterDirtyAlong]); never empty,
+     * and every rect in it non-empty.
+     *
+     * The default forwards each rect to the single-rect [onRasterPixelsChanged], so an
+     * engine that does not care that they arrived together sees exactly what it always
+     * did. An engine that keeps a second image of the page should override *this* one: the
+     * runs are the mark's ink and the union is not, so it can pay the ink's area to work
+     * the pixels out and still land them in one go.
+     *
+     * That distinction is the whole reason the batch exists. 0.1.33's per-run rects
+     * (arrived at again from the engine's side earlier the same day) made a long diagonal
+     * cost its ink instead of its bounding box, and a corner-to-corner stroke's pen-up
+     * went from 848 ms to under 200 on a Nomad. But a scribble filling the middle of the
+     * page arrives as up to [RASTER_DIRTY_MAX_RECTS] runs, each one small — and **651 ms**
+     * of pen-up with no single rect over 20 ms is that fixed per-landing cost, paid
+     * sixty-four times. One mark, one landing.
+     */
+    protected open fun onRasterPixelsChanged(rects: List<Rect>) {
+        for (r in rects) onRasterPixelsChanged(r)
+    }
 
     /** Content ids the committed record leaves to a live layer: a drag's, plus the
      *  object under transform (its whole mode is a live layer, not just its gestures). */
@@ -1571,7 +1581,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             val layer = RasterLayer.of(stroke.style)
             val dirty = rasterDirtyAlong(stroke)
             for (r in dirty) paperListener?.onRasterWillChange(layer, r)
-            compositeIntoRaster(listOf(stroke))
+            compositeIntoRaster(listOf(stroke), dirty)
             bakeAfterCommit()
             paperListener?.onStrokeCommitted(stroke)
             for (r in dirty) paperListener?.onRasterChanged(layer, r)

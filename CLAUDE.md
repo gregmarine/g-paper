@@ -76,6 +76,21 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   bigger rect, never a dropped one. Every `onRasterWillChange` of a mark fires before any of its
   pixels move and every `onRasterChanged` after, in the same order; the eraser has reported per
   batch since 0.1.26, so a host that accumulates one entry per contact already handles it.
+  **The ENGINE seam pays for the announced area too (2026-09-19).** `onRasterPixelsChanged`
+  announced one union rect per composite batch, on the reasoning that a second image of the
+  page costs only a repaint of empty pixels — and Ratta's dither rebuilds every pixel inside
+  it, so the pen-up of one long pencil stroke held a Nomad's main thread for **848 ms**
+  (`slow touch ACTION_UP: … base 848 ms`, measured through NSE · Sketch). It takes the same
+  runs now, the caller's own list rather than a second computation of it. **A bounding box
+  is a bad model of a line wherever somebody pays per pixel for it** — and the second place
+  that was true went unnoticed for six releases because it was reasoned about as free.
+  **And a mark lands ONCE**: the runs go in one batched call,
+  `onRasterPixelsChanged(rects: List<Rect>)` (default: forwards each to the single-rect
+  form, so nothing else changed), because the per-run fix cured the *line* — 848 ms → 138–198
+  — and left the *scribble* at **651 ms**, up to sixty-four small rebuilds each too cheap to
+  log. An engine keeping a second image of the page must override the list form: flatten per
+  run, land once. **A fixed per-call cost paid sixty-four times hides from every per-call
+  threshold there is.**
   **And `loadPageRaster` is now silent, as `swapPageRaster` always was**: a page the host
   replaced is the host's own news, and the flag every host carried to swallow the load's
   callbacks (`loadingRaster` in Paintsprout's `SketchbookActivity` and SN's `SketchActivity`)
@@ -147,6 +162,33 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   the one knob and is 1 until a hand says otherwise. `PencilInk` and `GraphiteGrain`'s density
   dial stay as an unused seam; the stroke's stored colour never moved through any of this, and
   BOOX, the generic engine and Paintsprout were never touched.
+  **(5) A whole-page rebuild is DEFERRED and the present waits for it (0.1.42).** A
+  two-raster page is two `loadPageRaster` calls, each announcing the whole page and each
+  presenting after — two ~500 ms rebuilds on a Nomad with a frame between them showing
+  graphite and no ink (*the pencil first and the ink a moment later*). So `rect == null`
+  posts a runnable, the second call folds into the first, and `redrawCommitted` is held back
+  while one is pending (`DitherCoalescer`, pure, JVM-tested) — one rebuild, one present, of
+  one correct picture. **Per-rect rebuilds stay synchronous**: each precedes a present that
+  is already on its way, and a rect deferred is a mark that appears a frame late; a rect
+  arriving while a whole page is pending is subsumed by it. Anything that cancels the posted
+  runnable — the panel closing, a `pageMode` flip — must `reset()` the coalescer too, or
+  every frame the view ever presents again is swallowed by `deferRedraw`. And the flatten
+  itself is bulk work now (`DitherFlatten.band`, pinned against the per-pixel `black` pixel
+  for pixel): the blue-noise row fetched once per row, the gamma a table, an absent layer a
+  flag rather than a page-sized zero-fill, and the page's own rows landed with one
+  `copyPixelsFromBuffer` instead of two and a half million `Int`s through `setPixels`.
+  **And how the bytes reach the bitmap is a SIZE decision, not a whole-or-rect one
+  (2026-09-19).** The byte array is the page's rows permanently and every rebuild fills it
+  before anything reaches the bitmap, so a rect from an eighth of the page upward takes the
+  same one-memcpy copy the page does — past that share the fixed copy beats the per-pixel
+  expansion `setPixels` wants (`DitherCost`, pure). The invariant that makes it legal is
+  that the array is never behind the bitmap; it is allocated and dropped *with* the image,
+  because one left over from the previous page would be landed whole onto a fresh one.
+  **A size decision AND a count one**: a mark's runs arrive as one batch, flatten one at a
+  time — the ink's area, never the union's — and land together, by the page copy when the
+  union is large **or** when there are more than `DITHER_MAX_SETPIXELS_RECTS` (8) of them,
+  because a scribble's sixty-four small `setPixels` calls were 651 ms of pen-up with not
+  one of them slow enough to log.
 - **A live preview may lay a fleck only where the bake will put one — which makes
   `GraphiteGrain`'s PREFIX the contract, not the whole (Phase 28).** `of(points, …,
   prefix = true)` returns an exact ordered prefix of the finished stroke's grain, so a

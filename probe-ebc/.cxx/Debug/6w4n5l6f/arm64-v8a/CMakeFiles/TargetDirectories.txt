@@ -1,3 +1,0 @@
-/Users/gregmarine/git/g-paper/probe-ebc/.cxx/Debug/6w4n5l6f/arm64-v8a/CMakeFiles/ebcprobe.dir
-/Users/gregmarine/git/g-paper/probe-ebc/.cxx/Debug/6w4n5l6f/arm64-v8a/CMakeFiles/edit_cache.dir
-/Users/gregmarine/git/g-paper/probe-ebc/.cxx/Debug/6w4n5l6f/arm64-v8a/CMakeFiles/rebuild_cache.dir

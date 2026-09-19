@@ -1,5 +1,6 @@
 package com.symmetricalpalmtree.gpaper.ratta
 
+import com.symmetricalpalmtree.gpaper.core.geometry.BlueNoise64
 import com.symmetricalpalmtree.gpaper.core.geometry.Dither
 
 /**
@@ -80,4 +81,140 @@ internal object DitherFlatten {
     /** One channel of an unpremultiplied pixel composited over white paper. */
     private fun over(channel: Int, alpha: Int): Int =
         if (alpha == 255) channel else (channel * alpha + 255 * (255 - alpha)) / 255
+
+    // ── The band kernel: the same answer, a page at a time (2026-09-19) ──────
+    //
+    // [black] is the right shape for one pixel and the wrong one for two and a half
+    // million of them. A whole-page rebuild on a page open measured **494–551 ms** on a
+    // Nomad asking it per pixel through `getPixels` bands and `setPixels` — half a second
+    // of the artist waiting, twice over, because the host loads graphite and ink as two
+    // calls. So there is a bulk form, and the two must give the same picture: [band] is
+    // tested against [black] pixel for pixel over a synthetic band of every interesting
+    // pixel, which is the only thing that makes "faster" safe to say.
+    //
+    // What makes it faster is all bookkeeping and no arithmetic: the blue-noise row is
+    // fetched once per row instead of once per pixel and turned into the compare's
+    // right-hand side there; the gamma curve is a 256-entry table rather than a call; the
+    // flatten is written out longhand so nothing is called per pixel; a band with no ink
+    // on either layer is filled in one go; and bare paper — which is most of most pages —
+    // costs one test of two alpha bytes.
+
+    /**
+     * `512 · shade(grey)` for every grey — the left-hand side of [Dither]'s compare,
+     * precomputed. A table rather than a call because [Dither.shade] is a `pow` the moment
+     * [Dither.DITHER_GAMMA] stops being 1, and a walk that bends the gamma must not also
+     * make the page turn slow.
+     */
+    private val LIMIT = IntArray(256) { 512 * Dither.shade(it) }
+
+    /**
+     * Flatten and dither a whole band of the page: `[x0, x0 + w) × [y0, y0 + h)` in page
+     * coordinates, into [out] as [inked] where the pixel shows black and [blank] where it
+     * shows paper.
+     *
+     * [graphite] and [ink] are the two page images' pixels over exactly that band, row
+     * major, [w] to a row — what `Bitmap.getPixels` leaves. Either may be absent
+     * ([hasGraphite] / [hasInk] false), in which case the array is not read at all: an ink
+     * layer nothing has landed on is the common case for a pencil page and it should cost
+     * nothing, not a page-sized zero-fill.
+     *
+     * [out] is written at `outOffset + y · outStride + x`, so it may be a band of a
+     * page-sized buffer (a whole-page rebuild filling the bitmap's own rows) or a
+     * standalone `w × h` block (a rect).
+     *
+     * There is **no live layer** here, deliberately: this is the display half, where a
+     * mark is already in the graphite image. The live half stays on [black] — it works a
+     * fleck's rect at a time, where none of this bookkeeping would pay for itself.
+     */
+    fun band(
+        graphite: IntArray,
+        hasGraphite: Boolean,
+        ink: IntArray,
+        hasInk: Boolean,
+        x0: Int,
+        y0: Int,
+        w: Int,
+        h: Int,
+        out: ByteArray,
+        outOffset: Int,
+        outStride: Int,
+        inked: Byte,
+        blank: Byte,
+    ) {
+        if (w <= 0 || h <= 0) return
+        val n = w * h
+        // A layer whose pixels are all transparent contributes nothing to any pixel of
+        // this band, so say so once rather than per pixel. The scan is a shift and a
+        // compare per pixel and it buys the whole flatten.
+        val g = hasGraphite && anyInk(graphite, n)
+        val k = hasInk && anyInk(ink, n)
+        if (!g && !k) {
+            for (y in 0 until h) {
+                val at = outOffset + y * outStride
+                out.fill(blank, at, at + w)
+            }
+            return
+        }
+        val limit = LIMIT
+        val thresholds = ByteArray(BlueNoise64.SIZE)
+        val cut = IntArray(BlueNoise64.SIZE)
+        for (y in 0 until h) {
+            BlueNoise64.row(y0 + y, thresholds)
+            for (j in 0 until BlueNoise64.SIZE) {
+                cut[j] = 255 * (2 * (thresholds[j].toInt() and 0xFF) + 1)
+            }
+            val src = y * w
+            val dst = outOffset + y * outStride
+            var phase = x0 and (BlueNoise64.SIZE - 1)
+            var x = 0
+            while (x < w) {
+                val gp = if (g) graphite[src + x] else 0
+                val kp = if (k) ink[src + x] else 0
+                var grey = 255
+                if ((gp or kp) ushr 24 != 0) {
+                    // White paper, the graphite image over it, the ink image through
+                    // DARKEN — [luma]'s own order, written out so nothing is called here.
+                    var r = 255
+                    var gg = 255
+                    var b = 255
+                    val ga = gp ushr 24
+                    if (ga == 255) {
+                        r = gp ushr 16 and 0xFF
+                        gg = gp ushr 8 and 0xFF
+                        b = gp and 0xFF
+                    } else if (ga != 0) {
+                        val inv = 255 * (255 - ga)
+                        r = ((gp ushr 16 and 0xFF) * ga + inv) / 255
+                        gg = ((gp ushr 8 and 0xFF) * ga + inv) / 255
+                        b = ((gp and 0xFF) * ga + inv) / 255
+                    }
+                    val ia = kp ushr 24
+                    if (ia != 0) {
+                        var ir = kp ushr 16 and 0xFF
+                        var ig = kp ushr 8 and 0xFF
+                        var ib = kp and 0xFF
+                        if (ia != 255) {
+                            val inv = 255 * (255 - ia)
+                            ir = (ir * ia + inv) / 255
+                            ig = (ig * ia + inv) / 255
+                            ib = (ib * ia + inv) / 255
+                        }
+                        if (ir < r) r = ir
+                        if (ig < gg) gg = ig
+                        if (ib < b) b = ib
+                    }
+                    grey = (LUMA_R * r + LUMA_G * gg + LUMA_B * b) shr 8
+                }
+                out[dst + x] = if (limit[grey] < cut[phase]) inked else blank
+                x++
+                phase = (phase + 1) and (BlueNoise64.SIZE - 1)
+            }
+        }
+    }
+
+    /** Whether any pixel of [px]`[0, n)` has a non-zero alpha — see [band]. */
+    private fun anyInk(px: IntArray, n: Int): Boolean {
+        for (i in 0 until n) if (px[i] ushr 24 != 0) return true
+        return false
+    }
 }

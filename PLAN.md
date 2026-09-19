@@ -2161,6 +2161,162 @@ through the panel, the ink pen through the panel, the template dithered with the
 provisional 50 px start replaced by a landing-free grain. 0.1.41 to mavenLocal by the user's hand;
 merge on the user's word.
 
+**Maintenance (2026-09-19) — the first walk inside NSE · Sketch, and the two things it
+found — and a third the walk after it.** Publishes **0.1.42**, branch `ebc-maint`. One —
+the page-turn cost — stands; one — an idle clean pass for the halo — was built, walked and
+taken out again; and the walk that judged the first found a **pen-up** holding the main
+thread for most of a second — which took two goes to put right, and is the third and
+fourth sections below.
+
+*The pencil first and the ink a moment later.* A page open cost **two** whole-page dither
+rebuilds — the host loads graphite and ink as two back-to-back `loadPageRaster` calls, each
+announcing the whole page and each presenting afterwards — and the engine logged **494–551
+ms** for one of them on a Nomad, so a page turn was about a second with a frame in the
+middle showing a page that had graphite and no ink. Two fixes, one for each half of that
+sentence. **Coalesced:** a whole-page (`rect == null`) rebuild is now deferred to a posted
+runnable and the second call folds into the first (`DitherCoalescer`, pure, 5 tests), and
+`redrawCommitted` is **held back** while one is pending so the present happens once, after
+the rebuild — the base's own load presents would otherwise show the page half-built, or,
+after a content swap dropped the image, blank. Per-rect rebuilds stay synchronous: a stroke
+bake, an erase batch and an undo patch each precede a present already on its way, and a rect
+arriving while a whole page is pending is simply subsumed. **And made tight:**
+`DitherFlatten.band` is the bulk form of `black` — the blue-noise row fetched once per row
+(`BlueNoise64.row`) and turned into the compare's right-hand side there, the gamma curve a
+256-entry table rather than a call, the flatten written out longhand so nothing is called per
+pixel, a band with nothing on either layer filled in one go, and bare paper — most of most
+pages — costing one test of two alpha bytes. A layer with no image at all is answered with a
+flag instead of a page-sized zero-fill (`readRasterBand`), which is every pencil page's ink.
+The whole-page pass writes the bitmap's **own rows** as bytes and lands them with a single
+`copyPixelsFromBuffer`, where `setPixels` was handing Skia two and a half million `Int`s to
+extract one alpha byte from each; a rect still goes through `setPixels`, because `ALPHA_8`
+has no sub-rect byte entry and a stroke's bounds is not where the half-second was. The
+kernel is pinned against `black` pixel for pixel over a synthetic band, over every banding,
+and on an absent layer whose array is deliberately full of black. **On a desktop JVM the
+whole 1404 × 1872 page flattens in 4.4 ms** (5.5 ms through the per-pixel `black`, 0.9 ms
+when the page is empty) — which bounds the arithmetic and settles nothing about ART, because
+*where* the Nomad's half-second went was never profiled. Four things around the loop were
+doing avoidable work and all four are gone; the Nomad's own log line is what decides whether
+the target of **under 100 ms** was met, and if it did not, the next levers are the bands in
+parallel across the four cores and reading the page premultiplied.
+
+*More ghosting than before, and the clean that was not the answer.* The live path drives
+only the pixels that changed and the pen-up mirror finds them already right, so nothing ever
+re-drives the ground around a mark, where the bake this path replaced re-drove all of it in
+one post. On that reading an **idle clean** was built: a union of every rect the direct path
+had posted, re-flattened from the page images 1.5 s after the last pen-up and driven through
+a full waveform (mode 4, the 0…60 scale) by `EbcPanel.clean`. The artist walked it on the
+Nomad and it was worse, not better — *"the area I had just drawn in shows a light grey
+background after a quick flash — it made matters worse. The ghosting mostly occurs with the
+eraser and page flips, not while drawing."* So it was aimed at the wrong mechanism, and it is
+**removed entirely**: `EbcClean`, `EbcPanel.clean` and the view's idle timer are gone and
+`close()` is 0.1.41's again. **The eraser and the page flip are where the ghosting actually
+lives, and that is an open question for a later phase** — neither is the live pencil's
+partial update, and nothing has been measured about either yet.
+
+*A pen-up that held the main thread for most of a second.* The first walk of the
+coalesced page turn inside NSE · Sketch put a temporary timer on `onTouchEvent` and on
+the firmware transactions, and the pen-up of one direct pencil contact came back
+**`slow touch ACTION_UP: before 0 ms, base 848 ms, after 0 ms (direct=true)`** on a Nomad,
+with another at 411 ms — entirely inside the base's commit, where a whole-page dither
+rebuild is 160–200 ms and a rubbed corridor's rect is about 6. Two things multiplied.
+`compositeIntoRaster` announced **one union rect for the whole mark** (the maintenance
+deviation 5 above, reasoned as "a repaint of empty pixels"), so a long or diagonal stroke
+named a large fraction of the page; and `regenDither` sent every non-whole rect down the
+`IntArray` + `setPixels` path, which is several times dearer per pixel than the whole-page
+`copyPixelsFromBuffer` one — so a page-spanning stroke would have cost about two seconds,
+which is the stall the artist first saw. **Both halves are fixed.** The core seam now
+announces **per run** — the same rects `rasterDirtyAlong` already computes for the host,
+0.1.33's answer arrived at a second time from the engine's side, so a mark costs its ink's
+area on both seams or on neither (`strokeBounds` and its union go with it; `compositeIntoRaster`
+takes the caller's rect list, which is what makes "the same rects" true by construction
+rather than by two call sites agreeing). And the two landing paths are now **chosen between
+rather than assigned**: `ditherBytes` is the page's own rows permanently and is always the
+truth — every rebuild, whole page or rect, flattens into it before anything reaches the
+bitmap — and a rect from `DITHER_WHOLE_COPY_FRACTION` (an eighth, a starting value)
+of the page upward lands through the same one-memcpy `copyPixelsFromBuffer` the page uses,
+because past that share the fixed copy beats the per-pixel expansion (`DitherCost`, pure,
+8 tests). Below it, `setPixels` of just the rect, as before. The separate band byte scratch
+is gone with it, and the image and its bytes are now allocated and dropped together
+(`ensureDither` / `dropDither`) — an array left over from a previous page would otherwise
+be landed whole onto a fresh bitmap the first time a large rect arrived. The per-rect log
+line is raised to **20 ms** (a page turn is still always logged), and the temporary
+`slow touch` / `slow firmware transact` timers **stay for one more walk** — they are
+temporary by construction and come out when the measuring stops.
+
+*A mark lands once.* The per-run fix above worked for **lines**: measured on the Nomad
+after it, two corner-to-corner pencil strokes commit in **138–198 ms** at pen-up where one
+had cost 848, and no rect rebuild reaches the 20 ms log line. It did nothing for a **large
+pencil scribble filling the middle of the page**, which committed in **651 ms** — also with
+no single rect slow enough to log. That shape is the other half of the same lesson. A
+scribble is not one long run; it is up to sixty-four short ones (the core's
+`RASTER_DIRTY_MAX_RECTS`), each of them small, each of them cheap — and each of them a
+separate `setPixels`, which costs something **fixed per call** whatever the rect. Sixty-four
+of those, none over a few milliseconds, is most of two thirds of a second, and every one of
+them is under the threshold that would have said so. So the runs stop arriving one at a
+time. `compositeIntoRaster` now calls a new `protected open fun
+onRasterPixelsChanged(rects: List<Rect>)` — the batch, **one mark, one piece of news** —
+whose default forwards each rect to the single-rect form, so no other engine sees a change
+and the single-rect form stays exactly what the erase batches, the undo patches and the
+loads use. `RattaPaperView` overrides the list form: it flattens **each run's rect** into
+`ditherBytes`, so the per-pixel arithmetic still costs the ink's area and never the union's
+(which is the whole of 0.1.33's rule and must not be traded away to buy this), and then
+lands them **once** — one `copyPixelsFromBuffer` of the page when the union is
+`DITHER_WHOLE_COPY_FRACTION` of it or more **or** the runs number more than
+`DITHER_MAX_SETPIXELS_RECTS` (8, a starting value: one page copy is a few milliseconds and
+eight `setPixels` are more), otherwise one `setPixels` per run as before. Through the
+coalescer exactly as a single rect is — a pending whole-page rebuild subsumes the whole
+batch, because it will cover every run in it. `DitherCost` gains the count rule beside the
+area one (`preferWholeCopyForRuns`, pure, 7 new tests — including that a batch of one
+answers exactly as the single-rect form does, which is what keeps the two from drifting),
+and `regenDither` is split into the three pieces both paths now share: `flattenDither`,
+`landDitherRect`, `landWholeDither`. The batch's log line at 20 ms names what a walk needs
+to judge it by: `dither: N runs, union WxH in M ms (page copy|setPixels)`. The temporary
+`slow touch` / `slow firmware transact` timers stay.
+
+**Deviations from the brief, and why**
+
+1. **`copyPixelsFromBuffer` is one call for the page, not one per band.** It copies the
+   *whole* bitmap from the buffer's position, so there is no per-band form of it; the
+   whole-page pass therefore fills the page's own rows — sized from `rowBytes`, not from the
+   width, because an `ALPHA_8` row may be padded and the call copies the bitmap's bytes,
+   padding and all — and lands them in one call at the end. A rect keeps `setPixels`.
+   **Superseded by the per-run fix below**: every rebuild now fills those same page rows,
+   and how the bytes land is a size decision rather than a whole-or-rect one.
+2. **There is no JVM test of the per-run announcement.** `compositeIntoRaster` is private
+   on a `View`, and `onRasterPixelsChanged` — `protected open`, so observable in principle
+   — can only be reached by constructing one: the unit-test classpath is the `android.jar`
+   stub whose every method throws, and Robolectric would be a new dependency. What is
+   pinned instead is the arithmetic on either side of it: `RasterDirtyTest` already holds
+   *a corner-to-corner hairline covers itself for a fraction of the page*, which is the
+   whole saving, and `DitherCostTest` holds the landing rule. The wiring between them —
+   that the seam passes the caller's rects rather than a union — is read, not asserted.
+   The same is true of the **batch**: that `compositeIntoRaster` makes one call of the
+   runs and that `RattaPaperView` overrides the list form rather than inheriting the
+   forwarding default is read, not asserted; what is pinned is that the default forwards
+   (by construction — it is a `for` over the single-rect form) and that
+   `preferWholeCopyForRuns` agrees with `preferWholeCopy` on a batch of one.
+3. **The count rule is a second named function, not a widened `preferWholeCopy`.** A batch
+   asks a different question — *is this many, or is this large* — and the single-rect form
+   is still used, unchanged, by the erase and undo paths. One function answering both with
+   a defaulted argument would have made the erase path silently carry a run count of one,
+   which is true but is not what it means.
+
+**Still unwalked:** whether the page turn is now under a page turn's budget on a Nomad and a
+Manta — the ms is still logged, and the target it is judged against is 100 ms — and whether
+a pen-up is now invisible **for a scribble as well as for a line** (the line is measured:
+138–198 ms), which is what the batch's log line at 20 ms and the kept `slow touch` timer are
+there to answer.
+
+**Maintenance closed (2026-09-19, the user's Nomad walk — "It all works great").** Measured on the
+final build: page turns wait 12–15 ms for the pixel copy (encodes of 0.5–0.9 s run behind them —
+the face change is Notesprout's, § sketch.md "Saves"); pen-up 100–190 ms for lines and ordinary
+marks, a 39-run scribble's batch landing 129 ms by page copy; **one dense scribble's pen-up 1185 ms,
+of which the dither was 129 — the rest is the bake of the grain itself plus the host's before-image
+reads, a known cost for a later phase (an asynchronous bake).** The temporary `slow touch` /
+`slow firmware transact` timers are removed. The eraser / page-flip ghosting remains the open
+question (candidates: an automatic full refresh at page turn; the rubber through the panel).
+`ebc-maint` merged to `main`; 0.1.42 published.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
