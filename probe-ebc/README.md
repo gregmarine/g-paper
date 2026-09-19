@@ -126,3 +126,15 @@ Intent extras for adb: `--ez auto true` (open, GETINFO, GETCFG, map) · `--ei mo
 (paint the band rect) · `--ei paintDelay ms` · `--ez quiet true` · `--ez noDisp true` ·
 `--ez dump true --ei dumpAt ms` (frames → external cache dir) · `--ez cadence true` ·
 `--ez fullscreen true` · `--ez ramp true [--ez full256 true]`.
+
+## Reference images (`reference/`, 2026-09-19)
+
+- `atelier-hb-16-shades-nomad.png` — Atelier, HB pencil, one stroke per shade of its Grayscale
+  palette (black · 505050 · 606060 · 686868 · 707070 · 808080 · 888888 · 909090 · a0a0a0 · aaaaaa ·
+  b6b6b6 · c0c0c0 · c8c8c8 · d0d0d0 · dddddd · white), the palette open. The tone reference.
+- `atelier-pencil-menu-nomad.png` — Atelier's seven pencils: **4H · 2H · HB · 2B · 4B · 6B · 8B**,
+  each with its sample stroke (the Hs pale and fine, the Bs darker and softer). The base for a
+  g-paper pencil library — a later phase.
+- `gpaper-0.1.41-15-shades-nomad.png` / `-manta.png` — the g-paper demo at the Phase 28 freeze,
+  7 px lead, shades 0–14 (`#000000 … #EEEEEE`), the display dithered. Core tone equals the swatch
+  grey within 2 % at every shade (gamma 1.0).
