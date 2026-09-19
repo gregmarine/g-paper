@@ -1981,6 +1981,28 @@ opaque on the direct path**, bake and preview alike (`opaquePencilFlecks` seam, 
 else); (2) tilt had come back with pressure and a leaned hairline widened — **the user's
 decision: the Supernote pencil stays upright** (`bakeTilt` 0 on both paths).
 
+**The lag was the grain, and the grain was being asked the wrong question (2026-09-18,
+Nomad).** `onLiveStrokeExtended` called `GraphiteGrain.of(points, …, prefix = true)` on the
+**whole** stroke at every MotionEvent, so a mark a thousand samples long re-decided every
+station already on the panel in order to find the one or two that were new: a 1252-event slow
+stroke cost **4352 ms of grain on the UI thread**, 3.5 ms an event and climbing with the
+length, which the hand feels as the ink dragging behind the nib. Toning and posting the batch
+were under a millisecond an event throughout — the grain was the whole of it. The fix is
+`GraphiteGrain.Sweep` (`begin(width, seed)` → `extend(points)` returns **only** the flecks
+newly decided): the station loop now runs on a resumable state object, `of` and `Sweep.extend`
+share that one loop rather than keeping two copies of it that would drift apart, and the same
+1252-event stroke measures **3402 ms → 6 ms** on a JVM. `RattaPaperView` keeps the
+provisional lay for the undecidable first ~50 px exactly as it was — it is the one place the
+whole stroke is still swept per event, and a stroke that short has barely any stations.
+`GraphiteGrainIncrementalTest` pins the invariant that earns the resume: for five synthetic
+strokes (straight, curved-and-rolling, a landing excursion, one full of zero-length steps, one
+with pressure and tilt both moving) and for every way the points can arrive — one at a time,
+in random bites, all at once, two halves — the concatenation of every `extend` equals
+`of(points, …, prefix = true)` on the whole list, element for element. And because a refactor
+of the loop that lays every pencil mark on every engine needs something that fails loudly if
+one fleck moves, `GraphiteGrainPinTest` pins nine strokes' grain as a checksum over every
+coordinate's raw bits: **it was written and made green before the refactor, and never moved.**
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

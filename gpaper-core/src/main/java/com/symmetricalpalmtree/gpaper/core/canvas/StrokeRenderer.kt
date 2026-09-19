@@ -133,6 +133,9 @@ internal object StrokeRenderer {
         if (from >= grain.count) return
         resetPaint(paint, color, width)
         paint.strokeCap = Paint.Cap.ROUND
+        // Opaque flecks are also aliased: an anti-aliased edge is a ring of light greys, and
+        // on the panel that ring trails the nib exactly as a grey fleck did.
+        paint.isAntiAlias = !opaque
         val packed = FloatArray((grain.count - from) * 2)
         for (level in 0 until GraphiteGrain.LEVELS) {
             var n = 0

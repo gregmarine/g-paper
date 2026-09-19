@@ -591,9 +591,29 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private var batchBitmap: Bitmap? = null
     private var batchCanvas: Canvas? = null
 
-    /** How many of this stroke's flecks are already on the panel. The prefix invariant is
-     *  what makes this a count rather than a set: flecks `0 until laidFlecks` are exactly
-     *  the ones already painted, and they will never move. */
+    /**
+     * The stroke under the pen, swept incrementally — the thing that keeps this path off the
+     * hand's back (Phase 28, the Nomad of 2026-09-18).
+     *
+     * It began as `GraphiteGrain.of(points, …, prefix = true)` on the whole stroke at every
+     * MotionEvent, which re-decides every station already on the panel in order to find the
+     * one or two that are new: a 1252-event slow stroke cost **4352 ms of grain on the UI
+     * thread**, 3.5 ms an event and climbing with the length, felt as the ink dragging behind
+     * the nib. (Toning and posting the batch were under a millisecond an event throughout —
+     * the grain was the whole of it.) A [GraphiteGrain.Sweep] resumes instead, so a stroke a
+     * thousand samples long decides each of its stations once.
+     *
+     * Null between contacts, and **null again after every commit** — a mid-contact commit is
+     * a real thing here (the exclusion-zone split in `appendDrawPoints` commits a fragment
+     * and restarts the capture buffer with a fresh pending id), and a sweep that carried on
+     * across one would be laying the old fragment's stations against the new fragment's
+     * points. Minted lazily on the next sample, with that contact's width and seed.
+     */
+    private var liveSweep: GraphiteGrain.Sweep? = null
+
+    /** How many of this stroke's flecks are already on the panel — the log's measure of the
+     *  contact, and no longer an index into anything: what [liveSweep] hands back IS the new
+     *  graphite, so there is nothing left to slice. */
     private var laidFlecks = 0
 
     /** Everything this contact has painted, in view coordinates — what to clear at pen-up
@@ -620,35 +640,100 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /**
      * The stroke under the pen grew: lay whatever graphite is newly decidable, and show it.
      *
-     * Only the flecks past [laidFlecks] are drawn, which is the whole economy of this path —
-     * a stroke a thousand samples long rasterises each of its flecks once, not once per
-     * sample — and it is sound only because [GraphiteGrain.of] with `prefix = true`
-     * guarantees the earlier ones are exactly where they already are.
+     * What comes back from [GraphiteGrain.Sweep.extend] is **only** the new flecks, which is
+     * the whole economy of this path — a stroke a thousand samples long decides and
+     * rasterises each of its flecks once, not once per sample — and it is sound only because
+     * the sweep guarantees the earlier ones are exactly where they already are.
      */
     override fun onLiveStrokeExtended(points: List<StrokePoint>) {
         if (!contactDirect) return
         val mask = ensureLiveAlpha() ?: return
         liveEvents++
+        val t0 = System.nanoTime()
         // Through the bake's own seams, even though both are identity on this path: a
         // preview that reaches the renderer by a different road is a preview that can drift.
-        val grain = GraphiteGrain.of(
-            bakePoints(points, StrokeStyle.PENCIL), penWidth, pendingStrokeSeed(), prefix = true,
-        )
-        if (grain.count <= laidFlecks) return
-        val rect = newFleckBounds(grain, laidFlecks) ?: run { laidFlecks = grain.count; return }
+        val baked = bakePoints(points, StrokeStyle.PENCIL)
+        val sweep = liveSweep
+            ?: GraphiteGrain.begin(penWidth, pendingStrokeSeed()).also { liveSweep = it }
+        val grain = sweep.extend(baked)
+        if (grain.count == 0 && laidFlecks == 0) {
+            // Not yet decidable (the first ~50 px of arc): show the hand something NOW. A
+            // provisional lay of the whole stroke so far — wrong in its first flecks and its
+            // end cap, but under the nib — replaced wholesale the moment the sweep starts
+            // laying. It is the one place the whole stroke is still swept per event, and it
+            // costs nothing: a stroke that short has barely any stations to decide.
+            val provisionalGrain =
+                GraphiteGrain.of(baked, penWidth, pendingStrokeSeed(), prefix = false)
+            if (provisionalGrain.count == 0) return
+            provisional = true
+            clearMaskRect(mask, liveRect)
+            val rect = newFleckBounds(provisionalGrain, 0) ?: return
+            layFlecks(provisionalGrain, 0, rect, mask)
+            val shown = Rect(liveRect); shown.union(rect)
+            liveRect.set(shown)
+            toneAndPost(shown, mask)
+            timeGrain += System.nanoTime() - t0
+            return
+        }
+        if (grain.count == 0) return
+        if (provisional) {
+            // The sweep has begun: drop the provisional flecks and lay the true ones. This
+            // first batch is everything the sweep has decided, from the mark's very start.
+            provisional = false
+            clearMaskRect(mask, liveRect)
+            val rect = newFleckBounds(grain, 0) ?: run { laidFlecks = sweep.count; return }
+            layFlecks(grain, 0, rect, mask)
+            laidFlecks = sweep.count
+            liveRect.union(rect)
+            toneAndPost(Rect(liveRect), mask)
+            timeGrain += System.nanoTime() - t0
+            return
+        }
+        val rect = newFleckBounds(grain, 0) ?: run { laidFlecks = sweep.count; return }
+        val t1 = System.nanoTime()
+        timeGrain += t1 - t0
         val scratch = ensureBatch(rect.width(), rect.height()) ?: return
         val canvas = batchCanvas ?: return
         val save = canvas.save()
         canvas.clipRect(0, 0, rect.width(), rect.height())
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-        drawPencilGrain(canvas, grain, laidFlecks, penColor, penWidth)
+        drawPencilGrain(canvas, grain, 0, penColor, penWidth)
         canvas.restoreToCount(save)
-        laidFlecks = grain.count
+        laidFlecks = sweep.count
         mergeBatchIntoLive(scratch, rect, mask)
         liveRect.union(rect)
         toneAndPost(rect, mask)
+        val dt = System.nanoTime() - t1
+        timeTone += dt
+        if (dt > maxTone) maxTone = dt
     }
+
+    /** Rasterise flecks `[from, count)` into the batch scratch and merge them into [mask]. */
+    private fun layFlecks(grain: GraphiteGrain.Grain, from: Int, rect: Rect, mask: ByteArray) {
+        val scratch = ensureBatch(rect.width(), rect.height()) ?: return
+        val canvas = batchCanvas ?: return
+        val save = canvas.save()
+        canvas.clipRect(0, 0, rect.width(), rect.height())
+        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
+        drawPencilGrain(canvas, grain, from, penColor, penWidth)
+        canvas.restoreToCount(save)
+        mergeBatchIntoLive(scratch, rect, mask)
+    }
+
+    private fun clearMaskRect(mask: ByteArray, r: Rect) {
+        if (r.isEmpty) return
+        for (y in r.top until r.bottom) {
+            val row = y * liveAlphaW
+            java.util.Arrays.fill(mask, row + r.left, row + r.right, 0)
+        }
+    }
+
+    private var provisional = false
+    private var timeGrain = 0L
+    private var timeTone = 0L
+    private var maxTone = 0L
 
     /** The view-space rect the flecks `[from, count)` cover, padded for the fleck size and
      *  clipped to the view; null when none of it is on screen. */
@@ -823,6 +908,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private fun beginLivePreview() {
         liveEvents = 0
         laidFlecks = 0
+        // The sweep itself is minted on the first sample: only then is there a pending
+        // stroke id to seed it from without asking for one and throwing it away.
+        liveSweep = null
         liveRect.setEmpty()
         getLocationOnScreen(contactScreenLoc)
     }
@@ -831,7 +919,15 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  same pixels (pen-up — the window's frame is the mirror) or re-tones the rect itself
      *  (a cancelled contact). */
     private fun clearLivePreview() {
-        if (contactDirect) Log.i(TAG, "live preview: $liveEvents events, $laidFlecks flecks, rect $liveRect")
+        if (contactDirect) Log.i(
+            TAG,
+            "live preview: $liveEvents events, $laidFlecks flecks, rect $liveRect, grain " +
+                "${timeGrain / 1_000_000} ms total, tone ${timeTone / 1_000_000} ms total " +
+                "(max ${maxTone / 1_000_000} ms/event)",
+        )
+        provisional = false
+        liveSweep = null
+        timeGrain = 0; timeTone = 0; maxTone = 0
         val mask = liveAlpha
         if (mask != null && !liveRect.isEmpty) {
             for (y in liveRect.top until liveRect.bottom) {

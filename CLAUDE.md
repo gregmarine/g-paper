@@ -139,6 +139,20 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   wrong place when the paper cannot be repainted. **Anything that looks ahead is a lookahead
   even when it is called a seed** — and the cost of this one was invisible for fifteen
   releases because every renderer drew whole strokes.
+- **A preview that re-derives the whole stroke each event is quadratic in the stroke, and the
+  hand feels it (Phase 28).** Asking `GraphiteGrain.of(…, prefix = true)` per MotionEvent
+  re-decides every station already on the panel to find the one or two that are new: 4352 ms
+  of UI thread over a 1252-event slow stroke on a Nomad, 3.5 ms an event and rising with the
+  length. `GraphiteGrain.Sweep` resumes the station loop instead and returns only the new
+  flecks (3402 ms → 6 ms for the same stroke on a JVM). **The loop stayed one loop** — `of`
+  and `Sweep.extend` both run it over a `SweepState`, because two copies of a loop that lays
+  every pencil mark on every engine is a thing that drifts, and the day one of them misses a
+  later constant the preview and the bake stop being the same mark. What *permits* the resume
+  is that nothing in the file looks ahead: a station decided now is the station the finished
+  stroke will have. And before touching it, nine strokes' committed grain was pinned as a
+  checksum over every coordinate's raw bits (`GraphiteGrainPinTest`) — every other test there
+  states a *property*, and a property can go on holding while the mark it describes quietly
+  moves.
 - **The raster eraser's mid-sweep cadence is PER ENGINE, because a redraw does not cost the
   same thing on two panels (Phase 19, 0.1.32).** `rasterEraseRedrawIntervalMs` is a
   `protected open val` the base reads in `throttledEraseRedraw`; `RASTER_ERASE_REDRAW_END_ONLY`
