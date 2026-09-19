@@ -112,10 +112,11 @@ class DitherFlattenTest {
      * the graphite image the bake will have left behind — are the same black-and-white
      * picture, pixel for pixel.
      *
-     * The bake is modelled here as the `SRC_OVER` the renderer's flecks composite with.
-     * A `Canvas` works in premultiplied pixels and may round a channel a hair differently,
-     * so this pins the two *formulas* to each other, which is the half that can drift; the
-     * rasteriser's rounding is a device question and always was.
+     * **The bake is [DitherFlatten.srcOver] itself** (Phase 29) — the same function the
+     * engine composites the live layer into the page image with — so this is no longer a
+     * model of the bake standing in for it, it is the bake. A `Canvas` works in
+     * premultiplied pixels and may round a channel a hair differently, and that is the one
+     * remaining difference: a device question, as it always was.
      */
     @Test
     fun `the live pixel and the baked pixel dither identically`() {
@@ -130,7 +131,9 @@ class DitherFlattenTest {
                         for (y in intArrayOf(0, 13, 64, 1871)) {
                             for (x in intArrayOf(0, 29, 64, 1403)) {
                                 val live = DitherFlatten.black(page, alpha, lead, ink, x, y)
-                                val baked = DitherFlatten.black(srcOver(page, lead, alpha), 0, lead, ink, x, y)
+                                val baked = DitherFlatten.black(
+                                    DitherFlatten.srcOver(page, lead, alpha), 0, lead, ink, x, y,
+                                )
                                 assertEquals(
                                     "lead=${Integer.toHexString(lead)} page=${Integer.toHexString(page)} " +
                                         "ink=${Integer.toHexString(ink)} a=$alpha at ($x,$y)",
@@ -145,6 +148,80 @@ class DitherFlattenTest {
             }
         }
         assertTrue(compared > 5000)
+    }
+
+    /**
+     * The same mirror for the **pen** (Phase 29): a live ink layer flattened over the ink
+     * image, against the ink image the same layer will have been composited into. The gel
+     * pen previews through the panel now, and it is the same bargain the pencil struck —
+     * what is painted under the nib is what the page will hold.
+     */
+    @Test
+    fun `the live ink pixel and the baked ink pixel dither identically`() {
+        val pens = intArrayOf(0xFF000000.toInt(), 0xFF303030.toInt(), 0xFF808080.toInt())
+        val pageInks = intArrayOf(0, 0xFF000000.toInt(), 0x90404040.toInt())
+        val graphites = intArrayOf(0, 0xFF707070.toInt(), 0x40101010)
+        var compared = 0
+        for (pen in pens) {
+            for (page in pageInks) {
+                for (graphite in graphites) {
+                    for (alpha in intArrayOf(0, 1, 37, 128, 200, 254, 255)) {
+                        for (y in intArrayOf(0, 13, 64, 1871)) {
+                            for (x in intArrayOf(0, 29, 64, 1403)) {
+                                val live = DitherFlatten.black(graphite, 0, 0, page, alpha, pen, x, y)
+                                val baked = DitherFlatten.black(
+                                    graphite, 0, 0, DitherFlatten.srcOver(page, pen, alpha), 0, 0, x, y,
+                                )
+                                assertEquals(
+                                    "pen=${Integer.toHexString(pen)} ink=${Integer.toHexString(page)} " +
+                                        "graphite=${Integer.toHexString(graphite)} a=$alpha at ($x,$y)",
+                                    live,
+                                    baked,
+                                )
+                                compared++
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assertTrue(compared > 3000)
+    }
+
+    @Test
+    fun `a live layer on one side never touches the other`() {
+        // One contact is one tool and one layer: the pen's live ink may not lighten or
+        // darken the graphite half, and the pencil's flecks may not reach the ink half.
+        val pen = 0xFF000000.toInt()
+        val lead = 0xFF808080.toInt()
+        val graphite = 0xFF909090.toInt()
+        // Live ink over bare ink paper: DARKEN against the graphite side.
+        assertEquals(0, DitherFlatten.luma(graphite, 0, lead, 0, 255, pen))
+        // …and with no live ink at all the graphite side stands alone.
+        assertEquals(
+            DitherFlatten.luma(graphite, 0, lead, 0),
+            DitherFlatten.luma(graphite, 0, lead, 0, 0, pen),
+        )
+        // A live fleck on the graphite side, with ink present, still goes through DARKEN.
+        val ink = 0xFFC0C0C0.toInt()
+        assertEquals(
+            DitherFlatten.luma(0xFF404040.toInt(), 0, lead, ink),
+            DitherFlatten.luma(0, 255, 0xFF404040.toInt(), ink, 0, pen),
+        )
+    }
+
+    @Test
+    fun `src over is the composite the flatten assumes`() {
+        val black = 0xFF000000.toInt()
+        // The ends: nothing, and everything.
+        assertEquals(0xFF808080.toInt(), DitherFlatten.srcOver(0xFF808080.toInt(), black, 0))
+        assertEquals(black, DitherFlatten.srcOver(0, black, 255))
+        // Onto bare paper (alpha 0) the result carries the source's own alpha.
+        val half = DitherFlatten.srcOver(0, black, 128)
+        assertEquals(128, half ushr 24)
+        assertEquals(0, half and 0xFF)
+        // And it never lightens an opaque black page.
+        assertEquals(black, DitherFlatten.srcOver(black, 0xFFFFFFFF.toInt(), 0))
     }
 
     // ── The band kernel: the same picture, a page at a time ─────────────────
@@ -252,22 +329,91 @@ class DitherFlattenTest {
         assertTrue(whole.contentEquals(banded))
     }
 
-    /** [src] at [srcAlpha] over [dst], unpremultiplied — what the bake leaves in the page
-     *  image where a fleck landed. */
-    private fun srcOver(dst: Int, src: Int, srcAlpha: Int): Int {
-        if (srcAlpha == 0) return dst
-        if (srcAlpha == 255) return 0xFF000000.toInt() or (src and 0xFFFFFF)
-        val da = dst ushr 24
-        val outA = srcAlpha + da * (255 - srcAlpha) / 255
-        if (outA == 0) return 0
-        fun channel(shift: Int): Int {
-            val s = src ushr shift and 0xFF
-            val d = dst ushr shift and 0xFF
-            // Premultiplied add, back out by the result's alpha — the composite a Canvas
-            // performs, in integers.
-            val num = s * srcAlpha * 255 + d * da * (255 - srcAlpha)
-            return (num / (255 * outA)).coerceIn(0, 255)
+    /**
+     * [DitherFlatten.srcOver] against an independent floating-point `SRC_OVER`, within
+     * **±1/255 per channel** — the tolerance the integer form is allowed and no more.
+     *
+     * This is where the composite the direct bake performs would be pinned against a
+     * `Canvas` if a `Canvas` could be driven here. It cannot: an Android module's unit
+     * tests compile against the `android.jar` stub whose every method throws, and
+     * Robolectric is a dependency this repo does not have (the same wall
+     * `PencilRenderHarness` documents). So what is pinned is the arithmetic against the
+     * definition of the operator, and the remaining question — whether Skia rounds a
+     * channel the same way in premultiplied pixels — stays a device question, exactly as
+     * it was when the mirror above modelled the bake rather than performing it.
+     */
+    @Test
+    fun `a live pixel is the baked pixel, before either is dithered`() {
+        // The mirror one level below the dither: not "the same dot" but the same *grey*.
+        // It holds because there is only one flatten — the live half composites with
+        // [DitherFlatten.srcOver] and then asks the display half — so this is the wiring
+        // being pinned, not an arithmetic coincidence.
+        val lead = 0xFF555555.toInt()
+        val pen = 0xFF000000.toInt()
+        var seed = 0x7ea1
+        fun next(): Int {
+            seed = seed * 1103515245 + 12345
+            return (seed ushr 8) and 0xFF
         }
-        return (outA shl 24) or (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
+        repeat(3000) {
+            val page = (next() shl 24) or (next() shl 16) or (next() shl 8) or next()
+            val ink = (next() shl 24) or (next() shl 16) or (next() shl 8) or next()
+            val a = next()
+            assertEquals(
+                DitherFlatten.luma(page, a, lead, ink),
+                DitherFlatten.luma(DitherFlatten.srcOver(page, lead, a), ink),
+            )
+            assertEquals(
+                DitherFlatten.luma(page, 0, lead, ink, a, pen),
+                DitherFlatten.luma(page, DitherFlatten.srcOver(ink, pen, a)),
+            )
+        }
+    }
+
+    /**
+     * [DitherFlatten.srcOver] against an independent floating-point `SRC_OVER`, within
+     * **±1/255** — measured **premultiplied**, which is the only form anything here reads.
+     *
+     * The unpremultiplied channel of a nearly-transparent pixel is the composite's
+     * numerator divided by an alpha that has itself been rounded to a byte, so it can sit
+     * two or three parts in 255 off the real answer while contributing a fraction of one
+     * part to anything that looks at it — and everything that looks at a page pixel looks
+     * at it through its own alpha (the flatten over white, a `Canvas` blit, an export).
+     * So the bound is stated where the error can be seen.
+     */
+    @Test
+    fun `the integer composite is src over, within one part in 255`() {
+        var seed = 0x51ce
+        fun next(): Int {
+            seed = seed * 1103515245 + 12345
+            return (seed ushr 8) and 0xFF
+        }
+        var checked = 0
+        for (round in 0 until 4000) {
+            val dst = (next() shl 24) or (next() shl 16) or (next() shl 8) or next()
+            val src = 0xFF000000.toInt() or (next() shl 16) or (next() shl 8) or next()
+            val a = next()
+            val got = DitherFlatten.srcOver(dst, src, a)
+            val sa = a / 255.0
+            val da = (dst ushr 24) / 255.0
+            val outA = sa + da * (1 - sa)
+            assertEquals("alpha (round $round)", outA * 255, (got ushr 24).toDouble(), 1.0)
+            for (shift in intArrayOf(0, 8, 16)) {
+                val s = (src ushr shift and 0xFF) / 255.0
+                val d = (dst ushr shift and 0xFF) / 255.0
+                // Premultiplied: colour × the alpha it will always be read through.
+                val premul = s * sa + d * da * (1 - sa)
+                val gotPremul = (got ushr shift and 0xFF) / 255.0 * ((got ushr 24) / 255.0)
+                assertEquals(
+                    "channel $shift (round $round, dst=${Integer.toHexString(dst)}, " +
+                        "src=${Integer.toHexString(src)}, a=$a)",
+                    premul * 255,
+                    gotPremul * 255,
+                    1.0,
+                )
+                checked++
+            }
+        }
+        assertTrue(checked > 10000)
     }
 }

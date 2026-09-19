@@ -2318,7 +2318,7 @@ question (candidates: an automatic full refresh at page turn; the rubber through
 `ebc-maint` merged to `main`; 0.1.42 published.
 
 ### Phase 29 — The raster page goes direct: rubber, pen, and the bake is the live layer (post-v0.1.0)
-**Status:** 🔄 In progress (opened 2026-09-19) · **Publishes:** 0.1.43 · branch `direct-raster`.
+**Status:** 🔄 Built, unwalked (opened 2026-09-19; landed the same day) · **Publishes:** 0.1.43 · branch `direct-raster`.
 Opened on the user's word after the 0.1.42 walk: *"I'd like to try to have the rubber go through
 the panel the way pencil does. And we should consider the same for pen. For the sketch face, it
 would be great to have all go through our own panel implementation."* And on the dense scribble's
@@ -2361,6 +2361,111 @@ than async: **the bake is the live layer.** SN-side this is a re-pin (maintenanc
 **Gate:** `./gradlew test` green; `:demo:assembleDebug`; the user's Nomad walk through SN's sketch
 face after the re-pin: rubber live under the nib, gel pen live, pencil pen-up on a dense scribble
 under ~300 ms, over-ink rubs unchanged (ink never erases), undo/redo, page turns; 0.1.43 published.
+
+**Landed** (2026-09-19, branch `direct-raster`, unwalked — the device gate above is open).
+
+- **`GraphiteGrain.Sweep.finish(points)`** (pure, 3 new tests + every existing chunking case
+  run twice): the stations the last `extend` did not reach, then the **end cap** a prefix can
+  never lay, and the sweep is spent. `advance(prefix = false)` is what it calls, because a
+  finished stroke has nothing left for the decidability gate to protect — so a mark that
+  previewed nothing at all (shorter than the landing window) still commits in full, and a
+  stroke too short to reach a station commits as its **tap**, which is what `of` says. Pinned
+  in `GraphiteGrainIncrementalTest` the way the brief asked: for all six strokes and every
+  chunking, `extend…` + `finish` == `of(points, width, seed)` element for element.
+  `GraphiteGrainPinTest` never moved.
+- **Core seams, all `protected`, nothing public.** `bakeCapturedStroke(stroke, dirty)` —
+  false by default, and when true the base skips `compositeIntoRaster` and announces the
+  caller's runs itself, with `bakeAfterCommit`, `onStrokeCommitted` and both listener halves
+  in exactly the order and with exactly the rects they had. `onRasterErasedBatch(rect)` fires
+  in `eraseRasterAlong` the moment a batch's pixels land, before the listener's
+  `onRasterChanged`. `rasterForWrite(layer)` is `rasterFor`'s writable twin (it allocates —
+  a direct bake may be a page's first mark), `drawPenInk` is `drawPencilGrain`'s, and
+  `rasterEraseRedrawEndOnly` exposes the sentinel a subclass in another module could not
+  reach (the companion is private).
+- **`DitherFlatten` has one flatten now, and it owns the bake.** `luma(graphite, ink)` is it;
+  the live form composites each live layer into its page pixel with `srcOver` and then asks
+  it. `srcOver` — the unpremultiplied integer `SRC_OVER` that was the *test's* model of the
+  bake in 0.1.41 — is production code, and `RattaPaperView.compositeLiveInto` is the only
+  caller besides the flatten. Tests: the pen's mirror beside the pencil's, the two halves
+  equal **before** the dither (which is the wiring, not a coincidence), `srcOver` against a
+  floating-point `SRC_OVER`, and a live layer on one side never touching the other.
+- **The end of a mark reaches the panel at pen-up, from the live layer.** The cap (and the
+  pen's last stretch, which arrives with the lift itself) is the one part of a mark the panel
+  has never seen, so it is flattened and posted before the composite rather than left to the
+  compositor's own rewrite of the window a beat later.
+- **`RattaPaperView`**: `directRaster` (panel ∧ raster) replaces `directPencil` everywhere the
+  daemon is pushed; `directStyle` gates which contacts get a live layer; `liveGraphite` +
+  `liveInk` with `contactLayer` / `contactPenColor` / `laidInkPoints` beside the pencil's
+  latches; `extendLiveInk` draws the new segment through `drawPenInk`; `toneAndPost` flattens
+  **both** live layers and is told nothing about which is in use; `bakeCapturedStroke`
+  finishes the sweep or lays the ink tail and composites over the runs; `onRasterErasedBatch`
+  posts the rubbed corridor; `contactRubbing` skips the overlay machinery at both ends of an
+  erase contact; `rearmForPageMode` re-pushes the whole tool on a mode flip (a pen re-arm
+  would have left the daemon's eraser armed on a page we paint).
+- Demo: the Ratta capability note names both log lines; the engine logs
+  `direct: pencil+pen+rubber` when a raster page opens on a direct panel (and when the panel
+  opens under one). `docs/api.md` (the Ratta paragraph, the eraser cadence) and `CLAUDE.md`
+  (the Phase 28 bullets amended, a new standing rule for the bake) in the same commit.
+- Test counts: core **268**, ratta **73**. `./gradlew test` green, `:demo:assembleDebug` green.
+
+**Deviations from the brief, and why**
+
+1. **The mirror is exact because the live half *calls* the bake's composite — not because two
+   formulas agree.** The brief asked for a test that the live formula on (raster, mask) equals
+   the display formula on (raster ⊕ mask) exactly. Written, it failed: an unpremultiplied
+   integer composite rounds twice on the baked side and once on the live side, and the two
+   lumas differed by one at a dither threshold (`pen #808080` over `0x90404040` at alpha 37 →
+   144 live, 143 baked). Both roads were honest and neither is *the* answer, so there is now
+   one road: `DitherFlatten.luma(graphite, liveA, colorA, ink, liveB, colorB)` composites with
+   `srcOver` and asks the two-argument flatten. Exactness is then a property of the wiring,
+   and that is what the test pins.
+2. **The `±1/255` composite pin is against a floating-point `SRC_OVER`, measured
+   premultiplied — not against a `Canvas`.** A `Canvas` cannot be driven here: an Android
+   module's unit tests compile against the `android.jar` stub whose every method throws, and
+   Robolectric is a dependency this repo does not have (the wall `PencilRenderHarness`
+   already documents). And the bound has to be stated premultiplied, because the
+   unpremultiplied channel of a nearly-transparent pixel is divided by an alpha that has
+   itself been rounded to a byte — it can sit 2–3 parts in 255 off while contributing a
+   fraction of one part to anything that ever reads it. Whether Skia rounds the same way in
+   premultiplied pixels stays a device question, exactly as it was when this was the test's
+   own model.
+3. **A pixel is taken out of the live mask as it is composited.** A mark's runs deliberately
+   overlap — the closing point of one is the first point of the next — so `for (r in dirty)
+   composite` would have baked the overlap **twice**, darker than the panel ever showed it.
+   Zeroing as it lands is also the clearing `clearLivePreview` was about to do.
+4. **`onRasterErasedBatch` is gated on the page (`directRaster`), not on `contactRubbing`.**
+   The cadence is end-only for the whole page, so a rub that arrived by some other gesture — a
+   lasso eraser, a scribble — would not be seen until the gesture finished. The latch still
+   decides the other half (which overlay machinery to skip at the ends of an erase contact),
+   which is what the brief named it for.
+5. **A style this path cannot preview gets no preview, rather than keeping the needle.** The
+   brief allows "gated per style", but the daemon is disabled for the whole page by decision,
+   so there is no needle left to keep: `MARKER` / `FOUNTAIN` / `DASH` / `CROSS` commit exactly
+   as before and appear at pen-up. None is offered by SN. Drawing them incrementally *would*
+   have been possible and would have changed what the mark is (a marker's single coverage
+   pass, a dash's whole-path pattern), which is the Phase 11 mistake.
+6. **`pageMode`'s re-push is the whole tool, not `rearmPenIfLive`.** 0.1.41 could re-arm just
+   the pen because only the pencil was direct; now a page flipped to raster with the rubber
+   armed would leave the daemon's own eraser wiping the panel we are about to paint.
+7. **A lasso outline on a direct raster page now has no live trail**, which follows from
+   "full-screen disable for every tool" rather than from a choice made here, and is written
+   down because it is the one thing 0.1.43 takes away. The daemon drew that dashed trail and
+   is off; the base draws none while the firmware is present (`rendersLiveTrail = !firmware`).
+   The selection box still appears at pen-up, and nothing that ships uses the lasso on a
+   raster page — the demo's has none, SN's sketch face is one tool. Giving it back means
+   deciding whether overlay chrome may sit over pixels the app owns, which is a user
+   decision, not a fix.
+8. **No JVM test of the wiring**, for the reason Phase 28's maintenance already recorded:
+   `commitCapturedStroke`, `bakeCapturedStroke` and `onRasterErasedBatch` live on a `View`.
+   What is pinned is the arithmetic either side of them.
+
+**What only a device can answer:** whether the gel pen's segment-at-a-time preview reads as
+one line under the nib (the joins are exact in geometry; the anti-aliased seam where two
+round caps meet is a device question); whether the rubber through the panel feels better than
+the 16 ms redraw it replaces, and what it does to the eraser ghosting that is still the open
+question from 0.1.42; whether the pen-up of a dense scribble is now under the ~300 ms the gate
+asks for; whether a `SRC_OVER` composited in integers is indistinguishable from the `Canvas`
+bake beside it on the same page; and every question of feel.
 
 ## Standing Open Questions (ask as they become relevant)
 

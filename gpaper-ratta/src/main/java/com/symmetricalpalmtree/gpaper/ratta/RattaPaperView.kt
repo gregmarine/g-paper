@@ -235,7 +235,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /**
      * The panel driver, opened directly (Phase 28, 0.1.41) — what the pencil previews
      * through when it can. Opened from [setupFirmwareInk], closed at detach/release, and
-     * inert when the driver refused: see [EbcPanel] and [directPencil].
+     * inert when the driver refused: see [EbcPanel] and [directRaster].
      */
     private val panel = EbcPanel()
 
@@ -327,10 +327,14 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 // that are gone.
                 removeCallbacks(ditherRebuild)
                 ditherCoalescer.reset()
-                // The page's mode is one of [directPencil]'s preconditions — a host
-                // switching a pencil page between raster and stroke changes which thing
-                // draws the live ink, and the base's setter knows nothing of the firmware.
-                if (firmware) rearmPenIfLive()
+                // The page's mode is one of [directRaster]'s preconditions — a flip
+                // changes which thing draws the live ink for EVERY tool now, not only for
+                // the pencil, and the base's setter knows nothing of the firmware. So this
+                // is a full tool push rather than a pen re-arm: a page flipped to raster
+                // with the rubber armed would otherwise leave the daemon's own eraser
+                // wiping the panel we are about to paint.
+                rearmForPageMode()
+                announceDirectPath()
             }
         }
 
@@ -398,28 +402,83 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (firmware && inkOwner === this && tool == Tool.PEN &&
             !firmwareInkSuppressed && !barrelDown
         ) {
-            // The direct pencil wants the daemon OFF, and this is the path every
-            // style/colour/width/page-mode change comes down — so pencil → pen re-arms the
-            // needle and pen → pencil takes it away again, with no tool boundary needed.
-            if (directPencil) fullScreenDisable() else applyPenToFirmware()
+            // A direct raster page wants the daemon OFF, and this is the path every
+            // style/colour/width change comes down — so leaving the page re-arms the needle
+            // and arriving on it takes the needle away, with no tool boundary needed.
+            if (directRaster) fullScreenDisable() else applyPenToFirmware()
         }
     }
 
     /**
-     * Whether the mark now under the hand previews **through the panel directly** rather
-     * than through the firmware's needle (Phase 28).
+     * Re-push the armed tool after a page-mode flip (0.1.43): the whole tool, not just the
+     * pen, because [directRaster] decides for every one of them now.
      *
-     * Every clause is a precondition of the honesty of that preview, not a policy:
-     * the panel must have opened; the page must be a raster one, because the preview is
-     * flattened against the page images and there is nothing to flatten against in stroke
-     * mode; the style must be `PENCIL`, because what is painted is [GraphiteGrain]'s flecks
-     * and nothing else has a prefix-stable texture to lay one fleck at a time; and the tool
-     * must be the pen, because the rubber and the lasso have their own live chrome that the
-     * daemon still draws. Anything else keeps the firmware path exactly as 0.1.40 had it.
+     * A transient suppress stands: a held barrel and the two app-drawn modes already own a
+     * full-screen disable, and [applyToolToFirmware] would clear their flags and hand the
+     * daemon back paper it is meant to be off. The hover stream re-asserts them anyway.
      */
-    private val directPencil: Boolean
-        get() = firmware && panel.isOpen && pageMode == PageMode.RASTER &&
-            penStyle == StrokeStyle.PENCIL && tool == Tool.PEN
+    private fun rearmForPageMode() {
+        if (!firmware || inkOwner !== this) return
+        if (firmwareInkSuppressed || barrelDown) return
+        applyToolToFirmware()
+    }
+
+    /**
+     * One line, when a raster page opens on a panel that is ours: **what goes through it**.
+     *
+     * `EbcPanel` already says whether the driver opened (`panel: direct` / `panel: needle`)
+     * and that is a fact about the session; this is a fact about the page, and after 0.1.43
+     * they are different questions — the panel can be open while the page is a stroke-mode
+     * one the daemon owns entirely. A demo or a host reads it to know which behaviour it is
+     * looking at, which is the same reason the panel's own line exists (Phase 28's fourth
+     * deviation: a log line rather than a public probe widened to serve one row of chrome).
+     */
+    private fun announceDirectPath() {
+        if (directRaster) Log.i(TAG, "direct: pencil+pen+rubber")
+    }
+
+    /**
+     * Whether **this page** is ours to paint rather than the daemon's (Phase 29).
+     *
+     * Three clauses and no more, which is the change 0.1.43 made: the panel must have
+     * opened, and the page must be a raster one, because everything this path draws is
+     * flattened against the page images and there is nothing to flatten against in stroke
+     * mode. It no longer asks which tool or which style is armed. 0.1.41's `directPencil`
+     * did — the pencil previewed itself and the pen, the rubber and the lasso stayed on the
+     * needle — and the artist's word after the 0.1.42 walk was to take the whole page:
+     * *"For the sketch face, it would be great to have all go through our own panel
+     * implementation."*
+     *
+     * So the daemon is **full-screen-disabled for every tool on a direct raster page**, and
+     * there is no overlay ink anywhere on it: no `pendingBake`, no clear ladder, nothing to
+     * hand off at a boundary. A stroke-mode page is untouched and still the daemon's
+     * entirely.
+     */
+    private val directRaster: Boolean
+        get() = firmware && panel.isOpen && pageMode == PageMode.RASTER
+
+    /**
+     * Whether a mark in [style] is one this path can **preview**, fleck by fleck or segment
+     * by segment, as it is drawn.
+     *
+     * `PENCIL` is [GraphiteGrain]'s scatter, which has a prefix-stable texture and can be
+     * laid one fleck at a time ([GraphiteGrain.Sweep]). The pen path — `PEN` and the two
+     * styles that render as it — is a uniform round-capped line, and round caps are what
+     * make a segment drawn now join exactly with the segment drawn next, so the live layer
+     * can be built up a MotionEvent at a time and then *be* the mark.
+     *
+     * Nothing else can, and the others are not bent to fit: a `MARKER` is one translucent
+     * coverage pass over the whole path, a `DASH`'s pattern is a property of the whole
+     * path, a `CROSS`'s marks are sampled along it. Those still commit exactly as they
+     * always did (the base composites them) — they simply appear at pen-up, because on this
+     * page the daemon has nothing to preview them with. None of them is offered by SN, and
+     * bending a style's appearance to make it previewable would be the [StrokeStyle.PENCIL]
+     * mistake of Phase 11 all over again.
+     */
+    private fun directStyle(style: StrokeStyle): Boolean = when (style) {
+        StrokeStyle.PENCIL, StrokeStyle.PEN, StrokeStyle.BRUSH, StrokeStyle.CALLIGRAPHY -> true
+        else -> false
+    }
 
     /**
      * Push the current tool state to the firmware — the per-mode half of every handoff.
@@ -433,12 +492,20 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             fullScreenDisable()
             return
         }
-        if (directPencil) {
+        if (directRaster) {
             // Atelier's arrangement: with the app painting the panel itself, the daemon must
             // not paint over it. A full-screen disable is the only "firmware off" switch
             // there is (the disable areas are screen-space), and it is issued from the same
-            // tool push the needle would have been armed from, so the hand-over happens
-            // wherever a tool, style, colour, width or page mode changes.
+            // tool push the needle, the firmware eraser or the dash trail would have been
+            // armed from — so the hand-over happens wherever a tool, style, colour, width or
+            // page mode changes. **Every tool** (0.1.43): the rubber shows through the panel
+            // now, and the lasso's trail would otherwise be firmware ink on a page whose
+            // pixels we own. Its consequence is stated rather than hidden: a lasso outline on
+            // such a page has **no live trail at all** — the daemon that drew it is off and
+            // the base draws none while the firmware is present. The selection box still
+            // appears at pen-up. Nothing that ships uses the lasso on a raster page (the
+            // demo's raster page has none, and SN's sketch face is one tool), and giving the
+            // trail back means deciding whether overlay chrome may sit over pixels we own.
             fullScreenDisable()
             return
         }
@@ -496,25 +563,27 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // Apply live unless a full-screen disable owns the areas right now (suppressed
         // mode or held barrel) — leaving those re-applies via applyToolToFirmware.
         if (firmware && inkOwner === this && !firmwareInkSuppressed && !barrelDown) {
-            // The direct pencil owns a full-screen disable; re-sending the complement bands
-            // here would hand the daemon back the paper it is meant to be kept off.
-            if (directPencil) fullScreenDisable() else applyDisableAreas()
+            // A direct raster page owns a full-screen disable; re-sending the complement
+            // bands here would hand the daemon back the paper it is meant to be kept off.
+            if (directRaster) fullScreenDisable() else applyDisableAreas()
         }
     }
 
     // ── Deferred bake & overlay handoff ──────────────────────────────────────
 
     override fun bakeAfterCommit() {
-        if (firmware && contactDirect) {
-            // The direct pencil (Phase 28) is the one case with nothing to defer: the daemon
-            // was disabled for this contact, so there is no overlay copy of the ink to keep
-            // showing and none to drop. Record and present at once — the window's own pixels
-            // become the mirror of what the panel is already displaying, level for level
-            // (RattaPanelTone), and the panel does not move. Deferring instead would leave
-            // the mark live on the panel and absent from every frame until some later
-            // boundary, which is a mark that vanishes if anything at all repaints.
+        if (firmware && (contactDirect || directRaster)) {
+            // A direct raster page has nothing to defer: the daemon is disabled across the
+            // whole of it, so there is no overlay copy of any ink to keep showing and none
+            // to drop. Record and present at once — the window's own pixels become the
+            // mirror of what the panel is already displaying, dot for dot ([DitherFlatten]),
+            // and the panel does not move. Deferring instead would leave the mark live on
+            // the panel and absent from every frame until some later boundary, which is a
+            // mark that vanishes if anything at all repaints. (True of a style this path
+            // cannot preview too — it appears at this bake, which is the one moment it
+            // could have; see [directStyle].)
             super.bakeAfterCommit()
-            clearLivePreview()
+            if (contactDirect) clearLivePreview()
             return
         }
         if (firmware) {
@@ -567,13 +636,25 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     // ── The raster page (0.1.32; the numbers frozen at 0.1.34) ──────────────
 
     /**
-     * The raster eraser's redraw cadence on Supernote — [RASTER_ERASE_REDRAW_MS], whose
-     * KDoc holds the measurement. Onyx can afford a frame's cadence because its engine
-     * answers `presentRasterEraseProgress` with a regional `handwritingRepaint` of
-     * exactly the rubbed corridor; no such transaction exists here, and the same number
-     * is reached from the other direction.
+     * The raster eraser's redraw cadence on Supernote — **end-only where the panel is ours,
+     * [RASTER_ERASE_REDRAW_MS] where it is not.**
+     *
+     * The 16 ms is the measurement (its KDoc holds the walk) and it stands for the needle
+     * fallback, where a mid-sweep window redraw is the only way the artist sees graphite
+     * lifting under the rubber. On the direct path there is a better one: the rubbed
+     * corridor goes **straight into the panel** as each batch lands
+     * ([onRasterErasedBatch]), so a window frame every 16 ms would be a second, later
+     * opinion about pixels the panel already has — and every one of them is a whole app
+     * frame the compositor rewrites over the top of. One `redrawCommitted` at the end of
+     * the sweep ([finalizeEraseRedraw], which runs whether or not a mid-sweep redraw ever
+     * did) is the mirror, exactly as pen-up is the mirror of a mark.
+     *
+     * Onyx keeps a frame's cadence and asks its own panel for the corridor
+     * (`presentRasterEraseProgress`) — the same shape of answer, reached on its hardware's
+     * own terms. The seam goes on earning its keep.
      */
-    override val rasterEraseRedrawIntervalMs: Long get() = RASTER_ERASE_REDRAW_MS
+    override val rasterEraseRedrawIntervalMs: Long
+        get() = if (directRaster) rasterEraseRedrawEndOnly else RASTER_ERASE_REDRAW_MS
 
     /**
      * `PENCIL` bakes at a constant pressure on this engine ([PENCIL_BAKE_PRESSURE], whose
@@ -604,7 +685,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun bakeTilt(style: StrokeStyle, tilt: Float): Float =
         if (style == StrokeStyle.PENCIL && firmware) 0f else tilt
 
-    // ── The direct pencil: graphite painted onto the panel (Phase 28, 0.1.41) ──
+    // ── The direct raster page: painted onto the panel (Phase 28 · Phase 29, 0.1.43) ──
     //
     // What the firmware needle could never do: the lead's own shade, pressure, and no change
     // at pen-up. The mark is [GraphiteGrain]'s flecks — the *same* flecks the bake will lay,
@@ -615,6 +696,16 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     // the window presents it — dithered the same way, by the same function, at the same page
     // coordinates ([drawRasterLayers]), so the compositor's rewrite lands on the pixels that
     // are already there and the panel does not move. That is the mirror.
+    //
+    // **Phase 29 gives the whole page the same treatment, and inverts the bake.** The pen
+    // previews through a second live layer ([liveInk]) — the new segment each event, round
+    // caps, so the seams join exactly — and the rubber shows the corridor it lifts as each
+    // batch lands ([onRasterErasedBatch]). And the mark is no longer *re-derived* at pen-up:
+    // the live layer **is** the bake ([bakeCapturedStroke]), composited into the page image
+    // with the very `SRC_OVER` the live flatten applied to it. No second `GraphiteGrain.of`,
+    // no second `drawPoints` — which is both the exactness (the page now holds precisely the
+    // pixels the panel showed) and the second of a dense scribble's pen-up that the artist
+    // was waiting through.
     //
     // **Why the display is dithered at all** (the third walk, 2026-09-19). This panel's
     // 16-grey waveform reaches black on its first frame and a grey only by passing through
@@ -644,16 +735,24 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     //     property of one pure function instead of a table (the table stands — see there).
 
     /**
-     * The alpha of every fleck laid this contact — one byte a pixel, the view's size,
-     * allocated on the first direct contact and reused for the life of the view.
+     * The alpha of everything this contact has laid — one byte a pixel, the view's size,
+     * one array per raster layer, allocated on that layer's first direct contact and reused
+     * for the life of the view.
      *
-     * A byte array rather than a page-sized ARGB bitmap because only alpha varies: the lead
-     * has one colour and [GraphiteGrain] gives each fleck a darkness, which
-     * `StrokeRenderer` renders as that colour at an alpha. Keeping the colour out of it
-     * means the live layer costs a quarter of a bitmap, and the flatten below applies
-     * [penColor] once per pixel instead of storing it a million times.
+     * A byte array rather than a page-sized ARGB bitmap because only alpha varies: a mark
+     * has one colour, and what the renderer varies along it is coverage (a fleck's darkness,
+     * a stroke's anti-aliased rim). Keeping the colour out of it means a live layer costs a
+     * quarter of a bitmap, and the flatten applies the colour once per pixel instead of
+     * storing it a million times.
+     *
+     * **Two of them since 0.1.43**, because a page has two images and a live mark must be
+     * flattened into the one it belongs to — a pencil under a pen must go on reading as
+     * graphite under ink, live exactly as baked. Only one is ever non-empty at a time (one
+     * contact is one tool), and the ink one is never allocated on a page nothing has been
+     * penned on, which is every pencil page there has ever been.
      */
-    private var liveAlpha: ByteArray? = null
+    private var liveGraphite: ByteArray? = null
+    private var liveInk: ByteArray? = null
     private var liveAlphaW = 0
     private var liveAlphaH = 0
 
@@ -710,6 +809,29 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private var contactDirect = false
     private var liveEvents = 0
 
+    /** Which page image this contact's mark belongs to — [RasterLayer.of] the armed style,
+     *  latched with everything else at ACTION_DOWN. It decides which live layer is painted
+     *  into, which image the flatten reads it over, and which one the bake composites it
+     *  into; a mark that changed layers mid-stroke would be half a pencil and half a pen. */
+    private var contactLayer: RasterLayer = RasterLayer.GRAPHITE
+
+    /** The colour this contact's ink is laid in — the pen's own, latched like [contactInk]
+     *  is for the pencil, and read by the flatten so the panel shows the ink that is
+     *  actually going down. */
+    private var contactPenColor: Int = Stroke.BLACK
+
+    /**
+     * How many of the stroke's points are already in [liveInk].
+     *
+     * A count rather than an index, so "nothing new has arrived" is one comparison and can
+     * never be confused with "the first point has not been drawn yet" — a re-announcement of
+     * the same buffer that redrew the same dab would merge its anti-aliased rim into itself
+     * and bake a shade darker than it previewed. The next segment starts at the **last**
+     * point already drawn, not after it: that shared point is what makes two round-capped
+     * segments join exactly where one path would have.
+     */
+    private var laidInkCount = 0
+
     /** Where the view sits on screen, read once per contact: the panel's coordinates are
      *  the screen's, and a mid-layout read lies. */
     private val contactScreenLoc = IntArray(2)
@@ -733,7 +855,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      */
     override fun onLiveStrokeExtended(points: List<StrokePoint>) {
         if (!contactDirect) return
-        val mask = ensureLiveAlpha() ?: return
+        val mask = ensureLiveLayer(contactLayer) ?: return
+        if (contactLayer == RasterLayer.INK) {
+            extendLiveInk(points, mask)
+            return
+        }
         liveEvents++
         val t0 = System.nanoTime()
         // Through the bake's own seams, even though both are identity on this path: a
@@ -759,7 +885,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             layFlecks(provisionalGrain, 0, rect, mask)
             val shown = Rect(liveRect); shown.union(rect)
             liveRect.set(shown)
-            toneAndPost(shown, mask)
+            toneAndPost(shown)
             timeGrain += System.nanoTime() - t0
             return
         }
@@ -773,7 +899,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             layFlecks(grain, 0, rect, mask)
             laidFlecks = sweep.count
             liveRect.union(rect)
-            toneAndPost(Rect(liveRect), mask)
+            toneAndPost(Rect(liveRect))
             timeGrain += System.nanoTime() - t0
             return
         }
@@ -791,10 +917,73 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         laidFlecks = sweep.count
         mergeBatchIntoLive(scratch, rect, mask)
         liveRect.union(rect)
-        toneAndPost(rect, mask)
+        toneAndPost(rect)
         val dt = System.nanoTime() - t1
         timeTone += dt
         if (dt > maxTone) maxTone = dt
+    }
+
+    /**
+     * The pen's live ink (Phase 29): draw the **new segment** into [mask] and show it.
+     *
+     * Only the segment, never the stroke — a stroke a thousand samples long would otherwise
+     * be re-rasterised a thousand times, which is precisely the quadratic the pencil's
+     * [GraphiteGrain.Sweep] was written to escape. What makes one segment at a time legal
+     * here is the shape of the mark rather than any state: the pen is a uniform round-capped
+     * line, so the dab at the end of one segment is the dab at the start of the next and the
+     * two join exactly where a single path would have. [laidInkCount] keeps that shared
+     * point, which is why the sub-list starts *at* the last point drawn rather than after it.
+     */
+    private fun extendLiveInk(points: List<StrokePoint>, mask: ByteArray) {
+        if (points.isEmpty()) return
+        // Nothing new: the base may re-announce the same buffer (every sample of a batch
+        // dropped inside an exclusion rect leaves the list unchanged).
+        if (points.size <= laidInkCount) return
+        liveEvents++
+        val t0 = System.nanoTime()
+        val from = if (laidInkCount == 0) 0 else laidInkCount - 1
+        val segment = points.subList(from, points.size)
+        val rect = inkBounds(segment) ?: run { laidInkCount = points.size; return }
+        val scratch = ensureBatch(rect.width(), rect.height()) ?: return
+        val canvas = batchCanvas ?: return
+        val save = canvas.save()
+        canvas.clipRect(0, 0, rect.width(), rect.height())
+        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
+        drawPenInk(canvas, segment, contactPenColor, penWidth)
+        canvas.restoreToCount(save)
+        laidInkCount = points.size
+        mergeBatchIntoLive(scratch, rect, mask)
+        liveRect.union(rect)
+        toneAndPost(rect)
+        val dt = System.nanoTime() - t0
+        timeTone += dt
+        if (dt > maxTone) maxTone = dt
+    }
+
+    /** The view-space rect a run of pen samples covers: the points' bounds pushed out by
+     *  half the lead's width for the round cap, plus two px for the anti-aliased rim and
+     *  the rounding out. Null when none of it is on screen. */
+    private fun inkBounds(points: List<StrokePoint>): Rect? {
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+        for (p in points) {
+            if (p.x < minX) minX = p.x
+            if (p.x > maxX) maxX = p.x
+            if (p.y < minY) minY = p.y
+            if (p.y > maxY) maxY = p.y
+        }
+        if (minX > maxX) return null
+        val pad = ceil(penWidth / 2f).toInt() + 2
+        toneRect.set(
+            floor(minX).toInt() - pad,
+            floor(minY).toInt() - pad,
+            ceil(maxX).toInt() + pad,
+            ceil(maxY).toInt() + pad,
+        )
+        return if (toneRect.intersect(0, 0, liveAlphaW, liveAlphaH)) toneRect else null
     }
 
     /** Rasterise flecks `[from, count)` into the batch scratch and merge them into [mask]. */
@@ -874,10 +1063,15 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
     /**
      * Flatten [rect] the way the page will be seen, dither it, and show it: white paper, the
-     * graphite image over it, this contact's live flecks over that, and the ink image
-     * through `DARKEN` — the same order and the same operator `drawCommittedContent` uses,
-     * because anything else would be a second opinion about what the page looks like and
-     * pen-up would be where the two met.
+     * graphite image with this contact's flecks over it, and the ink image with this
+     * contact's ink over *it*, the two meeting through `DARKEN` — the same order and the
+     * same operator `drawCommittedContent` uses, because anything else would be a second
+     * opinion about what the page looks like and pen-up would be where the two met.
+     *
+     * **Both live layers, every time** (0.1.43). Only one of them is ever non-empty — a
+     * contact is one tool — but which one it is is the contact's business and not this
+     * function's, and a flatten that had to be told would be a flatten that could be told
+     * wrong. A layer with no array at all costs one null check.
      *
      * Every pixel leaves as black (level 0) or white (level 15) and nothing in between:
      * both land on the panel's first frame, so the mark is under the nib rather than a beat
@@ -885,16 +1079,26 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * ([regenDither]) is the same arithmetic at the same page coordinates, so it agrees
      * pixel for pixel. [RattaPanelTone] is no longer on this path — see its KDoc.
      */
-    private fun toneAndPost(rect: Rect, mask: ByteArray) {
+    private fun toneAndPost(rect: Rect) {
         val w = rect.width()
         val h = rect.height()
         val n = w * h
+        if (n <= 0) return
         ensureToneScratch(n)
         readRaster(RasterLayer.GRAPHITE, rect, toneGraphite)
         readRaster(RasterLayer.INK, rect, toneInk)
-        // The lead's own colour: the flecks on the panel were laid in it, and the dither
-        // is what turns that grey into dots.
-        val inkColor = contactInk.color
+        // A live layer is read only where the rect is certainly inside it. An inking
+        // contact's rects always are (both bounds calls clip to the layer); a rubbing
+        // sweep's come from the *page*, which may be larger than the view, and during one
+        // the live layers are empty anyway.
+        val onLayer = rect.left >= 0 && rect.top >= 0 &&
+            rect.right <= liveAlphaW && rect.bottom <= liveAlphaH
+        val graphiteMask = if (onLayer) liveGraphite else null
+        val inkMask = if (onLayer) liveInk else null
+        // The colours the two live layers were laid in: the lead's own, and the pen's. The
+        // dither is what turns either of them into dots.
+        val leadColor = contactInk.color
+        val penInkColor = contactPenColor
         for (y in 0 until h) {
             val maskRow = (rect.top + y) * liveAlphaW + rect.left
             val row = y * w
@@ -902,9 +1106,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             for (x in 0 until w) {
                 val black = DitherFlatten.black(
                     toneGraphite[row + x],
-                    mask[maskRow + x].toInt() and 0xFF,
-                    inkColor,
+                    if (graphiteMask == null) 0 else graphiteMask[maskRow + x].toInt() and 0xFF,
+                    leadColor,
                     toneInk[row + x],
+                    if (inkMask == null) 0 else inkMask[maskRow + x].toInt() and 0xFF,
+                    penInkColor,
                     rect.left + x,
                     pageY,
                 )
@@ -972,18 +1178,34 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (toneLevels.size < n) toneLevels = ByteArray(n)
     }
 
-    /** The live alpha layer, sized to the view. Re-allocated when the view resizes; null
-     *  before layout, which is when nothing can be drawn anyway. */
-    private fun ensureLiveAlpha(): ByteArray? {
+    /**
+     * [layer]'s live alpha layer, sized to the view — allocated on that layer's first direct
+     * contact and kept for the life of the view. Null before layout, which is when nothing
+     * can be drawn anyway.
+     *
+     * A resize drops **both**, because they are indexed by one width and a stale one would
+     * be read at the wrong offsets; the contact that asked gets a fresh, blank layer, which
+     * is the right answer for a view whose geometry just changed under it.
+     */
+    private fun ensureLiveLayer(layer: RasterLayer): ByteArray? {
         val w = width
         val h = height
         if (w <= 0 || h <= 0) return null
-        val existing = liveAlpha
-        if (existing != null && liveAlphaW == w && liveAlphaH == h) return existing
-        liveAlphaW = w
-        liveAlphaH = h
-        return ByteArray(w * h).also { liveAlpha = it }
+        if (liveAlphaW != w || liveAlphaH != h) {
+            liveGraphite = null
+            liveInk = null
+            liveAlphaW = w
+            liveAlphaH = h
+        }
+        return when (layer) {
+            RasterLayer.GRAPHITE -> liveGraphite ?: ByteArray(w * h).also { liveGraphite = it }
+            RasterLayer.INK -> liveInk ?: ByteArray(w * h).also { liveInk = it }
+        }
     }
+
+    /** [layer]'s live layer as it stands, or null when nothing has been laid on it. */
+    private fun liveLayer(layer: RasterLayer): ByteArray? =
+        if (layer == RasterLayer.GRAPHITE) liveGraphite else liveInk
 
     /** The batch scratch, at least [w] × [h]. Grown, never shrunk, and capped at the view
      *  because nothing bigger can be drawn. */
@@ -1373,7 +1595,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private fun beginLivePreview() {
         liveEvents = 0
         laidFlecks = 0
+        laidInkCount = 0
+        contactLayer = RasterLayer.of(penStyle)
         contactInk = pencilInk(penColor)
+        contactPenColor = penColor
         // The sweep itself is minted on the first sample: only then is there a pending
         // stroke id to seed it from without asking for one and throwing it away.
         liveSweep = null
@@ -1381,44 +1606,199 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         getLocationOnScreen(contactScreenLoc)
     }
 
-    /** Forget this contact's live flecks. The panel is not told: the caller either baked the
+    /** Forget what this contact laid. The panel is not told: the caller either baked the
      *  same pixels (pen-up — the window's frame is the mirror) or re-tones the rect itself
      *  (a cancelled contact). */
     private fun clearLivePreview() {
         if (contactDirect) Log.i(
             TAG,
-            "live preview: $liveEvents events, $laidFlecks flecks, rect $liveRect, grain " +
-                "${timeGrain / 1_000_000} ms total, tone ${timeTone / 1_000_000} ms total " +
-                "(max ${maxTone / 1_000_000} ms/event)",
+            "live ${contactLayer.name.lowercase()}: $liveEvents events, $laidFlecks flecks, " +
+                "rect $liveRect, grain ${timeGrain / 1_000_000} ms total, tone " +
+                "${timeTone / 1_000_000} ms total (max ${maxTone / 1_000_000} ms/event)",
         )
         provisional = false
         liveSweep = null
         timeGrain = 0; timeTone = 0; maxTone = 0
-        val mask = liveAlpha
-        if (mask != null && !liveRect.isEmpty) {
-            for (y in liveRect.top until liveRect.bottom) {
-                val row = y * liveAlphaW
-                java.util.Arrays.fill(mask, row + liveRect.left, row + liveRect.right, 0)
-            }
-        }
+        liveLayer(contactLayer)?.let { clearMaskRect(it, liveRect) }
         laidFlecks = 0
+        laidInkCount = 0
         liveRect.setEmpty()
     }
 
     /**
-     * A cancelled direct contact: nothing committed, so the graphite on the panel
-     * corresponds to nothing at all. Drop the live layer and re-tone what it covered from
-     * the page images alone, which paints the paper back.
+     * A cancelled direct contact — of either tool: nothing committed, so what is on the
+     * panel corresponds to nothing at all. Drop the live layer and re-tone what it covered
+     * from the page images alone, which paints the paper back.
      */
     private fun dropLivePreview() {
-        val mask = liveAlpha
-        if (mask == null || liveRect.isEmpty) {
+        if (liveLayer(contactLayer) == null || liveRect.isEmpty) {
             clearLivePreview()
             return
         }
         toneRect.set(liveRect)
         clearLivePreview()
-        toneAndPost(toneRect, mask)
+        toneAndPost(toneRect)
+    }
+
+    // ── The bake IS the live layer (Phase 29) ────────────────────────────────
+
+    /**
+     * Lay this contact's mark into the page image — **by compositing the live layer**, which
+     * is already exactly the mark, rather than by rendering the stroke a second time.
+     *
+     * The base offers this seam ([bakeCapturedStroke]) and everything else about the commit
+     * is unchanged: the will-change halves have gone out, the runs are announced right
+     * after, `onStrokeCommitted` and the changed halves follow. What changes is where the
+     * pixels come from. A pencil's flecks and a pen's segments were drawn into the live
+     * layer as the hand made them, at the same coordinates, through the same renderer, in
+     * the same colour; compositing that layer with [DitherFlatten.srcOver] — the same
+     * arithmetic the live flatten applied to it — leaves the page holding precisely the
+     * pixels the panel has been showing. So the mirror at pen-up is exact by construction
+     * rather than by two renderings agreeing, and the whole-stroke recompute that cost a
+     * dense scribble most of a second on a Nomad is simply not done.
+     *
+     * The pencil owes one thing first: the **end cap**, which prefix mode never lays because
+     * until the pen lifts that end is still travelling ([GraphiteGrain.Sweep.finish]). And a
+     * mark still showing its provisional opening (the undecidable first ~50 px) is cleared
+     * and re-laid whole from the finished sweep, because provisional flecks are the one
+     * thing on this path that are *not* the mark.
+     *
+     * Returns false — and lets the base composite as it always has — for a contact this
+     * path was not previewing at all: a style it cannot preview ([directStyle]), a page
+     * with no size yet, or a mark on a layer this contact does not own.
+     */
+    override fun bakeCapturedStroke(stroke: Stroke, dirty: List<Rect>): Boolean {
+        if (!contactDirect) return false
+        val layer = RasterLayer.of(stroke.style)
+        if (layer != contactLayer) return false
+        val mask = liveLayer(layer) ?: return false
+        val color: Int
+        if (layer == RasterLayer.GRAPHITE) {
+            // Through the bake's own seams, exactly as the preview reached them.
+            val baked = bakePoints(stroke.points, stroke.style)
+            val sweep = liveSweep ?: GraphiteGrain.begin(
+                stroke.width, stroke.id.hashCode(), contactInk.density,
+            ).also { liveSweep = it }
+            if (provisional) {
+                // The provisional lay is not the mark: drop it, and let the finish below
+                // hand back the whole of the true one (an unstarted sweep lays everything).
+                clearMaskRect(mask, liveRect)
+                liveRect.setEmpty()
+                provisional = false
+            }
+            val grain = sweep.finish(baked)
+            if (grain.count > 0) {
+                newFleckBounds(grain, 0)?.let { rect ->
+                    layFlecks(grain, 0, rect, mask)
+                    liveRect.union(rect)
+                    // The cap is the one part of the mark the panel has never seen — it
+                    // could not be laid while the pen was still on it. Show it now, from
+                    // the live layer, rather than leaving it to the compositor's own
+                    // rewrite of the window a beat later.
+                    toneAndPost(rect)
+                }
+            }
+            color = contactInk.color
+        } else {
+            // Whatever of the stroke the last event did not reach — a pen-up carries the
+            // final samples, and the segment from the last laid point to them is the only
+            // part of the mark not yet on the panel.
+            if (stroke.points.size > laidInkCount) {
+                val from = if (laidInkCount == 0) 0 else laidInkCount - 1
+                val tail = stroke.points.subList(from, stroke.points.size)
+                inkBounds(tail)?.let { rect ->
+                    layInk(tail, rect, mask)
+                    liveRect.union(rect)
+                    // The final samples arrive with the lift itself, so this last stretch
+                    // is new to the panel too.
+                    toneAndPost(rect)
+                }
+                laidInkCount = stroke.points.size
+            }
+            color = contactPenColor
+        }
+        val target = rasterForWrite(layer) ?: return false
+        for (r in dirty) compositeLiveInto(target, mask, r, color)
+        return true
+    }
+
+    /**
+     * [mask]'s alpha, in [color], composited `SRC_OVER` into [target] over [rect] — the
+     * whole of the direct bake, once per run of the mark.
+     *
+     * Unpremultiplied integers in and out, which is what `getPixels` gives and `setPixels`
+     * takes, and the arithmetic is [DitherFlatten.srcOver] because that is the function the
+     * live flatten composited the very same alpha with. The rect is clipped to both the page
+     * image and the live layer: the page may be larger than the view (nothing outside it can
+     * have been drawn) or smaller (nothing outside it is page).
+     *
+     * **A pixel is taken out of the mask as it lands**, which is what makes "once per run"
+     * safe: a mark's runs deliberately **overlap** — the closing point of one run is the
+     * first point of the next, so the segment across the boundary lies wholly inside one
+     * rect (`RasterDirty.along`) — and a pixel in that overlap composited twice would bake
+     * darker than the panel ever showed it. Zeroing is also exactly the clearing
+     * [clearLivePreview] is about to do, so it costs nothing.
+     */
+    private fun compositeLiveInto(target: Bitmap, mask: ByteArray, rect: Rect, color: Int) {
+        val left = maxOf(rect.left, 0)
+        val top = maxOf(rect.top, 0)
+        val right = minOf(rect.right, target.width, liveAlphaW)
+        val bottom = minOf(rect.bottom, target.height, liveAlphaH)
+        if (right <= left || bottom <= top) return
+        val w = right - left
+        val h = bottom - top
+        ensureToneScratch(w * h)
+        val px = tonePix
+        target.getPixels(px, 0, w, left, top, w, h)
+        var changed = false
+        for (y in 0 until h) {
+            val maskRow = (top + y) * liveAlphaW + left
+            val row = y * w
+            for (x in 0 until w) {
+                val i = maskRow + x
+                val a = mask[i].toInt() and 0xFF
+                if (a == 0) continue
+                mask[i] = 0
+                px[row + x] = DitherFlatten.srcOver(px[row + x], color, a)
+                changed = true
+            }
+        }
+        if (changed) target.setPixels(px, 0, w, left, top, w, h)
+    }
+
+    /** Draw a run of pen samples into the batch scratch and merge it into [mask] — the
+     *  live ink's own [layFlecks]. */
+    private fun layInk(points: List<StrokePoint>, rect: Rect, mask: ByteArray) {
+        val scratch = ensureBatch(rect.width(), rect.height()) ?: return
+        val canvas = batchCanvas ?: return
+        val save = canvas.save()
+        canvas.clipRect(0, 0, rect.width(), rect.height())
+        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
+        drawPenInk(canvas, points, contactPenColor, penWidth)
+        canvas.restoreToCount(save)
+        mergeBatchIntoLive(scratch, rect, mask)
+    }
+
+    /**
+     * One batch of a rubbing sweep has lifted graphite over [rect]: show it, now.
+     *
+     * The rubber goes through the panel like everything else on a direct page (Phase 29) —
+     * the corridor is re-flattened from the page images (the live layers are empty during an
+     * erase) and written straight into the driver, so the artist sees graphite coming up
+     * under the rubber rather than a frame's worth of it at a time. That is why this
+     * engine's [rasterEraseRedrawIntervalMs] is end-only there: the window's own mirror
+     * arrives once, at [finalizeEraseRedraw], and nothing in between is needed.
+     *
+     * The gate is the **page**, not [contactRubbing]: a rub is a rub whichever gesture asked
+     * for it — the rubber, the lasso eraser, a scribble — and every one of them is on a page
+     * whose cadence is end-only, so a batch not posted here would not be seen until the
+     * gesture finished. ([contactRubbing] decides the other half: which overlay machinery to
+     * skip at the ends of the contact.)
+     */
+    override fun onRasterErasedBatch(rect: Rect) {
+        if (!directRaster) return
+        toneAndPost(rect)
     }
 
     /**
@@ -1683,6 +2063,18 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  partial stroke the firmware already painted. */
     private var contactInking = false
 
+    /**
+     * Whether this erase contact is rubbing a page **we** are painting (Phase 29), latched
+     * at ACTION_DOWN like the rest.
+     *
+     * It decides two things, and both are the absence of something. The corridor is written
+     * into the panel as it lifts ([onRasterErasedBatch]) instead of waiting for a redraw;
+     * and none of the overlay machinery runs at either end of the contact — no down-time
+     * flush, no release, no clear ladder — because the daemon has been full-screen-disabled
+     * across this whole page and there is no overlay ink anywhere on it to chase.
+     */
+    private var contactRubbing = false
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         // Correct the digitizer offset before ANY consumer — writing, erasing and
         // hit-tests must all agree on where the pen physically is.
@@ -1705,13 +2097,22 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                             tool == Tool.ERASER ||
                             (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
                         )
+                    // A direct raster page has no overlay ink anywhere on it — the daemon
+                    // is disabled across the whole page — so there is nothing to flush,
+                    // release or chase with a ladder for an erase contact there.
+                    contactRubbing = contactErasing && directRaster
+                    // The panel speaks screen coordinates and a mid-layout read lies, so
+                    // every contact on a direct page takes the offset once, here — an
+                    // inking one, a rubbing one, and a lasso or scribble that turns out to
+                    // rub after the fact.
+                    if (directRaster) getLocationOnScreen(contactScreenLoc)
                     // Armed gesture-trace clear: normally already flushed from the
                     // hover approach (flushArmedOverlayClearOnApproach — a down-time
                     // clear pairs with a frame presented into THIS contact's ink and
                     // eats it; seen wiping lasso-trail starts on the Nomad). Keep the
                     // down flush only for erase contacts, whose overlay ink is
                     // unwanted anyway.
-                    if (contactErasing) {
+                    if (contactErasing && !contactRubbing) {
                         if (overlayClearArmed) flushArmedOverlayClear()
                         releaseFirmwareOverlay()
                     }
@@ -1721,11 +2122,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     // Latched like every other contact state: what previews this mark may
                     // not change under it half way through (a host arming the pen mid-stroke
                     // would otherwise leave half a mark on the panel and half on the overlay).
-                    contactDirect = contactInking && directPencil
+                    contactDirect = contactInking && directRaster && directStyle(penStyle)
                     if (contactDirect) beginLivePreview()
                     Log.i(
                         TAG,
-                        "contact: direct=$contactDirect inking=$contactInking panel=${panel.isOpen} " +
+                        "contact: direct=$contactDirect rubbing=$contactRubbing " +
+                            "inking=$contactInking panel=${panel.isOpen} " +
                             "mode=$pageMode style=$penStyle tool=$tool suppressed=$firmwareInkSuppressed",
                     )
                     // The lasso eraser (0.1.28) is always an outline contact — no box, no
@@ -1755,7 +2157,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             (event.actionMasked == MotionEvent.ACTION_UP ||
                 event.actionMasked == MotionEvent.ACTION_CANCEL)
         ) {
-            if (contactErasing) {
+            if (contactRubbing) {
+                // Nothing at all. The daemon painted nothing on this page, so there is no
+                // trace to chase — and the base has already run finalizeEraseRedraw at the
+                // gesture's end, which is the one redraw this sweep gets (the cadence is
+                // end-only here) and the window's mirror of what the panel already shows.
+            } else if (contactErasing) {
                 // Every erase contact ends with the clear ladder: the pen-down
                 // bake+clear can be eaten (an erased stroke's overlay twin stays frozen
                 // on the panel, hiding the repaint), and a contact that armed the
@@ -1784,6 +2191,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 releaseGestureTrace()
             }
             contactErasing = false
+            contactRubbing = false
             contactLassoOutline = false
             contactLassoDrag = false
             contactInking = false
@@ -1880,7 +2288,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /** (Re-)claim the firmware pen and turn on full-UI ink. Idempotent, safe to call often. */
     private fun setupFirmwareInk() {
         if (!firmware) return
-        // The panel driver, before the tool push: [applyToolToFirmware] asks [directPencil]
+        // The panel driver, before the tool push: [applyToolToFirmware] asks [directRaster]
         // whether to arm the needle or disable the daemon, and that answer depends on this.
         // Idempotent, and a refusal is remembered — every focus gain runs this method.
         if (isRattaDevice()) {
@@ -1890,7 +2298,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             // the page holds — so unlike every other change here, this one needs the
             // committed layer rebuilt and presented. Once per session: the call is
             // idempotent and every focus gain comes through here.
-            if (!wasOpen && panel.isOpen) refreshDitherDisplay()
+            if (!wasOpen && panel.isOpen) {
+                refreshDitherDisplay()
+                // The other order of the same event: the page was already raster and the
+                // panel has just come up under it.
+                announceDirectPath()
+            }
         }
         inkOwner = this // process-global claim — a predecessor's late teardown now skips
         penApproachRearmPending = true
@@ -1923,7 +2336,8 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         removeCallbacks(ditherRebuild)
         ditherCoalescer.reset()
         panel.close()
-        liveAlpha = null
+        liveGraphite = null
+        liveInk = null
         liveAlphaW = 0
         liveAlphaH = 0
         batchCanvas = null

@@ -119,8 +119,8 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   only the un-layered half hears **nothing** of ink on purpose: its `readPageRaster(rect)`
   reads graphite, so forwarding an ink change would hand it the wrong before-image and its
   undo would paint graphite where ink was. Silence beats a corrupted history.
-- **On Supernote the pencil's live ink is ours, not the daemon's — and three rules keep it
-  honest (Phase 28, 0.1.41).** `/dev/ebc` is openable by any app (the vendor policy line
+- **On Supernote the raster page's live ink is ours, not the daemon's — and three rules keep
+  it honest (Phase 28, 0.1.41; the whole page, every tool, Phase 29, 0.1.43).** `/dev/ebc` is openable by any app (the vendor policy line
   `allow appdomain rga_device chr_file { open ioctl map … }`, proved from an `untrusted_app`
   on a Nomad and a Manta), one byte per pixel of 4-bit grey in frame 0, shown by one
   `HTEINK_IOC_DISPAREA` (`0x48545701`, mode 7, flag 1 — Atelier's own call). So the raster
@@ -137,7 +137,14 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   produced, identical on both devices), while the panel was still being sent greys; that
   table stays as the record of a measurement nothing else holds. **(3) The daemon is
   full-screen-disabled while that pencil is armed**, from the same tool push that would have
-  armed the needle, or it paints its one flat grey over the grain. The physics behind the
+  armed the needle, or it paints its one flat grey over the grain. **Since Phase 29 that
+  disable is the whole PAGE, not one armed tool** (`directRaster` = panel open ∧ raster): the
+  pen previews through a second live layer, the rubber posts its corridor as each batch
+  lifts, and a page half painted by us and half by the daemon would be two answers to what
+  the page looks like. The cost is stated rather than hidden — a style this path cannot
+  preview honestly (`MARKER`'s single coverage pass, `DASH`'s whole-path pattern, `CROSS`'s
+  sampled marks) has no preview at all there and appears at pen-up, because bending a style's
+  appearance to make it previewable is the Phase 11 mistake. The physics behind the
   whole thing: **a solid grey dab lands black and lightens toward its target** (the 16-grey
   waveform passes through black) while **black flecks land at once** — so a scatter of black
   is the one thing this panel can preview truthfully, a pencil is a scatter, and a dither is
@@ -189,6 +196,24 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   union is large **or** when there are more than `DITHER_MAX_SETPIXELS_RECTS` (8) of them,
   because a scribble's sixty-four small `setPixels` calls were 651 ms of pen-up with not
   one of them slow enough to log.
+- **Where a preview is exact, the BAKE should be the preview — not a second rendering of
+  it (Phase 29, 0.1.43).** The direct path painted every fleck of a mark onto the panel and
+  then, at pen-up, ran `GraphiteGrain.of` and `drawPoints` over the whole stroke again to
+  produce the page image — a second answer to *what does this mark look like*, and the one
+  place the two could differ was the moment they were compared. It was also the cost: a dense
+  scribble's commit was **1185 ms** on a Nomad, of which the dither was 129 and the rest was
+  that re-derivation plus the host's before-image reads. So the live alpha layer is
+  composited into the page image instead (`bakeCapturedStroke`, a core seam defaulting to
+  false, so every other engine composites exactly as it did), with the **same integer
+  `SRC_OVER` the live flatten applied to it** — `DitherFlatten.srcOver`, one function, which
+  is what makes the mirror exact by construction rather than within a rounding. Two things
+  have to be got right and both are in the file: a live preview cannot know the **end cap**
+  (`GraphiteGrain.Sweep.finish`, pinned so `extend…` + `finish` == `of(points)` element for
+  element), and a mark's runs **overlap** by construction, so a pixel is taken out of the mask
+  as it lands or the overlap bakes darker than it previewed. And **the live half must route
+  through the bake's own composite**, not sit beside it as a matching formula: the two agreed
+  to within a part in 255, which is a dot flipped wherever that part fell across a dither
+  threshold.
 - **A live preview may lay a fleck only where the bake will put one — which makes
   `GraphiteGrain`'s PREFIX the contract, not the whole (Phase 28).** `of(points, …,
   prefix = true)` returns an exact ordered prefix of the finished stroke's grain, so a
@@ -236,6 +261,11 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   reason** — the seam stays rather than collapsing back into a constant, because the next
   panel will have its own answer. Ratta's 16 is the private `RASTER_ERASE_REDRAW_MS` in
   `RattaPaperView` since Phase 21 (0.1.34); the `setprop` door it was walked behind is gone.
+  **And on a direct raster page the answer is END-ONLY (Phase 29):** the rubbed corridor goes
+  straight into the panel as each batch lifts (`onRasterErasedBatch`), so a mid-sweep frame
+  would be a second, later opinion about pixels the hand can already see — the same reason
+  the mark's pen-up is a no-op there. *A cadence exists to show the artist something; where
+  something else already shows it, the right cadence is none.*
 - **A firmware preview cannot lean, so on Ratta the `PENCIL` bakes upright (Phase 22, 0.1.35).**
   `GraphiteGrain` widens a leaned lead up to ~11×; the Supernote live line is one width whatever
   the tilt, so a hairline drawn at a writing angle baked 10–15× wider than it previewed (found on

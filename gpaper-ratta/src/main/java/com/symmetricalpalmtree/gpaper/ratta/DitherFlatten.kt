@@ -18,10 +18,16 @@ import com.symmetricalpalmtree.gpaper.core.geometry.Dither
  * panel rather than in a test. So there is one copy, it is pure, and both halves call it.
  *
  * The flatten is `drawCommittedContent`'s own, in the same order and with the same
- * operator: white paper, the graphite image over it, the live flecks over that, and the
- * ink image through `DARKEN` — the darker of the two per channel, which is commutative, so
- * the pair has no top and no bottom to get wrong. The display half simply passes a live
- * alpha of zero, because by then the flecks are in the graphite image.
+ * operator: white paper, the graphite image with this contact's flecks over it, and the ink
+ * image with this contact's ink over *it*, the two meeting through `DARKEN` — the darker of
+ * the two per channel, which is commutative, so the pair has no top and no bottom to get
+ * wrong. The display half simply passes live alphas of zero, because by then the mark is in
+ * the image it belongs to.
+ *
+ * **Since Phase 29 the bake is here too** ([srcOver]). The live layer is composited into
+ * the page image with the very arithmetic the live flatten applied to it, so the mirror is
+ * a property of one function rather than of two that happen to agree: what the panel was
+ * painted with under the nib is, pixel for pixel, what the page now holds.
  *
  * Pure Kotlin — no Android imports, JVM-tested.
  */
@@ -36,27 +42,51 @@ internal object DitherFlatten {
     private const val LUMA_G = 151
     private const val LUMA_B = 28
 
-    /** The grey (0…255) a page pixel shows. See the class KDoc for the order. */
-    fun luma(graphite: Int, liveAlpha: Int, liveColor: Int, ink: Int): Int {
-        // White paper.
+    /**
+     * The grey (0…255) a page pixel shows, with a live layer over **each** image: the
+     * graphite side is the graphite image plus [liveGraphite] flecks in [graphiteColor],
+     * the ink side is the ink image plus [liveInk] in [inkColor], and the two meet through
+     * `DARKEN`. See the class KDoc for the order.
+     *
+     * Both live alphas are `0` for the display half, where whatever was live has been
+     * baked into the image beside it, and at most one of them is ever non-zero under the
+     * pen: one contact is one tool and one layer (Phase 29).
+     */
+    fun luma(
+        graphite: Int,
+        liveGraphite: Int,
+        graphiteColor: Int,
+        ink: Int,
+        liveInk: Int,
+        inkColor: Int,
+    ): Int = luma(
+        srcOver(graphite, graphiteColor, liveGraphite),
+        srcOver(ink, inkColor, liveInk),
+    )
+
+    /**
+     * The grey (0…255) the two page images alone show: white paper, the graphite image
+     * over it, the ink image through `DARKEN`.
+     *
+     * **This is the only flatten there is.** The live half above does not have a second
+     * one: it composites its live layer into the page pixel with [srcOver] — the very call
+     * the bake makes into the page image — and then asks this. So "what the panel is
+     * painted with under the nib" and "what the window shows once the mark has baked" are
+     * not two formulas that agree, they are one formula applied to one number, and the
+     * mirror is exact by construction rather than within a rounding. (It was two, until
+     * Phase 29: a live blend beside an over-white blend, agreeing to within a part in 255,
+     * which is a dot flipped wherever that part fell across a dither threshold.)
+     */
+    fun luma(graphite: Int, ink: Int): Int {
         var r = 255
         var g = 255
         var b = 255
-        // The graphite image, over the paper.
         val ga = graphite ushr 24
         if (ga != 0) {
             r = over(graphite ushr 16 and 0xFF, ga)
             g = over(graphite ushr 8 and 0xFF, ga)
             b = over(graphite and 0xFF, ga)
         }
-        // This contact's live flecks, in the lead's own colour, over that.
-        if (liveAlpha != 0) {
-            val a = liveAlpha and 0xFF
-            r = ((liveColor ushr 16 and 0xFF) * a + r * (255 - a)) / 255
-            g = ((liveColor ushr 8 and 0xFF) * a + g * (255 - a)) / 255
-            b = ((liveColor and 0xFF) * a + b * (255 - a)) / 255
-        }
-        // The ink image, through DARKEN.
         val ia = ink ushr 24
         if (ia != 0) {
             val ir = over(ink ushr 16 and 0xFF, ia)
@@ -69,18 +99,74 @@ internal object DitherFlatten {
         return (LUMA_R * r + LUMA_G * g + LUMA_B * b) shr 8
     }
 
+    /** The grey a page pixel shows with a live layer on the **graphite** side only — the
+     *  pencil's own call, and what every caller meant before the pen went direct. */
+    fun luma(graphite: Int, liveAlpha: Int, liveColor: Int, ink: Int): Int =
+        luma(graphite, liveAlpha, liveColor, ink, 0, 0)
+
     /**
-     * Whether page pixel ([x], [y]) shows **black** — the flatten through [Dither].
+     * Whether page pixel ([x], [y]) shows **black** — the flatten through [Dither], with a
+     * live layer over each image (see the six-argument [luma]).
      *
      * [x] and [y] are page coordinates, the same ones both halves count in, which is what
      * makes a pixel dither identically under the nib and after the bake.
      */
+    fun black(
+        graphite: Int,
+        liveGraphite: Int,
+        graphiteColor: Int,
+        ink: Int,
+        liveInk: Int,
+        inkColor: Int,
+        x: Int,
+        y: Int,
+    ): Boolean = Dither.black(luma(graphite, liveGraphite, graphiteColor, ink, liveInk, inkColor), x, y)
+
+    /** [black] with a live layer on the **graphite** side only. */
     fun black(graphite: Int, liveAlpha: Int, liveColor: Int, ink: Int, x: Int, y: Int): Boolean =
-        Dither.black(luma(graphite, liveAlpha, liveColor, ink), x, y)
+        black(graphite, liveAlpha, liveColor, ink, 0, 0, x, y)
 
     /** One channel of an unpremultiplied pixel composited over white paper. */
     private fun over(channel: Int, alpha: Int): Int =
         if (alpha == 255) channel else (channel * alpha + 255 * (255 - alpha)) / 255
+
+    /**
+     * [src]'s colour at [srcAlpha] composited `SRC_OVER` onto [dst] — unpremultiplied
+     * ARGB in, unpremultiplied ARGB out, which is what `Bitmap.getPixels` gives and
+     * `setPixels` takes.
+     *
+     * **This is the bake on the direct path** (Phase 29). The live layer is one alpha byte
+     * a pixel and the mark's colour is one colour, so laying the mark into the page image
+     * is this, once per pixel the mark touched — no second `GraphiteGrain`, no second
+     * `drawPoints`, no `Canvas` at all. It lives here, beside the live flatten it has to
+     * agree with: [luma]'s live half composites the same colour at the same alpha over the
+     * same page pixel, so what the panel was painted under the nib and what the window
+     * shows afterwards are the same arithmetic on the same numbers, and the mirror is a
+     * property of one function rather than of two that happen to match today.
+     *
+     * A `Canvas` works in premultiplied pixels and may round a channel a hair differently;
+     * that difference is a device question and always was (see the class KDoc).
+     */
+    fun srcOver(dst: Int, src: Int, srcAlpha: Int): Int {
+        if (srcAlpha <= 0) return dst
+        if (srcAlpha >= 255) return 0xFF000000.toInt() or (src and 0xFFFFFF)
+        val da = dst ushr 24
+        val outA = srcAlpha + da * (255 - srcAlpha) / 255
+        if (outA == 0) return 0
+        var out = outA shl 24
+        var shift = 0
+        while (shift <= 16) {
+            val s = src ushr shift and 0xFF
+            val d = dst ushr shift and 0xFF
+            // Premultiplied add, backed out by the result's alpha — the composite a Canvas
+            // performs, in integers.
+            val num = s * srcAlpha * 255 + d * da * (255 - srcAlpha)
+            val c = (num / (255 * outA)).coerceIn(0, 255)
+            out = out or (c shl shift)
+            shift += 8
+        }
+        return out
+    }
 
     // ── The band kernel: the same answer, a page at a time (2026-09-19) ──────
     //
