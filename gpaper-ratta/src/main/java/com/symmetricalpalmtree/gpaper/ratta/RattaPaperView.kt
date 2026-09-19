@@ -1071,7 +1071,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         }
         // A rect stays synchronous: it precedes a present that is already on its way, and
         // one deferred would be a mark that appears a frame late.
-        if (ditherCoalescer.onRect() == DitherCoalescer.Action.REBUILD_RECT) regenDither(rect)
+        if (ditherCoalescer.onRect() == DitherCoalescer.Action.REBUILD_RECT) {
+            val t0 = System.nanoTime()
+            regenDither(rect)
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            if (ms >= 5) Log.i(TAG, "dither: rect $rect in $ms ms")
+        }
     }
 
     /** The posted whole-page rebuild: build it once, then present it once. */
@@ -1537,6 +1542,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         val toolType = event.getToolType(0)
         val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS ||
             toolType == MotionEvent.TOOL_TYPE_ERASER
+        val tEntry = System.nanoTime()
+        val erasingAtEntry = contactErasing
+        val directAtEntry = contactDirect
         if (isStylus && firmware) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -1597,7 +1605,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             // hover tracking alone would miss them.
             updateBarrelSuppress(event)
         }
+        val tSuper = System.nanoTime()
         val handled = super.onTouchEvent(event)
+        val tAfterSuper = System.nanoTime()
         if (isStylus && firmware &&
             (event.actionMasked == MotionEvent.ACTION_UP ||
                 event.actionMasked == MotionEvent.ACTION_CANCEL)
@@ -1635,6 +1645,16 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             contactLassoDrag = false
             contactInking = false
             contactDirect = false
+        }
+        // Temporary (ebc-maint): an input event that held the main thread ≥ 100 ms says where.
+        val tEnd = System.nanoTime()
+        if (tEnd - tEntry >= 100_000_000L) {
+            Log.w(
+                TAG,
+                "slow touch ${MotionEvent.actionToString(event.actionMasked)}: before " +
+                    "${(tSuper - tEntry) / 1_000_000} ms, base ${(tAfterSuper - tSuper) / 1_000_000} ms, " +
+                    "after ${(tEnd - tAfterSuper) / 1_000_000} ms (erasing=$erasingAtEntry direct=$directAtEntry)",
+            )
         }
         return handled
     }

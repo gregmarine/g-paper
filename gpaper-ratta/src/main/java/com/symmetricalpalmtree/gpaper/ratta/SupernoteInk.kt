@@ -143,7 +143,10 @@ internal object SupernoteInk {
             data.writeInterfaceToken(IFACE_TOKEN)
             data.writeString(APP_NAME)
             writeArgs(data)
+            val t0 = System.nanoTime()
             b.transact(code, data, reply, 0)
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            if (ms >= 100) Log.w(TAG, "slow firmware transact($code): $ms ms")
         } catch (t: Throwable) {
             // DeadObjectException etc. — drop the cached proxy so the next call re-looks up.
             fail("transact($code) failed: ${t.message}")
