@@ -101,6 +101,22 @@ and stays. That is the 16-grey partial waveform: it passes through black on the 
 **Black-only flecks whose density follows pressure "work perfectly — very much like Atelier."**
 Atelier's pencils are a MyPaint dab scatter; the shade is chosen, not pressure-driven.
 
+## Atelier read back (2026-09-19): shades are densities of black
+
+`adb shell am broadcast -a com.symmetricalpalmtree.gpaper.probe.DUMP` dumps the frames while
+another app is in front. With Atelier's HB pencil and one stroke per shade of its sixteen-step
+Grayscale palette on screen, frame 0 held **level 0 only** for every stroke — Atelier never sends
+the panel a grey for a pencil; a lighter shade is a sparser scatter of black. Black pixels per
+pixel of stroke length, panel frame, Nomad, one stroke each (shade hex from Atelier's palette):
+
+| shade | 000000 | 505050 | 606060 | 686868 | 707070 | 808080 | 888888 | 909090 | a0a0a0 | aaaaaa | b6b6b6 | c0c0c0 | c8c8c8 | d0d0d0 | dddddd |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| px/px | 2.67 | 2.19 | 2.05 | 1.93 | 1.85 | 1.67 | 1.55 | 1.49 | 1.28 | 1.12 | 0.99 | 0.85 | 0.72 | 0.67 | 0.40 |
+| rel. | 1.00 | 0.82 | 0.77 | 0.72 | 0.69 | 0.63 | 0.58 | 0.56 | 0.48 | 0.42 | 0.37 | 0.32 | 0.27 | 0.25 | 0.15 |
+
+Fit (within a few %): **relative density = 1 − 0.85 · (luma / 221)^1.5**, luma < 224; white is a
+lightener, not a density. This is the seed for `RattaPencilInk` in `gpaper-ratta` (Phase 28).
+
 Other doors seen but not walked: `MISCCTL` (`CLERA_PW_RECT`, `SYNCWIN`), the pen-write path
 (frame 1, mode 9, flag 1|5 — only black showed, consistent with a 1-bit overlay), and the
 boot-classpath `EinkPWCoreController` (`nativeAddPWRect` → `set_pw_fsb` / `postEinkPWRectFastHL`
