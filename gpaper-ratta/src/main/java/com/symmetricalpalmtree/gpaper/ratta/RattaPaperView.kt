@@ -529,12 +529,24 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /**
      * `PENCIL` bakes upright while the needle previews it: the firmware's live line cannot
      * widen with lean, so a bake that did would be up to ~11× the line that was previewed
-     * (0.1.35, found on the Manta). Gated exactly as [bakePressure] is, and for the same
-     * reason — the direct panel preview lays the grain itself, at whatever width the lean
-     * gives it, so tilt comes back with pressure and a laid-over lead previews broad.
+     * (0.1.35, found on the Manta). Unlike [bakePressure] this does NOT relax on the direct
+     * panel path: the preview could show a leaned lead now, but the user's decision
+     * (2026-09-18, the Manta walk — "too wide for a 1.2 px lead") keeps the Supernote
+     * pencil upright. Width comes from the lead size alone.
      */
     override fun bakeTilt(style: StrokeStyle, tilt: Float): Float =
-        if (style == StrokeStyle.PENCIL && firmware && !panel.isOpen) 0f else tilt
+        if (style == StrokeStyle.PENCIL && firmware) 0f else tilt
+
+    /**
+     * On the direct panel path the pencil's flecks are opaque, for the bake and the live
+     * preview alike (Phase 28, the user's Nomad walk of 2026-09-18): the panel's 16-grey
+     * waveform lands a black pixel on its first frame but reaches a grey only by passing
+     * through black, so alpha-graded flecks trailed the nib and read as a solid line, while
+     * black ones landed under it — the probe's finding, repeated inside the engine. Tone is
+     * density and fleck size, which is what pressure already drives in `GraphiteGrain`.
+     * The needle fallback keeps the alpha-graded bake it was measured with.
+     */
+    override val opaquePencilFlecks: Boolean get() = firmware && panel.isOpen
 
     // ── The direct pencil: graphite painted onto the panel (Phase 28, 0.1.41) ──
     //
@@ -591,6 +603,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /** Whether this contact is previewing directly (latched at ACTION_DOWN, like the
      *  engine's other contact latches, so the answer cannot change under it mid-stroke). */
     private var contactDirect = false
+    private var liveEvents = 0
 
     /** Where the view sits on screen, read once per contact: the panel's coordinates are
      *  the screen's, and a mid-layout read lies. */
@@ -615,6 +628,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun onLiveStrokeExtended(points: List<StrokePoint>) {
         if (!contactDirect) return
         val mask = ensureLiveAlpha() ?: return
+        liveEvents++
         // Through the bake's own seams, even though both are identity on this path: a
         // preview that reaches the renderer by a different road is a preview that can drift.
         val grain = GraphiteGrain.of(
@@ -807,6 +821,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /** A direct contact begins: nothing laid yet, nothing to clear, and the view's screen
      *  offset read once (the panel speaks screen coordinates). */
     private fun beginLivePreview() {
+        liveEvents = 0
         laidFlecks = 0
         liveRect.setEmpty()
         getLocationOnScreen(contactScreenLoc)
@@ -816,6 +831,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  same pixels (pen-up — the window's frame is the mirror) or re-tones the rect itself
      *  (a cancelled contact). */
     private fun clearLivePreview() {
+        if (contactDirect) Log.i(TAG, "live preview: $liveEvents events, $laidFlecks flecks, rect $liveRect")
         val mask = liveAlpha
         if (mask != null && !liveRect.isEmpty) {
             for (y in liveRect.top until liveRect.bottom) {
@@ -1145,6 +1161,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     // would otherwise leave half a mark on the panel and half on the overlay).
                     contactDirect = contactInking && directPencil
                     if (contactDirect) beginLivePreview()
+                    Log.i(
+                        TAG,
+                        "contact: direct=$contactDirect inking=$contactInking panel=${panel.isOpen} " +
+                            "mode=$pageMode style=$penStyle tool=$tool suppressed=$firmwareInkSuppressed",
+                    )
                     // The lasso eraser (0.1.28) is always an outline contact — no box, no
                     // drag; its x-trail rides the same gesture-trace ladder at lift.
                     if (!contactErasing && tool == Tool.LASSO_ERASER) contactLassoOutline = true

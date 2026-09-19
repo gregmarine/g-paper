@@ -1974,6 +1974,13 @@ the preview and the bake agree to the eye at pen-up; that a mid-stroke frame fro
 chrome does not spoil the preview (the engine presents none, but nothing stops a host); that the
 per-batch flatten keeps up with a fast hand on a Nomad; and every question of feel.
 
+**First walk (2026-09-18, Nomad + Manta, both direct in the log):** *"feels like solid mode, not
+flecks; too wide for 1.2 px on the Manta."* Two causes, both fixed the same evening: (1) the
+flecks were alpha-graded greys and the panel's waveform trails on a grey — **flecks are now
+opaque on the direct path**, bake and preview alike (`opaquePencilFlecks` seam, false everywhere
+else); (2) tilt had come back with pressure and a leaned hairline widened — **the user's
+decision: the Supernote pencil stays upright** (`bakeTilt` 0 on both paths).
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

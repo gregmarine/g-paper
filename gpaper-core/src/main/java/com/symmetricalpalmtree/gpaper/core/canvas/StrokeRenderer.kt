@@ -65,6 +65,7 @@ internal object StrokeRenderer {
         style: StrokeStyle,
         paint: Paint,
         seed: Int = 0,
+        opaqueFlecks: Boolean = false,
     ) {
         if (points.isEmpty()) return
         resetPaint(paint, color, width)
@@ -74,7 +75,7 @@ internal object StrokeRenderer {
             StrokeStyle.CALLIGRAPHY,
             -> drawPen(canvas, points, paint)
 
-            StrokeStyle.PENCIL -> drawPencil(canvas, points, color, width, seed, paint)
+            StrokeStyle.PENCIL -> drawPencil(canvas, points, color, width, seed, paint, opaqueFlecks)
             StrokeStyle.MARKER -> drawMarker(canvas, points, color, width, paint)
             StrokeStyle.DASH -> drawDash(canvas, points, width, paint)
             StrokeStyle.CROSS -> drawCross(canvas, points, width, paint)
@@ -104,8 +105,9 @@ internal object StrokeRenderer {
         width: Float,
         seed: Int,
         paint: Paint,
+        opaque: Boolean,
     ) {
-        drawPencilFlecks(canvas, GraphiteGrain.of(points, width, seed), 0, color, width, paint)
+        drawPencilFlecks(canvas, GraphiteGrain.of(points, width, seed), 0, color, width, paint, opaque)
     }
 
     /**
@@ -126,6 +128,7 @@ internal object StrokeRenderer {
         color: Int,
         width: Float,
         paint: Paint,
+        opaque: Boolean = false,
     ) {
         if (from >= grain.count) return
         resetPaint(paint, color, width)
@@ -143,7 +146,11 @@ internal object StrokeRenderer {
             // grouped, so this costs nothing and is what stops mid-tones chaining into bristle.
             // Capped at the lead's width, so a hairline lead bakes as the hairline it previewed as.
             paint.strokeWidth = GraphiteGrain.fleckPx(level, width)
-            paint.color = withAlphaFactor(color, GraphiteGrain.levelAlpha(level))
+            // Opaque flecks (Phase 28, Supernote): darkness from density and size alone.
+            // A 16-grey e-ink panel reaches black on its first frame and a grey only by
+            // passing through black, so a grey fleck trails the nib while a black one lands —
+            // tone must come from how many flecks catch, never from what shade each is.
+            paint.color = if (opaque) color else withAlphaFactor(color, GraphiteGrain.levelAlpha(level))
             canvas.drawPoints(packed, 0, n, paint)
         }
     }
