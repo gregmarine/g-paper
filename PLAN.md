@@ -2487,6 +2487,16 @@ question from 0.1.42; whether the pen-up of a dense scribble is now under the ~3
 asks for; whether a `SRC_OVER` composited in integers is indistinguishable from the `Canvas`
 bake beside it on the same page; and every question of feel.
 
+**Phase 29 closed (2026-09-19, the user's Nomad walk):** *"The pen and eraser work seem solid. And
+much better this way!"* Page-flip ghosting: a full framework refresh at every turn
+(`EinkManager.screenRefresh(_, 1)`, Notesprout-side) cleared it but was rolled back — *"a bit much;
+I can always manually refresh"*; presenting a loaded page through the panel in mode 7 first
+(`PRESENT_LOADED_PAGE_VIA_PANEL`) made **no difference** and is off. The user's own observation
+settles the mechanism: solid pen strokes clear fine, dense pencil scribbles ghost worst, plain
+pencil lines less — the ghost is the fine dot field itself (thousands of isolated single-pixel
+transitions), not the waveform choice. Accepted as is; one future thread if ever wanted: a coarser
+dither (fewer, larger dots at the same tone). `direct-raster` merged to `main`; 0.1.43 published.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

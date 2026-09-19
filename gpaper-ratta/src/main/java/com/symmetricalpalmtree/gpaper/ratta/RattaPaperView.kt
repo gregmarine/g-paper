@@ -229,7 +229,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
          * back — *"a bit much"*. Whether this is the quiet form of the same cure is the
          * user's walk to decide; `false` restores 0.1.43 exactly.
          */
-        const val PRESENT_LOADED_PAGE_VIA_PANEL = true
+        const val PRESENT_LOADED_PAGE_VIA_PANEL = false
 
         /**
          * Overlay-clear retry ladder (overlay law 2): a clear issued in the wake of a
