@@ -827,7 +827,17 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         // Nomad's main thread for **848 ms** inside this call (measured through NSE ·
         // Sketch). These are the same rects the host is told about ([rasterDirtyAlong]),
         // which is the point: a mark costs its ink's area on both seams or on neither.
-        announce?.forEach { if (!it.isEmpty) onRasterPixelsChanged(it) }
+        //
+        // And they go in ONE call (2026-09-19): a mark lands once. An engine that has to
+        // put the runs somewhere — Ratta's dithered mirror — pays a fixed cost per
+        // landing, and a scribble filling the middle of the page arrives as up to
+        // [RASTER_DIRTY_MAX_RECTS] runs, none of them big enough to be worth a log line
+        // and all of them together most of a **651 ms** pen-up on a Nomad. The batch
+        // lets it flatten each run and land them once.
+        if (announce != null) {
+            val rects = announce.filter { !it.isEmpty }
+            if (rects.isNotEmpty()) onRasterPixelsChanged(rects)
+        }
     }
 
     /**
@@ -1435,12 +1445,35 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * **it is called before the redraw that presents the change**, so the record can use
      * what it rebuilt. It must not present anything itself; its callers do that.
      *
-     * **A mark arrives as its RUNS, one call each** (2026-09-19), the same rects the host
-     * hears ([rasterDirtyAlong]) — for the reason 0.1.33 gave the host's half, found again
-     * from the other side: a rebuild of the announced area costs the *announced* area, and
-     * one union rect per batch made a long diagonal cost a large fraction of the page.
+     * **A mark arrives as its RUNS, in one batched call** (2026-09-19) — see the list
+     * form, [onRasterPixelsChanged]. This single-rect form is what everything else uses:
+     * an erase batch as it is rubbed, an undo patch as it is swapped, a load or a clear
+     * (null).
      */
     protected open fun onRasterPixelsChanged(rect: Rect?) {}
+
+    /**
+     * The raster page's pixels have just changed over [rects] — **one mark's runs, as one
+     * piece of news**, the same rects the host hears ([rasterDirtyAlong]); never empty,
+     * and every rect in it non-empty.
+     *
+     * The default forwards each rect to the single-rect [onRasterPixelsChanged], so an
+     * engine that does not care that they arrived together sees exactly what it always
+     * did. An engine that keeps a second image of the page should override *this* one: the
+     * runs are the mark's ink and the union is not, so it can pay the ink's area to work
+     * the pixels out and still land them in one go.
+     *
+     * That distinction is the whole reason the batch exists. 0.1.33's per-run rects
+     * (arrived at again from the engine's side earlier the same day) made a long diagonal
+     * cost its ink instead of its bounding box, and a corner-to-corner stroke's pen-up
+     * went from 848 ms to under 200 on a Nomad. But a scribble filling the middle of the
+     * page arrives as up to [RASTER_DIRTY_MAX_RECTS] runs, each one small — and **651 ms**
+     * of pen-up with no single rect over 20 ms is that fixed per-landing cost, paid
+     * sixty-four times. One mark, one landing.
+     */
+    protected open fun onRasterPixelsChanged(rects: List<Rect>) {
+        for (r in rects) onRasterPixelsChanged(r)
+    }
 
     /** Content ids the committed record leaves to a live layer: a drag's, plus the
      *  object under transform (its whole mode is a live layer, not just its gestures). */

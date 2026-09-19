@@ -2165,7 +2165,8 @@ merge on the user's word.
 found — and a third the walk after it.** Publishes **0.1.42**, branch `ebc-maint`. One —
 the page-turn cost — stands; one — an idle clean pass for the halo — was built, walked and
 taken out again; and the walk that judged the first found a **pen-up** holding the main
-thread for most of a second, which is the third and last section below.
+thread for most of a second — which took two goes to put right, and is the third and
+fourth sections below.
 
 *The pencil first and the ink a moment later.* A page open cost **two** whole-page dither
 rebuilds — the host loads graphite and ink as two back-to-back `loadPageRaster` calls, each
@@ -2242,6 +2243,36 @@ line is raised to **20 ms** (a page turn is still always logged), and the tempor
 `slow touch` / `slow firmware transact` timers **stay for one more walk** — they are
 temporary by construction and come out when the measuring stops.
 
+*A mark lands once.* The per-run fix above worked for **lines**: measured on the Nomad
+after it, two corner-to-corner pencil strokes commit in **138–198 ms** at pen-up where one
+had cost 848, and no rect rebuild reaches the 20 ms log line. It did nothing for a **large
+pencil scribble filling the middle of the page**, which committed in **651 ms** — also with
+no single rect slow enough to log. That shape is the other half of the same lesson. A
+scribble is not one long run; it is up to sixty-four short ones (the core's
+`RASTER_DIRTY_MAX_RECTS`), each of them small, each of them cheap — and each of them a
+separate `setPixels`, which costs something **fixed per call** whatever the rect. Sixty-four
+of those, none over a few milliseconds, is most of two thirds of a second, and every one of
+them is under the threshold that would have said so. So the runs stop arriving one at a
+time. `compositeIntoRaster` now calls a new `protected open fun
+onRasterPixelsChanged(rects: List<Rect>)` — the batch, **one mark, one piece of news** —
+whose default forwards each rect to the single-rect form, so no other engine sees a change
+and the single-rect form stays exactly what the erase batches, the undo patches and the
+loads use. `RattaPaperView` overrides the list form: it flattens **each run's rect** into
+`ditherBytes`, so the per-pixel arithmetic still costs the ink's area and never the union's
+(which is the whole of 0.1.33's rule and must not be traded away to buy this), and then
+lands them **once** — one `copyPixelsFromBuffer` of the page when the union is
+`DITHER_WHOLE_COPY_FRACTION` of it or more **or** the runs number more than
+`DITHER_MAX_SETPIXELS_RECTS` (8, a starting value: one page copy is a few milliseconds and
+eight `setPixels` are more), otherwise one `setPixels` per run as before. Through the
+coalescer exactly as a single rect is — a pending whole-page rebuild subsumes the whole
+batch, because it will cover every run in it. `DitherCost` gains the count rule beside the
+area one (`preferWholeCopyForRuns`, pure, 7 new tests — including that a batch of one
+answers exactly as the single-rect form does, which is what keeps the two from drifting),
+and `regenDither` is split into the three pieces both paths now share: `flattenDither`,
+`landDitherRect`, `landWholeDither`. The batch's log line at 20 ms names what a walk needs
+to judge it by: `dither: N runs, union WxH in M ms (page copy|setPixels)`. The temporary
+`slow touch` / `slow firmware transact` timers stay.
+
 **Deviations from the brief, and why**
 
 1. **`copyPixelsFromBuffer` is one call for the page, not one per band.** It copies the
@@ -2259,11 +2290,22 @@ temporary by construction and come out when the measuring stops.
    *a corner-to-corner hairline covers itself for a fraction of the page*, which is the
    whole saving, and `DitherCostTest` holds the landing rule. The wiring between them —
    that the seam passes the caller's rects rather than a union — is read, not asserted.
+   The same is true of the **batch**: that `compositeIntoRaster` makes one call of the
+   runs and that `RattaPaperView` overrides the list form rather than inheriting the
+   forwarding default is read, not asserted; what is pinned is that the default forwards
+   (by construction — it is a `for` over the single-rect form) and that
+   `preferWholeCopyForRuns` agrees with `preferWholeCopy` on a batch of one.
+3. **The count rule is a second named function, not a widened `preferWholeCopy`.** A batch
+   asks a different question — *is this many, or is this large* — and the single-rect form
+   is still used, unchanged, by the erase and undo paths. One function answering both with
+   a defaulted argument would have made the erase path silently carry a run count of one,
+   which is true but is not what it means.
 
 **Still unwalked:** whether the page turn is now under a page turn's budget on a Nomad and a
 Manta — the ms is still logged, and the target it is judged against is 100 ms — and whether
-a pen-up of a long stroke is now invisible, which is what the per-rect log line at 20 ms and
-the kept `slow touch` timer are there to answer.
+a pen-up is now invisible **for a scribble as well as for a line** (the line is measured:
+138–198 ms), which is what the batch's log line at 20 ms and the kept `slow touch` timer are
+there to answer.
 
 ## Standing Open Questions (ask as they become relevant)
 

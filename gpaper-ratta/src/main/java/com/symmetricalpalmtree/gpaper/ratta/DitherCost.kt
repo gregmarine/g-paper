@@ -2,8 +2,9 @@ package com.symmetricalpalmtree.gpaper.ratta
 
 /**
  * Which way a dither rebuild should land its bytes in the `ALPHA_8` display image — the
- * one arithmetic decision in `RattaPaperView.regenDither`, kept pure so the rule can be
- * stated by a JVM test rather than guessed at from a page turn (2026-09-19 maintenance).
+ * one arithmetic decision in `RattaPaperView`'s rebuilds, for a single rect and for a
+ * mark's runs landed together, kept pure so the rule can be stated by a JVM test rather
+ * than guessed at from a page turn (2026-09-19 maintenance).
  *
  * There are two ways to get bytes into that bitmap and they scale differently.
  * `copyPixelsFromBuffer` copies the **whole** bitmap in one memcpy — a few milliseconds
@@ -40,5 +41,40 @@ internal object DitherCost {
         val page = pageW.toLong() * pageH.toLong()
         if (rect >= page) return true
         return rect.toDouble() >= page.toDouble() * fraction
+    }
+
+    /**
+     * The same question for **one mark's runs landed together**: [runCount] rects whose
+     * union is [unionW] × [unionH]. True when they should land through one whole-bitmap
+     * copy rather than a `setPixels` each.
+     *
+     * Two ways to earn the copy, because a batch has two ways to be expensive. It can be
+     * *large* — the union from [fraction] of the page upward, which is
+     * [preferWholeCopy]'s own rule and wants the memcpy for the same reason a big rect
+     * does. Or it can be *many*: `setPixels` costs something fixed per call whatever the
+     * rect's size, and past [maxRects] of them the one page copy is simply cheaper than
+     * the calls alone. That second half is what a large pencil scribble is — up to
+     * sixty-four runs, none of them big, **651 ms** of pen-up on a Nomad with not one
+     * rect slow enough to log.
+     *
+     * Note what this never touches: how much of the page gets *flattened*. That stays the
+     * runs' own area, never the union's — the arithmetic per pixel is the dear part and a
+     * mark must not start paying for the white space its diagonal spans. This is only
+     * about how the bytes already worked out reach the bitmap.
+     *
+     * False for no runs and for an unsized page: there is nothing to land.
+     */
+    fun preferWholeCopyForRuns(
+        runCount: Int,
+        unionW: Int,
+        unionH: Int,
+        pageW: Int,
+        pageH: Int,
+        fraction: Float,
+        maxRects: Int,
+    ): Boolean {
+        if (runCount <= 0 || pageW <= 0 || pageH <= 0) return false
+        if (runCount > maxRects) return true
+        return preferWholeCopy(unionW, unionH, pageW, pageH, fraction)
     }
 }

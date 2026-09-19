@@ -84,6 +84,13 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   runs now, the caller's own list rather than a second computation of it. **A bounding box
   is a bad model of a line wherever somebody pays per pixel for it** — and the second place
   that was true went unnoticed for six releases because it was reasoned about as free.
+  **And a mark lands ONCE**: the runs go in one batched call,
+  `onRasterPixelsChanged(rects: List<Rect>)` (default: forwards each to the single-rect
+  form, so nothing else changed), because the per-run fix cured the *line* — 848 ms → 138–198
+  — and left the *scribble* at **651 ms**, up to sixty-four small rebuilds each too cheap to
+  log. An engine keeping a second image of the page must override the list form: flatten per
+  run, land once. **A fixed per-call cost paid sixty-four times hides from every per-call
+  threshold there is.**
   **And `loadPageRaster` is now silent, as `swapPageRaster` always was**: a page the host
   replaced is the host's own news, and the flag every host carried to swallow the load's
   callbacks (`loadingRaster` in Paintsprout's `SketchbookActivity` and SN's `SketchActivity`)
@@ -177,6 +184,11 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   expansion `setPixels` wants (`DitherCost`, pure). The invariant that makes it legal is
   that the array is never behind the bitmap; it is allocated and dropped *with* the image,
   because one left over from the previous page would be landed whole onto a fresh one.
+  **A size decision AND a count one**: a mark's runs arrive as one batch, flatten one at a
+  time — the ink's area, never the union's — and land together, by the page copy when the
+  union is large **or** when there are more than `DITHER_MAX_SETPIXELS_RECTS` (8) of them,
+  because a scribble's sixty-four small `setPixels` calls were 651 ms of pen-up with not
+  one of them slow enough to log.
 - **A live preview may lay a fleck only where the bake will put one — which makes
   `GraphiteGrain`'s PREFIX the contract, not the whole (Phase 28).** `of(points, …,
   prefix = true)` returns an exact ordered prefix of the finished stroke's grain, so a
