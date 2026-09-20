@@ -499,6 +499,19 @@ interface PaperView {
      */
     fun renderToBitmap(): Bitmap?
 
+    /**
+     * Something other than drawing is about to happen — chrome is about to open over the
+     * page, the chrome is flipping, a panel is about to hang over it — and anything the
+     * engine has been showing provisionally should be shown as it truly is **first**
+     * (0.1.47). On Supernote's direct raster path a baked pen mark stays on the glass as
+     * the dither it was drawn as until the next non-drawing event; the engine sees a tool
+     * or pen change, a rub, an undo and a page load by itself, but a host's own chrome it
+     * cannot see, and a settle painted straight onto the panel *after* a bar has opened
+     * would paint over the bar. Call this before showing the chrome. A no-op on every
+     * other engine and whenever nothing is waiting.
+     */
+    fun settleDisplay() {}
+
     // ── Listeners ────────────────────────────────────────────────────────────
 
     /** Set (or clear with null) the primary event listener. */

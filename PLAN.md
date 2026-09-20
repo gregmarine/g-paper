@@ -2577,6 +2577,22 @@ anything other than drawing will rebake with the correct tone."*
 - What the engine cannot see — a chrome flip, a finger gesture with no raster change — does not
   settle; the host would need a door for that, which nobody has asked for.
 
+### Phase 33 — The host's settle door (post-v0.1.0)
+**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.47 · branch `ink-true`.
+The user's walk of Phase 32: *"when I tap the pen tool to change shades, it doesn't immediately
+do the rebake. But once I select another shade, it does … if part of the pen stroke is under the
+palette overlay, it paints that area over the overlay with the overlay still showing … If the
+rebake happened before the overlay pops up, that probably wouldn't happen?"* Two causes: the
+re-tap changes no engine property, and a settle posts straight to the panel, which knows nothing
+of a bar floating over the page.
+- **`PaperView.settleDisplay()`** — a defaulted no-op on the interface; Ratta settles the waiting
+  ink through the window **and** the panel. The host calls it before its chrome opens (SN's sketch
+  face: before the shade panel shows, before a chrome flip).
+- **Setter-triggered settles are window-only** (`settleInkTone(panel = false)`): the tap that set
+  the property is a button's, and that button's chrome may be over the page; the compositor
+  carries the frame to the panel a beat later. Raster-change settles (a rub, an undo) and the host
+  door still post to the panel directly.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

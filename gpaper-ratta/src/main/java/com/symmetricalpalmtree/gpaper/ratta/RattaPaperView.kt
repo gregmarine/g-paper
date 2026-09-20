@@ -315,7 +315,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             // Every tool change is a handoff boundary: bake + clear FIRST, then push
             // the new tool state.
             if (changed && firmware) firmwareToolBoundary()
-            settleInkTone()
+            settleInkTone(panel = false)
         }
 
     override var penColor: Int
@@ -323,7 +323,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         set(value) {
             super.penColor = value
             rearmPenIfLive()
-            settleInkTone()
+            settleInkTone(panel = false)
         }
 
     override var penWidth: Float
@@ -331,7 +331,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         set(value) {
             super.penWidth = value
             rearmPenIfLive()
-            settleInkTone()
+            settleInkTone(panel = false)
         }
 
     override var penStyle: StrokeStyle
@@ -339,7 +339,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         set(value) {
             super.penStyle = value
             rearmPenIfLive()
-            settleInkTone()
+            settleInkTone(panel = false)
         }
 
     override var pageMode: PageMode
@@ -1416,6 +1416,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     // correct tone."* The runs waiting are kept here; the display rule dithers ink inside
     // them and tones ink outside them ([toneAndPost]'s and [flattenDither]'s `toneInk`).
 
+    /** The host's door (0.1.47): settle before chrome opens over the page. */
+    override fun settleDisplay() = settleInkTone(panel = true)
+
     /** The runs of ink baked since the last settle — in page coordinates. */
     private val pendingInk = ArrayList<Rect>()
 
@@ -1434,14 +1437,21 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * Idempotent and cheap when nothing waits, which is the common case, so every caller
      * asks without checking.
      */
-    private fun settleInkTone() {
+    private fun settleInkTone(panel: Boolean = true) {
         if (pendingInk.isEmpty()) return
         val runs = ArrayList(pendingInk)
         pendingInk.clear()
         if (!ditherDisplayed) return
         val t0 = System.nanoTime()
         regenDitherRuns(runs)
-        if (directRaster && !contactDirect && !contactRubbing) {
+        redrawCommitted()
+        // A settle a property setter triggered goes through the window only: a tap on a
+        // button is what usually set the property, and that button's own chrome — or a bar
+        // it just opened — may be over the page, which a panel post would paint over. The
+        // compositor carries the window's frame to the panel a beat later. The host's own
+        // [settleDisplay] and a raster change post straight to the panel: the host calls
+        // before its chrome opens, and a rub or an undo has nothing over the page.
+        if (panel && directRaster && !contactDirect && !contactRubbing) {
             getLocationOnScreen(contactScreenLoc)
             for (r in runs) {
                 toneRect.set(r)
