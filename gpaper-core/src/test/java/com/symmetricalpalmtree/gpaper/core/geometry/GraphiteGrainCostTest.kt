@@ -38,6 +38,28 @@ class GraphiteGrainCostTest {
         )
     }
 
+    /**
+     * The same sweep with a **hand's wander** in it — the second walk's stroke (Phase 36).
+     *
+     * The straight version below costs what it costs because every station lays one comb.
+     * A turning mark splits its stations so the fan cannot skip a row of tooth
+     * (`GraphiteGrain.FAN_SPLIT_MAX`), and the user's own shading passes on the Manta ask
+     * for about 2.8x as many — which is the cost that has to be paid on the live path, so
+     * it is the cost that gets printed. The wander here is a 0.5 px sine at 24 px, which
+     * puts the smoothed direction's turn in the same band the probe measured.
+     */
+    private fun wanderingShading(n: Int): List<StrokePoint> = (0 until n).map {
+        val t = it * 0.0016f
+        val x = 60f + it * 0.7f
+        StrokePoint(
+            x = x,
+            y = 500f + 120f * t + 0.5f * kotlin.math.sin(2f * Math.PI.toFloat() * x / 24f),
+            pressure = 0.7f,
+            tilt = deg(58f),
+            azimuth = deg(92f),
+        )
+    }
+
     /** One stroke driven through a sweep the way a live contact drives it: the whole stroke
      *  so far, once per event. Returns nanoseconds spent inside the grain. */
     private fun sweepNanos(points: List<StrokePoint>, width: Float, lead: GraphiteGrain.Lead): Pair<Long, Int> {
@@ -72,7 +94,17 @@ class GraphiteGrainCostTest {
                 ) +
                 "  Phase 28's reference          :    6.00 ms over 1252 events (round, 0.1.41)\n",
         )
+        repeat(3) { sweepNanos(wanderingShading(2000), 4f, GraphiteGrain.Lead.FLANK) }
+        val (fanNs, fanFlecks) = sweepNanos(wanderingShading(2000), 4f, GraphiteGrain.Lead.FLANK)
+        val fanMs = fanNs / 1e6
+        println(
+            "  flank, the same stroke wandering: %7.2f ms  (%.4f ms/event, %d flecks)\n".format(
+                fanMs, fanMs / points.size, fanFlecks,
+            ),
+        )
         assertTrue("the flank laid nothing", flankFlecks > 0)
+        assertTrue("the wandering flank laid nothing", fanFlecks > 0)
+        assertTrue("a 2000-event wandering flank sweep took $fanMs ms", fanMs < 4000.0)
         // Loose by design — a shared CI machine is slower than a laptop and both are a poor
         // model of an RK3566. What this catches is the shape of the cost going wrong
         // (a re-derivation creeping back in), which is a factor of hundreds, not of two.

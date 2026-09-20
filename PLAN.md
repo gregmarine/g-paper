@@ -2856,6 +2856,118 @@ always-run test now asserts the shading band's clump stays under 2.2.
 
 **No version bump: 0.1.51 is republished.** It was never walked good.
 
+#### Second walk (the user, Manta, 2026-09-19)
+
+**The finding.** *"The individual graphite feels clumpy and not natural at all"* — *"the grain
+isn't the right size"*. A 4× crop of the settled panel shows the band made of connected,
+worm-like filaments and blobs three to six px across with bare paper between them, while the
+upright hairline on the same page is the fine even grit it should be. Offline, cell d at the
+chosen tooth weight looks even. **So the synthetic stroke is not the input the device sees**,
+and the first walk's fix was fitted against a straw man.
+
+**So the harness reads the hand.** `FlankRenderHarness` now renders the `probe-tilt` CSV
+itself — every stroke of the `shading` and `flat` passes, decoded exactly as `RattaPaperView`
+decodes it live (the HAL's degrees undone out of the CSV's `Math.toDegrees`, the lean their
+hypotenuse, the azimuth `atan2(tiltY, tiltX)` on the Manta's unturned panel) — together with a
+**substitution grid**: the same real stroke with one column at a time replaced by the
+synthetic value the harness used to assume. It also drives the same input through
+`begin`/`extend` in the batches an event stream arrives in and asserts the live path and the
+committed mark are the same flecks, on a real hand's jitter rather than on a straight line.
+It is skipped unless `GPAPER_PROBE_CSV` and `GPAPER_RENDER_DIR` are both set.
+
+What the hand's input actually is, which is the first half of the answer: **press 0.18–0.32**
+(the harness assumed 0.65), lean 56–63°, azimuth ~41° and steady to the degree, samples 2–3.5
+px apart, and a shading pass that **turns around every 150–270 px** — a scribbled patch of
+overlapping passes, never the 340 px straight sweep the cells draw.
+
+**The cause, measured.** Substituting the pressure, the lean, the azimuth, the sample spacing,
+or smoothing the path, each on its own, moves the clumping by nothing (2.17–2.38 against the
+real stroke's 2.24). **Unwinding the path does all of it**: laid straight with its own step
+lengths, its own pressure and lean, and each sample's azimuth carried over as the angle it
+made with the travel at that instant, the same stroke drops to 1.54 — and one single pass of
+it, which cannot cross ink it has already laid, drops from 1.83 to **0.86**. Silencing the
+sheet's tooth entirely does *not* help (3.24, worse), which rules out the first walk's
+suspect.
+
+**The fan.** A station lays one comb across the travelled direction and the stations sit a
+tooth pitch apart *along the path*, which is the right spacing for every lane **only while the
+comb translates**. Let the direction turn by `dθ` between stations and the lane `site` px out
+advances by `pitch − site·dθ`, because the comb is rotating about the nib and that lane is out
+on the lever arm. The user's own hand turns the smoothed direction a median **0.24°** and a
+p95 of **4.6°** per station — a median 0.34 px and a p95 of 6.4 px of slip at the flank's
+eighty px rim, against a pitch of 0.8 px. The rim's own spacing therefore swings from 0.7× the
+lattice to nine times it, and three stations in a hundred fold back over the one before:
+crowded, the same graphite lands three deep; opened, there is nothing at all for six px.
+**That is the worm.** On the round lead the arm is three px and there was never anything to
+see, which is why this survived every phase.
+
+**What landed for it — two things, and neither is a smaller constant.**
+
+- **`FAN_SPLIT_MAX`.** Deposit per unit of **paper** instead of per unit of comb-advance:
+  every lane's coverage is scaled by how much paper that lane actually swept
+  (`advance × |1 − site·curve|` rows of tooth — a magnitude, so a lane sweeping back across
+  the strip it laid a station ago deposits on what it covers rather than nothing, which is
+  what a shading turnaround looks like), and the stations are **split** where the fan opens so
+  the fastest lane never skips a row — `pitch = TOOTH_PITCH_PX / (1 + |curve|·reach)`, floored
+  at eight stations to the row. Scaling alone would fix the crowding and leave the gaps;
+  splitting alone would fix the gaps and leave the crowding three deep.
+- **`FLANK_TOOTH_DEPTH` = 0.5**, because the fan correction on its own *lost 40 % of the
+  mark*. `catches` was never linear in the coverage: the sheet enters it as an **offset**,
+  `U·(1−w) + (1−tooth)·w < cover`, whose size relative to the mark grows without bound as the
+  mark gets lighter — rearranged, every site below `cover/w` of tooth height has a **negative**
+  threshold and can never catch, however many passes go over it. At the round lead's 0.76 that
+  never happens; at a real shading pass's 0.17 it happens over most of the sheet. So halving a
+  station's coverage is nothing like halving its catches, **and every other correction in this
+  file is distorted by it**. The flank now asks the sheet a proportional question instead —
+  `U < cover·(1 + depth·(2·tooth − 1))`, peaks catching `1+depth` as readily as the average and
+  hollows `1−depth`, a fixed contrast at every tone with no clamp in it. `0.5` is the depth the
+  first walk actually chose: at cell d's coverage its approved weight put a peak's odds at
+  three times a hollow's, and `1.5/0.5` is three. Blended in on the **spread** like everything
+  else, so at zero it is the weighted average bit for bit.
+
+**And `FLANK_LIGHTEN` 0.61 → 0.84, fitted against a different thing.** Both earlier fits were
+made against the synthetic sweep at press 0.65 on the argument that it was "the tone the artist
+has in front of them". It was not. The number is now fitted against the **hand's own strokes**,
+rendered from the probe, until their measured fill is what the walk saw.
+
+**Offline, after (`FlankRenderHarness`, same seeds):**
+
+| mark | before | after |
+|---|---|---|
+| a · upright 8° · b · writing 40° · e · 60° along the lean | 3.69 / 3.64 / 3.65 ink/px | *bit for bit identical* |
+| c · mid-bloom 50° | 19.12 · fill 0.38 · clump 2.29 | 16.99 · 0.34 · **1.91** |
+| d · shading 60° across | 17.33 · 0.21 · 1.85 | 11.67 · 0.14 · **1.59** |
+| f · 60° across, pressed hard | 37.36 · 0.45 · 1.85 | 22.51 · 0.27 · 1.61 |
+| g · 60° across, barely pressed | 3.68 · 0.05 · 1.84 | 4.59 · 0.06 · 1.51 |
+| **the hand's own shading strokes** (5) | fill 0.21–0.34 · clump 2.62–3.00 | fill **0.20–0.31** · clump **2.31–2.73** |
+| **one pass of one**, which crosses nothing | 1.83 | **1.07** (its unwound twin: 1.11) |
+| the synthetic sweep, wandering 0 / 0.3 / 0.6 px | 3.27 / 3.19 / 3.21 ink/px · clump 1.50 / 1.37 / 1.65 | 4.38 / 4.22 / 4.34 · **1.22 / 1.18 / 1.16** |
+
+The last two rows are the fix stated twice: **a real pass now renders exactly as clean as the
+same pass with its turning taken out**, and a synthetic mark's tone and texture no longer
+depend on whether the hand wandered. The whole-patch figure stays near 2.5 and should: those
+are scribbles of overlapping passes and the variation left in them is the gesture, at the scale
+of the band, not of the grain — the pictures are an even grit where they were filaments.
+
+**Three consequences, stated rather than buried.** The flank's pressure range compresses again,
+hard over light 10.2× → 4.9×, because what has gone is the stencil that used to eat a light
+mark — and a light mark is what shading *is*; both ends move towards decision 3, and
+`FLANK_LIGHTEN` remains the knob. `GraphiteGrainFlankTest`'s "much more graphite in total than a
+hairline" bound is re-fitted 3× → 1.8× (measured 2.06× hard, 3.61× light) for the third time and
+for the same reason each time: the claim is about how much lead is on the paper and the bound is
+about where on `catches` the two marks work. And a turning mark now costs what its turning is
+worth — 2.8× the stations on the user's own sweep, **21.07 ms for a 2000-event stroke** against
+the straight sweep's 14.72 (`GraphiteGrainCostTest`, JVM, now measuring a wandering stroke too),
+which is 0.0105 ms an event and still an order inside Phase 28's cadence.
+
+**The harness's grid follows the question.** Its rows swept the tooth *weight*; at a full sweep
+that number no longer decides anything, and the grid says so itself by fitting the identical
+`lighten` (0.84) at every one of them. It now sweeps `FLANK_TOOTH_DEPTH` — 0.25 / 0.5 / 0.75 /
+1.0, clump 1.57 / 1.59 / 1.61 / 1.65 at a matched tone — which is the knob a walk can now argue
+with.
+
+**No version bump: 0.1.51 is republished again.** It has still never been walked good.
+
 ---
 
 ## Standing Open Questions (ask as they become relevant)

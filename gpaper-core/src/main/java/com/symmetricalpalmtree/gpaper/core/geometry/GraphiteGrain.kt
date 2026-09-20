@@ -2,6 +2,7 @@ package com.symmetricalpalmtree.gpaper.core.geometry
 
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.exp
@@ -519,12 +520,24 @@ object GraphiteGrain {
      *
      * **Re-fitted 0.38 → 0.61 when [FLANK_TOOTH_WEIGHT] smoothed the curve** (the first
      * walk, 2026-09-19). Nothing about the intent changed; the band simply fills more of its
-     * sites at the same coverage once the sheet stops vetoing whole cells of them, and the
-     * untouched band came back at 33.6 ink/px against the 17.6 the artist has in front of
-     * them. Fitted the same way as before and for the same reason — against the rendered
-     * band, until the tone the hand has already seen is back.
+     * sites at the same coverage once the sheet stops vetoing whole cells of them.
+     *
+     * **And 0.61 → 0.84 at the second walk, fitted against a different thing** (the same
+     * day). Both earlier fits were made against the harness's synthetic sweep at press 0.65,
+     * on the argument that it was "the tone the artist has in front of them". It was not:
+     * the artist's shading strokes, recorded on the Manta by their own hand, are drawn at a
+     * **median pressure of 0.18–0.32** and wander all over the page, and this file's tone
+     * was never linear in the pressure — the stencil [FLANK_TOOTH_DEPTH] describes ate the
+     * light end. So the number is now fitted against **those strokes**, rendered from the
+     * probe's own CSV (`FlankRenderHarness`), until their measured fill is what the hand has
+     * already seen: 0.20–0.31 against the 0.21–0.34 of the build they walked.
+     *
+     * That costs the synthetic cell d a third of its tone (17.3 → 11.7 ink/px) and
+     * compresses the flank's pressure range again — hard over light, 10.2× → 4.9× — which is
+     * the same trade in the same direction as the first walk's and lands on the same side of
+     * decision 3. **It is the knob**, and it is now a knob with a real measurement under it.
      */
-    private const val FLANK_LIGHTEN = 0.61f
+    private const val FLANK_LIGHTEN = 0.84f
 
     /**
      * How much of its coverage the strip has given up by the barrel end.
@@ -584,6 +597,12 @@ object GraphiteGrain {
      * still mottles visibly and 0 reads as television static; 0.20 is even and still has a
      * fibre in it.
      *
+     * **What it still decides, after the second walk:** the *part-way* mark only. The sheet's
+     * question changed shape there — see [FLANK_TOOTH_DEPTH] — and at a full sweep the
+     * weighted average has no say at all, which the harness's own grid shows by fitting the
+     * identical `lighten` at every weight. What is left for this number is the blend between
+     * the two rules, where it is what keeps the additive half from stencilling on its own.
+     *
      * Blended in on the **spread**, the same quantity [FLANK_LIGHTEN] rides and zero for every
      * ordinary grip, so below the threshold this is exactly [TOOTH_WEIGHT] and the mark is bit
      * for bit the round lead's. And because a smoother [catches] fills **more** sites at the
@@ -593,6 +612,97 @@ object GraphiteGrain {
      * curve it was fitted in, and **changing the curve is changing the part you are in**.
      */
     private const val FLANK_TOOTH_WEIGHT = 0.20f
+
+    /**
+     * **How deep the sheet's grain is, as a fraction of whatever ink is being laid** — the
+     * flank's end of a blend that changes [catches]'s *shape* and not merely its weight.
+     *
+     * The round lead's rule is a weighted average: a site catches when
+     * `U·(1−w) + (1−tooth)·w < cover`. The sheet's contribution there is an **offset**, the
+     * same size whatever the coverage — which means its size *relative to the mark* grows
+     * without bound as the mark gets lighter. Rearranged, a site catches when
+     * `U < (cover − w·(1−tooth)) / (1−w)`, and that right-hand side goes **negative** for
+     * every site whose tooth is low enough: below `cover / w` of tooth height, nothing can
+     * catch at all, however many times the lead passes. At the round lead's coverage (a
+     * pressed hairline asks 0.76 against a weight of 0.55) that never happens. At the
+     * flank's — a shading pass at the hand's own 0.2 pressure asks about 0.17 — it happens
+     * over most of the sheet, and the mark stops being shaded by the paper and starts being
+     * **stencilled** by it.
+     *
+     * Two things fall out of that clamp, and the second is the one that cost a walk:
+     *
+     *  - the tone stops being linear in the coverage, so **every other correction in this
+     *    file is distorted by it**. The fan ([FAN_SPLIT_MAX]) halves a station's coverage
+     *    and splits the pitch to compensate; that is exact in ink and lost 40 % of the mark
+     *    in practice, because half the coverage at the flank's working point is nothing
+     *    like half the catches; and
+     *  - the sheet's visible depth changes with the pressure, so a grain fitted at one
+     *    pressure is wrong at another.
+     *
+     * So the flank asks the sheet a proportional question instead: a site catches when
+     * `U < cover · (1 + depth·(2·tooth − 1))`. The peaks catch `1 + depth` times as readily
+     * as the average and the hollows `1 − depth` times — a **fixed contrast at every tone**,
+     * with no clamp in it, so the expected catch is exactly the coverage and a correction
+     * that halves the coverage halves the ink.
+     *
+     * `0.5` because that is the depth the first walk actually chose. At cell d's coverage
+     * the approved weight of [FLANK_TOOTH_WEIGHT] put a peak's odds at three times a
+     * hollow's, and `(1 + 0.5) / (1 − 0.5)` is three. The grain the hand approved, held at
+     * that depth everywhere instead of only where it was fitted.
+     *
+     * Blended in on the **spread**, like everything else the flank changes: at `0` this is
+     * exactly the weighted average the round lead has always used, bit for bit, and
+     * [FLANK_TOOTH_WEIGHT] is what keeps the additive half of a part-way mark from
+     * stencilling on its own.
+     */
+    private const val FLANK_TOOTH_DEPTH = 0.5f
+
+    /**
+     * **The fan** — how finely a turning mark is cut into cross-sections, at most.
+     *
+     * A station lays one comb of lanes across the travelled direction, and the stations are
+     * spaced [TOOTH_PITCH_PX] apart *along the path*. That spacing is the paper's, and it is
+     * the right one for every lane **only while the comb translates**. Let the direction turn
+     * by `dTheta` between two stations and the lane `site` px out from the path does not
+     * advance by the pitch at all: it advances by `pitch − site·dTheta`, because the comb is
+     * rotating about the nib and that lane is out on the lever arm. Which means the comb
+     * **fans** — crowding on the inside of the turn, opening on the outside — while every
+     * lane goes on depositing as though it had covered exactly one row of tooth.
+     *
+     * On the round lead the arm is three px and nothing is visible. On the flank it is
+     * **eighty**, and the user's own hand on the Manta turns the smoothed direction a median
+     * 0.24° and a p95 of 4.6° per station (`probe-tilt`, 2026-09-19, measured through this
+     * file's own filter). That is a median 0.34 px and a p95 of 6.4 px of sideways slip at
+     * the rim against a station pitch of 0.8 px: the rim's own spacing swings from about
+     * 0.7× the lattice to nine times it, and three stations in a hundred fold back over the
+     * one before. Crowded, the same graphite lands three deep; opened, there is nothing at
+     * all for six px. **That is the clumping the second walk reported** — *"the individual
+     * graphite feels clumpy and not natural at all"* — and it is why the straight synthetic
+     * mark the first walk was fitted against could never show it. Unwinding one real pass
+     * (its pressure, its lean, its lean-to-travel angle and its own step lengths kept, only
+     * the turning taken out) drops the measured clumping from 1.83 to 0.86.
+     *
+     * The answer is not a smaller number anywhere. It is to deposit **per unit of paper**
+     * rather than per unit of comb-advance, which takes two things that belong together:
+     *
+     *  - every lane's coverage is scaled by how much paper *that lane* actually swept —
+     *    `advance × (1 − site·curve)` tooth rows, zero where the lane folds backwards over
+     *    ink it has just laid (see [deposit]); and
+     *  - the stations are **split** where the fan opens, so that the fastest lane never skips
+     *    more than one row: the pitch becomes `TOOTH_PITCH_PX / (1 + |curve|·reach)`, down to
+     *    this many stations per row. Without the split, scaling alone would fix the crowding
+     *    and leave the gaps; without the scaling, splitting alone would fix the gaps and
+     *    leave the crowding three deep.
+     *
+     * A straight mark has `curve = 0`, so the pitch is the pitch and every scale is exactly
+     * `1`: **the round lead, the sub-threshold flank and every synthetic cell in the harness
+     * are bit for bit what they were**, which is what keeps the first walk's tone fit and
+     * `GraphiteGrainPinTest` honest. Only a mark that turns costs anything: the user's own
+     * shading passes ask for about 2.8× the stations, which is 21 ms for a 2000-event stroke
+     * against the straight sweep's 15 (`GraphiteGrainCostTest`, JVM) — 0.0105 ms an event,
+     * and still an order inside the cadence Phase 28 set.
+     */
+    private const val FAN_SPLIT_MAX = 8f
 
     /**
      * The far end of that blend, gathered into one value so a render harness can sweep all
@@ -613,6 +723,7 @@ object GraphiteGrain {
         val toothCoarse: Float,
         val skateDepth: Float,
         val lighten: Float,
+        val toothDepth: Float = FLANK_TOOTH_DEPTH,
     )
 
     /** The flank's own [Grit]: its two constants, and the sheet as the round lead reads it. */
@@ -622,6 +733,7 @@ object GraphiteGrain {
         toothCoarse = TOOTH_COARSE,
         skateDepth = SKATE_DEPTH,
         lighten = FLANK_LIGHTEN,
+        toothDepth = FLANK_TOOTH_DEPTH,
     )
 
     /**
@@ -1094,6 +1206,10 @@ object GraphiteGrain {
         var lastToBarrel = 0f
         /** How broad the last cross-section was becoming — see [FLANK_TOOTH_WEIGHT]. */
         var lastSpread = 0f
+        /** How far the next station is, in px of arc — the pitch, split by [FAN_SPLIT_MAX]. */
+        var pitch = TOOTH_PITCH_PX
+        /** How fast the travelled direction is turning, in radians per px — see [FAN_SPLIT_MAX]. */
+        var curve = 0f
         var lastArc = 0f
         var capped = false
         /** [MAX_FLECKS] reached: this stroke lays no more graphite, ever. */
@@ -1341,12 +1457,6 @@ object GraphiteGrain {
         if (state.full) return true
         val base = state.base
         val density = state.density
-        // Exponential, one pole, walked forward with the stations — so each depends only on
-        // the path already covered and a prefix of the stroke renders identically to the
-        // whole of it.
-        val smoothing = 1f - exp(-TOOTH_PITCH_PX / TILT_SMOOTH_PX)
-        val covering = 1f - exp(-TOOTH_PITCH_PX / COVER_SMOOTH_PX)
-        val turning = 1f - exp(-TOOTH_PITCH_PX / TANGENT_SMOOTH_PX)
         var traveled = state.traveled
         var station = state.station
         var nextAt = state.nextAt
@@ -1366,6 +1476,8 @@ object GraphiteGrain {
         var lastToBarrel = state.lastToBarrel
         var lastSpread = state.lastSpread
         var lastArc = state.lastArc
+        var pitch = state.pitch
+        var curve = state.curve
         var capped = state.capped
         var full = false
         var i = state.next
@@ -1393,6 +1505,16 @@ object GraphiteGrain {
                 azAx = 0f; azAy = 0f; azBx = 0f; azBy = 0f
             }
             while (nextAt <= traveled + segLen) {
+                // Exponential, one pole, walked forward with the stations — so each depends
+                // only on the path already covered and a prefix of the stroke renders
+                // identically to the whole of it. Read off **this station's** pitch, because
+                // a turning flank splits it ([FAN_SPLIT_MAX]) and a filter whose window
+                // moved with the split would be a different filter on every curve.
+                val smoothing = 1f - exp(-pitch / TILT_SMOOTH_PX)
+                val covering = 1f - exp(-pitch / COVER_SMOOTH_PX)
+                val turning = 1f - exp(-pitch / TANGENT_SMOOTH_PX)
+                val wasX = travelX
+                val wasY = travelY
                 // The direction a cross-section is laid across is the *travelled* direction,
                 // not the one measured between the last two samples — see TANGENT_SMOOTH_PX.
                 if (travelX == 0f && travelY == 0f) {
@@ -1408,6 +1530,19 @@ object GraphiteGrain {
                     } else {
                         travelX = tx
                         travelY = ty
+                    }
+                }
+                // How fast the comb is turning, per px of travel — the lever arm the fan
+                // rides on. Signed, and taken from the **smoothed** direction, because that
+                // is the one the cross-section is actually laid across ([FAN_SPLIT_MAX]).
+                if (flank) {
+                    curve = if ((wasX != 0f || wasY != 0f) && pitch > 0f) {
+                        atan2(
+                            wasX * travelY - wasY * travelX,
+                            wasX * travelX + wasY * travelY,
+                        ) / pitch
+                    } else {
+                        0f
                     }
                 }
                 val t = (nextAt - traveled) / segLen
@@ -1465,6 +1600,10 @@ object GraphiteGrain {
                 val cx = a.x + t * dx
                 val cy = a.y + t * dy
                 val pressure = a.pressure + t * (b.pressure - a.pressure)
+                // The fan is the flank's alone: with no strip across the travel the lever
+                // arm is the lead's own radius, which is what the round lead has always
+                // deposited with, and its mark must not move by a bit ([FAN_SPLIT_MAX]).
+                val fan = if (toBarrel != 0f) curve else 0f
                 deposit(
                     out = out,
                     cx = cx,
@@ -1482,6 +1621,8 @@ object GraphiteGrain {
                     density = density,
                     grit = state.grit,
                     spread = spread,
+                    advance = pitch,
+                    fan = fan,
                 )
                 lastCx = cx
                 lastCy = cy
@@ -1501,7 +1642,15 @@ object GraphiteGrain {
                     )
                 }
                 station++
-                nextAt += TOOTH_PITCH_PX
+                nextAt += pitch
+                // And how far the *next* cross-section is: close enough that the fastest
+                // lane of this comb cannot skip a row of tooth — see [FAN_SPLIT_MAX].
+                pitch = if (fan != 0f) {
+                    (TOOTH_PITCH_PX / (1f + abs(fan) * (abs(toBarrel) + half)))
+                        .coerceAtLeast(TOOTH_PITCH_PX / FAN_SPLIT_MAX)
+                } else {
+                    TOOTH_PITCH_PX
+                }
                 if (out.total >= MAX_FLECKS) {
                     full = true
                     break@segments
@@ -1527,6 +1676,8 @@ object GraphiteGrain {
         state.lastToBarrel = lastToBarrel
         state.lastSpread = lastSpread
         state.lastArc = lastArc
+        state.pitch = pitch
+        state.curve = curve
         state.capped = capped
         state.full = full
         return true
@@ -1562,6 +1713,8 @@ object GraphiteGrain {
         density: Float,
         grit: Grit,
         spread: Float,
+        advance: Float = TOOTH_PITCH_PX,
+        fan: Float = 0f,
     ) {
         val nx = -ty
         val ny = tx
@@ -1597,8 +1750,20 @@ object GraphiteGrain {
             // [density] multiplies the coverage and only the coverage — see [of]. A site's own
             // toss in [catches] does not move with it, so thinning a mark removes flecks and
             // never relocates one.
+            // **How much paper this lane actually swept**, in rows of tooth — the fan
+            // ([FAN_SPLIT_MAX]). The comb rotates about the nib as it travels, so a lane
+            // `site` px out advances by `advance × (1 − site·fan)` rather than by the
+            // pitch, and a lane that swept half a row must deposit half as much or the
+            // mark comes out three deep on the inside of every turn. It is the paper's
+            // **width**, so a lane inside the pivot — one sweeping backwards over the strip
+            // it laid a station ago — deposits on what it covers rather than nothing: two
+            // passes of a lead over one piece of paper is a darker piece of paper, which is
+            // what a shading turnaround looks like. Exactly `1` for a straight mark and for
+            // every round lead, which is what keeps those bit for bit what they were.
+            val rows = (abs(advance * (1f - site * fan)) / TOOTH_PITCH_PX).coerceIn(0f, 1f)
             val cover =
-                coverage(press, u) * fall * skate(arc, site, seed, skateDepth) * lean * density
+                coverage(press, u) * fall * skate(arc, site, seed, skateDepth) * lean *
+                    density * rows
             if (cover <= 0f) continue
             val alongJitter = (unit(hash(seed, station, lane)) - 0.5f) *
                 (JITTER * TOOTH_PITCH_PX + 2f * LEVER_JITTER * abs(site))
@@ -1609,7 +1774,7 @@ object GraphiteGrain {
             val y = cy + ty * alongJitter + ny * across
             if (!catches(
                     cover, x, y, hash(seed, station, lane xor 0x2af1),
-                    toothWeight, toothFine, toothCoarse,
+                    toothWeight, toothFine, toothCoarse, grit.toothDepth, spread,
                 )
             ) continue
             out.add(x, y, levelOf(press, hash(seed, station, lane xor 0x11d7)))
@@ -1678,7 +1843,7 @@ object GraphiteGrain {
                 val y = p.y + v * half + jy
                 if (!catches(
                         cover, x, y, hash(seed, row, lane xor 0x2af1),
-                        toothWeight, toothFine, toothCoarse,
+                        toothWeight, toothFine, toothCoarse, grit.toothDepth, spread,
                     )
                 ) continue
                 out.add(x, y, levelOf(press, hash(seed, row, lane xor 0x11d7)))
@@ -1737,7 +1902,7 @@ object GraphiteGrain {
                 val y = p.y + ay * s + ax * v + jy
                 if (!catches(
                         cover, x, y, hash(seed, row, lane xor 0x2af1),
-                        toothWeight, toothFine, toothCoarse,
+                        toothWeight, toothFine, toothCoarse, grit.toothDepth, spread,
                     )
                 ) continue
                 out.add(x, y, levelOf(press, hash(seed, row, lane xor 0x11d7)))
@@ -1807,10 +1972,19 @@ object GraphiteGrain {
         toothWeight: Float,
         toothFine: Float,
         toothCoarse: Float,
+        depth: Float,
+        spread: Float,
     ): Boolean {
-        val draw = unit(h) * (1f - toothWeight) +
-            (1f - tooth(x, y, toothFine, toothCoarse)) * toothWeight
-        return draw < cover
+        val height = tooth(x, y, toothFine, toothCoarse)
+        val draw = unit(h) * (1f - toothWeight) + (1f - height) * toothWeight
+        // The round lead, and every flank below the threshold: the weighted average this
+        // file has always used, untouched down to the last bit.
+        if (spread <= 0f) return draw < cover
+        // And past it, the same test read as a threshold on the site's own toss, blended
+        // towards one the sheet **scales** instead of offsetting — see [FLANK_TOOTH_DEPTH].
+        val offset = (cover - (1f - height) * toothWeight) / (1f - toothWeight)
+        val scaled = cover * (1f + depth * (2f * height - 1f))
+        return unit(h) < offset + (scaled - offset) * spread
     }
 
     /**
