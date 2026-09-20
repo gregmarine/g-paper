@@ -175,6 +175,13 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         const val DITHER_ON: Byte = -1 // 0xFF
         const val DITHER_OFF: Byte = 0
 
+        /** The pause after a pen-up that settles a waiting mark on its own (0.1.50) — the
+         *  user's "2–3 seconds"; a new contact of any tool re-arms it from zero. */
+        const val SETTLE_IDLE_MS = 2500L
+
+        /** How long the pause settle waits again when it fires under an active pen. */
+        const val SETTLE_RETRY_MS = 500L
+
         /** The panel level for a display byte: coverage `c` is grey `255 − c` through the
          *  compositor's own grey → level table — so a dithered `0xFF` is [LEVEL_BLACK], a
          *  `0` is [LEVEL_WHITE], and a baked-ink tone is the level the compositor would
@@ -1427,6 +1434,30 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  for "something other than drawing". */
     private var markJustBaked = false
 
+    /**
+     * The pause settle (0.1.50): a mark that has waited [SETTLE_IDLE_MS] with no new
+     * contact settles on its own — the user's word: *"a pause in drawing for like 2–3
+     * seconds … while active drawing, nothing gets rebaked, but a pause can give the screen
+     * an opportunity to show the real raster without the tool change."* Armed by the bake,
+     * disarmed by the next contact of any tool, and it waits for the pen to be idle (hover
+     * counts) so it never lands a frame under a hand that is about to draw.
+     */
+    private val settleOnPause: Runnable = Runnable {
+        if (pendingRuns.isEmpty()) return@Runnable
+        if (isPenActive || contactDirect || contactRubbing) {
+            postDelayed(settleOnPause, SETTLE_RETRY_MS)
+            return@Runnable
+        }
+        settleInkTone(panel = true)
+    }
+
+        private fun armPauseSettle() {
+        removeCallbacks(settleOnPause)
+        postDelayed(settleOnPause, SETTLE_IDLE_MS)
+    }
+
+    private fun disarmPauseSettle() = removeCallbacks(settleOnPause)
+
     private fun overlapsPending(rect: Rect): Boolean {
         for (r in pendingRuns) if (Rect.intersects(r, rect)) return true
         return false
@@ -1442,6 +1473,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (pendingRuns.isEmpty()) return
         val runs = ArrayList(pendingRuns)
         pendingRuns.clear()
+        disarmPauseSettle()
         if (!ditherDisplayed) return
         val t0 = System.nanoTime()
         regenDitherRuns(runs)
@@ -1760,6 +1792,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /** A direct contact begins: nothing laid yet, nothing to clear, and the view's screen
      *  offset read once (the panel speaks screen coordinates). */
     private fun beginLivePreview() {
+        disarmPauseSettle()
         liveEvents = 0
         laidFlecks = 0
         laidInkCount = 0
@@ -1895,6 +1928,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             if (run.intersect(0, 0, liveAlphaW, liveAlphaH)) pendingRuns.add(run)
         }
         markJustBaked = true
+        armPauseSettle()
         return true
     }
 
@@ -2281,6 +2315,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     // is disabled across the whole page — so there is nothing to flush,
                     // release or chase with a ladder for an erase contact there.
                     contactRubbing = contactErasing && directRaster
+                    if (contactRubbing) disarmPauseSettle()
                     // The panel speaks screen coordinates and a mid-layout read lies, so
                     // every contact on a direct page takes the offset once, here — an
                     // inking one, a rubbing one, and a lasso or scribble that turns out to
@@ -2561,6 +2596,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun onDetachedFromWindow() {
         overlayClearArmed = false
         removeCallbacks(overlayClearRunnable)
+        disarmPauseSettle()
         releasePanel()
         if (firmware && inkOwner === this) {
             releaseFirmwareOverlay()

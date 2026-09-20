@@ -2613,6 +2613,21 @@ dithered. `onRasterErasedBatch` now settles (window only, the hand being down) b
 a rub is always shown in tone. The user's question: *"Does the eraser work with this too … I just
 want to be sure it isn't dithering if it doesn't need to."*
 
+### Phase 35 — The pause settle (post-v0.1.0)
+**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.50 · branch `ink-true`.
+The user's word: *"I'd like to consider a timed rebake … a pause in drawing for like 2–3 seconds
+… while active drawing, nothing gets rebaked, but a pause can give the screen an opportunity to
+show the real raster without the tool change."*
+- `armPauseSettle()` at every direct bake posts `settleOnPause` at `SETTLE_IDLE_MS` = **2500 ms**;
+  any new contact (a pen kind's `beginLivePreview`, a rub's start) disarms it, so active drawing
+  never settles; a settle from any other cause disarms it too (nothing left to settle). When it
+  fires under an active pen (hover counts) it waits `SETTLE_RETRY_MS` = 500 ms and asks again —
+  a frame never lands under a hand about to draw. It settles through window **and** panel: no
+  chrome opens without `settleDisplay()` first, so nothing is over the page.
+- **Page flips were already covered** (asked the same day): a load is `onRasterPixelsChanged(null)`,
+  which clears the waiting runs and rebuilds the whole page `settled`, so a page turned to is
+  shown in tone from its first frame.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
