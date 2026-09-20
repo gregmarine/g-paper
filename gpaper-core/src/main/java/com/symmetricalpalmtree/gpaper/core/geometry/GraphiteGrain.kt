@@ -3,12 +3,14 @@ package com.symmetricalpalmtree.gpaper.core.geometry
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -414,6 +416,115 @@ object GraphiteGrain {
     private const val TILT_LIGHTEN = 0.45f
 
     /**
+     * Which shape of lead is meeting the paper — the whole of what [Lead.FLANK] changes.
+     *
+     * [ROUND] is every caller this file had before Phase 36 and is the default, so nothing
+     * moves unless an engine asks: BOOX's pencil, Paintsprout's, the generic engine's and
+     * every committed render through `StrokeRenderer`. Its contact is a **disc** whose
+     * radius grows with the lean on [TILT_GAIN]'s curve, which is the model Phase 11 fitted
+     * and Phase 12 left in place when it stopped driving it.
+     *
+     * [FLANK] is the Supernote pencil of Phase 36, and it is a different claim about the
+     * physics rather than a different curve through the same one. A leaned lead does not
+     * grow a bigger point; it lies **down**, and the strip of graphite touching the paper
+     * runs from the tip *towards the barrel*, along the direction the pen is leaning
+     * ([StrokePoint.azimuth]). So the contact is a capsule of the lead's own radius, from
+     * the reported point to [FLANK_EXTENT] lead-widths along that direction — one-sided,
+     * never a symmetric widening — and the mark it leaves depends on which way the hand
+     * travels: drag along the lean and the strip retraces itself and stays a hairline, drag
+     * across it and the strip lays a broad band. **That asymmetry is the point**, because
+     * it is how a real pencil shades and why a shading stroke and a writing stroke at the
+     * same angle do not look alike.
+     *
+     * Both models are upright at `tilt = 0`, and [FLANK] is upright for every ordinary grip
+     * — see [FLANK_TIP_DEG].
+     */
+    enum class Lead { ROUND, FLANK }
+
+    /**
+     * Where the flank begins and where it is fully out, in degrees of polar lean.
+     *
+     * **Measured, on the user's own hand (Phase 36, `probe-tilt`, 2026-09-19).** A Supernote
+     * stylus reports signed tilt-X and tilt-Y in degrees, and the polar lean from vertical is
+     * their hypotenuse. Across five passes on a Nomad and a Manta: upright reads 7–10°
+     * (p95 17°), an ordinary **writing** grip 29–39° (p95 43°), a deliberate **shading** grip
+     * 56–61° (min 54°), flat 54–61°, and the digitizer stops tracking at 62° / 72°.
+     *
+     * The two bands that matter therefore *touch*: writing reaches 43° at its p95 and shading
+     * starts at 54°. So the threshold is not a fitted midpoint but the gap itself — nothing at
+     * all up to [FLANK_TIP_DEG], where the hand is writing and the mark must be exactly the
+     * hairline it was set to; fully out at [FLANK_FULL_DEG], where the hand can only be
+     * shading; and a smoothstep across the nine degrees between, so a hand drifting through
+     * the boundary sees the flank arrive rather than switch on.
+     *
+     * Below [FLANK_TIP_DEG] the mark is **bit for bit the upright mark**: no widening, no
+     * lightening, the lead's own width. That is the user's decision and it is what makes the
+     * flank safe to leave armed — a pencil that quietly thickened at a writing angle is the
+     * 10–15× bloom Phase 22 had to take away.
+     */
+    private const val FLANK_TIP_DEG = 45f
+    private const val FLANK_FULL_DEG = 54f
+
+    /**
+     * How far the contact strip reaches from the tip towards the barrel at full lean, as a
+     * multiple of the lead's own width — so a 4 px lead laid over shades an 80 px band.
+     *
+     * **The walk's knob.** It is the one number here a hand can judge directly: draw a
+     * shading sweep across the lean and the band is this wide. Everything else in the flank
+     * is a shape; this is a size, and a size is what an artist argues with.
+     */
+    private const val FLANK_EXTENT = 20f
+
+    /**
+     * How much lighter the flank deposits at full lean — [TILT_LIGHTEN]'s idea, retuned for
+     * a strip twenty lead-widths long instead of a disc eleven times too wide.
+     *
+     * The reason is unchanged and is the reason shading with the side of a pencil comes out
+     * grey however hard you lean on it: the same graphite spread over a broader band leaves
+     * less of itself on any one peak. Like [TILT_LIGHTEN] it reduces **coverage** and not
+     * fleck darkness — tone here is how many specks of tooth catch.
+     *
+     * Two things about the figure, both found by rendering it (Phase 36).
+     *
+     * **It follows the band, not the lean.** [TILT_LIGHTEN]'s mark got broader in every
+     * direction, so lean and broadening were the same fact; a flank's are not. A stroke
+     * drawn *along* its own lean lays a hairline however far over the pen is, and lightening
+     * that by the lean alone made a deliberate 60° line ten times fainter than the same line
+     * drawn upright — the lead dragging its whole flank down one track, coming out paler
+     * than its point. So the multiplier rides how broad the contact actually is at this
+     * station, which is zero there and one across a full shading sweep.
+     *
+     * **And 0.45 could not simply be carried over, because [catches] is an S.** Coverage
+     * maps to the fraction of peaks that catch through a curve centred near 0.5, and the
+     * round lead has always worked at the top of it — a pressed hairline asks for 0.76 and
+     * catches 96 % of its sites. The flank works *down* the curve, where the same
+     * proportional cut costs several times as much ink: at 0.62 a full shading band asked
+     * for 0.21, caught **one site in a hundred**, and rendered fainter than the upright
+     * hairline it was supposed to be a broad version of. The number is therefore chosen
+     * against the rendered band and not against the lean: a firm shading pass lands at
+     * roughly a third to a half covered — grey, which is the decision — and a light one is
+     * genuinely light, because down here pressure has more bite than it does at the point.
+     */
+    private const val FLANK_LIGHTEN = 0.38f
+
+    /**
+     * How much of its coverage the strip has given up by the barrel end.
+     *
+     * A leaned lead does not bear evenly along its flank: the hand's weight is over the tip
+     * and the barrel end is the part just about touching, which is why the far edge of a
+     * shading band fades out instead of ending at a wall. So coverage falls linearly from
+     * the tip end of the strip to the barrel end, and the fall is **in the strip's own
+     * frame** — not across the mark — so it stays put when the hand changes direction.
+     *
+     * Modest for the same reason [FLANK_LIGHTEN] is: a fall applied to a coverage already
+     * working down the steep part of [catches] is a much bigger fall in ink than it reads
+     * as. At 0.55 the far half of every band simply was not there, and the measured extent
+     * came back two thirds of the lead's actual reach — a falloff that had quietly become
+     * a truncation.
+     */
+    private const val FLANK_TAIL_BARE = 0.30f
+
+    /**
      * Upper bound on flecks for one stroke. A mark long enough or broad enough to pass this
      * has already stopped being legible as grain, and the cap is here so a host that hands us
      * an absurd width or a path with a million points degrades instead of stalling the frame.
@@ -484,12 +595,75 @@ object GraphiteGrain {
         seed: Int,
         prefix: Boolean = false,
         density: Float = 1f,
+        lead: Lead = Lead.ROUND,
     ): Grain {
         if (points.isEmpty()) return EMPTY
         val d = density.coerceIn(0f, 1f)
         val base = (if (width < MIN_WIDTH_PX) MIN_WIDTH_PX else width) / 2f
-        if (points.size == 1) return if (prefix) EMPTY else tap(points[0], base, seed, d)
-        return sweep(points, base, seed, prefix, d)
+        if (points.size == 1) return if (prefix) EMPTY else tap(points[0], base, seed, d, lead)
+        return sweep(points, base, seed, prefix, d, lead)
+    }
+
+    /**
+     * How far out the flank is, `0`..`1`, at [tilt] radians from vertical: nothing up to
+     * [FLANK_TIP_DEG], everything from [FLANK_FULL_DEG], a smoothstep between. `0` means
+     * the mark is exactly the upright one.
+     */
+    fun flankBloom(tilt: Float): Float {
+        val degrees = Math.toDegrees(tilt.toDouble()).toFloat()
+        if (degrees <= FLANK_TIP_DEG) return 0f
+        if (degrees >= FLANK_FULL_DEG) return 1f
+        val t = (degrees - FLANK_TIP_DEG) / (FLANK_FULL_DEG - FLANK_TIP_DEG)
+        return t * t * (3f - 2f * t)
+    }
+
+    /**
+     * How far the contact strip reaches from the tip towards the barrel, in px, for a lead
+     * of half-width [base] at [bloom] — see [FLANK_EXTENT].
+     */
+    private fun flankExtent(base: Float, bloom: Float): Float = FLANK_EXTENT * 2f * base * bloom
+
+    /**
+     * Half the cross-section the contact covers **across the travel direction**: the lead's
+     * own radius [half], plus half of however much of the strip's reach falls across the
+     * travel ([toBarrel]).
+     *
+     * The strip is projected onto the travel normal rather than rasterised as an area, which
+     * is the same economy the round lead has always had — a station lays one cross-section
+     * and the stations tile the swept band exactly once. It is also what makes the
+     * direction-dependence fall out instead of being written down: travel across the lean
+     * projects the whole strip and the band is [flankExtent] wide; travel *along* it
+     * projects the strip to a point and the band is the lead's own width.
+     */
+    private fun span(half: Float, toBarrel: Float): Float = half + abs(toBarrel) * 0.5f
+
+    /**
+     * How far from the path's own line a mark of [width] px may land at [tilt] radians, in
+     * px — what an engine must pad a raster page's **dirty region** by before it composites
+     * or announces one.
+     *
+     * It exists because a mark's footprint stopped being `width` the moment a lead could
+     * lean. `RasterDirty` pads by the stroke's width on every side, which is about twice a
+     * round lead's half-width and so has always been generous; a [Lead.FLANK] shading sweep
+     * reaches twenty lead-widths past the path, and a dirty rect that misses it is not a
+     * cosmetic error — the band is **clipped out of the bake** and the host's undo
+     * before-image is of the wrong pixels. (The round lead has the same arithmetic and has
+     * never had to answer for it, because no engine that composites through this file has
+     * reported a lean since 0.1.24.)
+     *
+     * It is the **whole** bound, not the contact's geometry: a fleck also carries its own
+     * radius and the two jitters that keep this grain from looking like a lattice, and
+     * [LEVER_JITTER]'s grows with distance from the centre line — several px out at the rim
+     * of a flank, which is more than any fixed margin would have covered.
+     */
+    fun reach(width: Float, tilt: Float, lead: Lead = Lead.ROUND): Float {
+        val base = (if (width < MIN_WIDTH_PX) MIN_WIDTH_PX else width) / 2f
+        val contact = when (lead) {
+            Lead.ROUND -> base * widthFactor(tilt)
+            Lead.FLANK -> base + flankExtent(base, flankBloom(tilt))
+        }
+        return contact * (1f + LEVER_JITTER) +
+            JITTER * TOOTH_PITCH_PX * 0.5f + FLECK_MAX_PX * 0.5f
     }
 
     /**
@@ -528,6 +702,43 @@ object GraphiteGrain {
             i++
         }
         return if (reach > 0f) weighted / reach else points[from].tilt
+    }
+
+    /**
+     * The lean **direction** to start the flank's filter at: the mean over the first
+     * [window] px of travel, arc-weighted exactly as [seedLean] is, written into [into] as a
+     * unit vector.
+     *
+     * **Averaged as a vector, never as an angle.** An azimuth is a point on a circle and its
+     * numeric value wraps: a hand leaning almost straight up the screen delivers samples at
+     * `179°` and `−179°`, whose arithmetic mean is `0°` — the exact opposite direction, and
+     * the flank would lay itself on the wrong side of the nib for a whole smoothing window
+     * at the start of every such stroke. Summing unit vectors has no seam in it.
+     */
+    private fun seedAzimuth(points: List<StrokePoint>, from: Int, window: Float, into: FloatArray) {
+        var reach = 0f
+        var sx = 0f
+        var sy = 0f
+        var i = from + 1
+        while (i < points.size && reach < window) {
+            val a = points[i - 1]
+            val b = points[i]
+            val step = sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))
+            if (step > 0f) {
+                sx += (cos(a.azimuth) + cos(b.azimuth)) * 0.5f * step
+                sy += (sin(a.azimuth) + sin(b.azimuth)) * 0.5f * step
+                reach += step
+            }
+            i++
+        }
+        val len = sqrt(sx * sx + sy * sy)
+        if (len > 1e-6f) {
+            into[0] = sx / len
+            into[1] = sy / len
+        } else {
+            into[0] = cos(points[from].azimuth)
+            into[1] = sin(points[from].azimuth)
+        }
     }
 
     /** How far past upright the pen is leaned, `0`..`1`. */
@@ -572,6 +783,7 @@ object GraphiteGrain {
         lean: Float,
         arc: Float,
         half: Float,
+        toBarrel: Float,
         seed: Int,
         station0: Int,
         sign: Float,
@@ -583,7 +795,12 @@ object GraphiteGrain {
         while (d < half) {
             val shrunk = sqrt(half * half - d * d)
             if (shrunk >= TOOTH_PITCH_PX) {
-                val lanes = laneCount(shrunk)
+                // The dome belongs to the lead's own radius; a flank's strip keeps its
+                // reach while that radius closes, which is exactly the rounded long-edge
+                // of the capsule the contact is. (With no flank, [toBarrel] is zero and
+                // this is the disc it always was.)
+                val wide = span(shrunk, toBarrel)
+                val lanes = laneCount(wide)
                 deposit(
                     out = out,
                     cx = cx + sign * tx * d,
@@ -591,11 +808,12 @@ object GraphiteGrain {
                     tx = tx,
                     ty = ty,
                     pressure = pressure,
-                    lean = lean * laneDensity(shrunk, lanes),
+                    lean = lean * laneDensity(wide, lanes),
                     arc = arc + sign * d,
                     station = station0 + sign.toInt() * k,
                     lanes = lanes,
                     half = shrunk,
+                    toBarrel = toBarrel,
                     seed = seed,
                     density = density,
                 )
@@ -726,7 +944,12 @@ object GraphiteGrain {
      * what makes the loop resumable: the caller keeps the whole stroke so far and this says
      * how much of it has already been laid.
      */
-    private class SweepState(val base: Float, val seed: Int, val density: Float) {
+    private class SweepState(
+        val base: Float,
+        val seed: Int,
+        val density: Float,
+        val lead: Lead,
+    ) {
         /** Set once the arrival trim and the two filter seeds have been decided. */
         var seeded = false
         var from = 0
@@ -738,11 +961,15 @@ object GraphiteGrain {
         var coverTilt = 0f
         var travelX = 0f
         var travelY = 0f
+        /** The smoothed lean direction, as a unit vector — [Lead.FLANK] only. */
+        var azX = 0f
+        var azY = 0f
         var lastCx = 0f
         var lastCy = 0f
         var lastPress = 0f
         var lastLean = 0f
         var lastHalf = 0f
+        var lastToBarrel = 0f
         var lastArc = 0f
         var capped = false
         /** [MAX_FLECKS] reached: this stroke lays no more graphite, ever. */
@@ -778,12 +1005,13 @@ object GraphiteGrain {
      *
      * Not thread-safe, and not meant to be: it belongs to one contact.
      */
-    class Sweep internal constructor(width: Float, seed: Int, density: Float) {
+    class Sweep internal constructor(width: Float, seed: Int, density: Float, lead: Lead) {
 
         private val state = SweepState(
             base = (if (width < MIN_WIDTH_PX) MIN_WIDTH_PX else width) / 2f,
             seed = seed,
             density = density.coerceIn(0f, 1f),
+            lead = lead,
         )
 
         /** Set by [finish]: the mark is complete and there is nothing further to lay. */
@@ -834,7 +1062,7 @@ object GraphiteGrain {
             if (points.isEmpty()) return EMPTY
             if (points.size == 1) {
                 return if (state.laid > 0) EMPTY
-                else tap(points[0], state.base, state.seed, state.density)
+                else tap(points[0], state.base, state.seed, state.density, state.lead)
             }
             val out = Sink()
             out.carried = state.laid
@@ -843,13 +1071,13 @@ object GraphiteGrain {
             advance(state, points, out, prefix = false)
             // Not one station reached: the whole mark is a tap, exactly as [of] says.
             if (state.station == 0) {
-                return tap(points[state.from], state.base, state.seed, state.density)
+                return tap(points[state.from], state.base, state.seed, state.density, state.lead)
             }
             if (!state.full) {
                 cap(
                     out, state.lastCx, state.lastCy, state.travelX, state.travelY,
                     state.lastPress, state.lastLean, state.lastArc, state.lastHalf,
-                    state.seed, state.station + 1, 1f, state.density,
+                    state.lastToBarrel, state.seed, state.station + 1, 1f, state.density,
                 )
             }
             state.laid += out.count
@@ -862,7 +1090,12 @@ object GraphiteGrain {
      * the same one [of] will be called with when the mark commits — at [density], the same
      * one [of] will be called with too. See [Sweep] and [of].
      */
-    fun begin(width: Float, seed: Int, density: Float = 1f): Sweep = Sweep(width, seed, density)
+    fun begin(
+        width: Float,
+        seed: Int,
+        density: Float = 1f,
+        lead: Lead = Lead.ROUND,
+    ): Sweep = Sweep(width, seed, density, lead)
 
     private fun sweep(
         points: List<StrokePoint>,
@@ -870,15 +1103,18 @@ object GraphiteGrain {
         seed: Int,
         prefix: Boolean,
         density: Float,
+        lead: Lead,
     ): Grain {
-        val state = SweepState(base, seed, density)
+        val state = SweepState(base, seed, density, lead)
         val out = Sink()
         // A prefix that has not travelled far enough to decide these things the way the
         // finished stroke will lays nothing: see [prefixDecidable].
         if (!advance(state, points, out, prefix)) return EMPTY
         // A path shorter than one pitch never reaches a station; it still left graphite —
         // but a tap is not a prefix of a sweep, so prefix mode waits for the first station.
-        if (state.station == 0) return if (prefix) EMPTY else tap(points[state.from], base, seed, density)
+        if (state.station == 0) {
+            return if (prefix) EMPTY else tap(points[state.from], base, seed, density, lead)
+        }
         // And the lifting end gets its dome too — except under the pen, where that end is
         // the tip of the lead and has not come to rest anywhere yet. (Nor past MAX_FLECKS,
         // where the sweep gave up mid-stroke and a dome would cap nothing.)
@@ -886,7 +1122,7 @@ object GraphiteGrain {
             cap(
                 out, state.lastCx, state.lastCy, state.travelX, state.travelY,
                 state.lastPress, state.lastLean, state.lastArc, state.lastHalf,
-                seed, state.station + 1, 1f, state.density,
+                state.lastToBarrel, seed, state.station + 1, 1f, state.density,
             )
         }
         return out.grain()
@@ -951,6 +1187,16 @@ object GraphiteGrain {
             chordDirection(points, from, TANGENT_SMOOTH_PX, dir)
             state.travelX = dir[0]
             state.travelY = dir[1]
+            // And the lean's *direction*, on the same window as the lean's size and for
+            // the same reason: a digitizer's azimuth jitters, the flank's reach is up to
+            // twenty lead-widths long, and an angular error out there is multiplied by
+            // exactly that lever arm (the Phase 25 lesson, from the one place in the file
+            // with a longer arm than the rim of a 96 px lead).
+            if (state.lead == Lead.FLANK) {
+                seedAzimuth(points, from, min(TILT_SMOOTH_PX, SEED_WINDOW_PX), dir)
+                state.azX = dir[0]
+                state.azY = dir[1]
+            }
             state.seeded = true
         }
         if (state.full) return true
@@ -969,12 +1215,16 @@ object GraphiteGrain {
         var coverTilt = state.coverTilt
         var travelX = state.travelX
         var travelY = state.travelY
+        var azX = state.azX
+        var azY = state.azY
+        val flank = state.lead == Lead.FLANK
         // Whatever the last cross-section was, so the finish can be capped with the same lead.
         var lastCx = state.lastCx
         var lastCy = state.lastCy
         var lastPress = state.lastPress
         var lastLean = state.lastLean
         var lastHalf = state.lastHalf
+        var lastToBarrel = state.lastToBarrel
         var lastArc = state.lastArc
         var capped = state.capped
         var full = false
@@ -989,6 +1239,19 @@ object GraphiteGrain {
             if (segLen <= 0f) continue
             val tx = dx / segLen
             val ty = dy / segLen
+            // The segment's two lean directions as unit vectors, hoisted out of the
+            // station loop — a segment may hold dozens of stations and the trig does not
+            // change across them.
+            val azAx: Float
+            val azAy: Float
+            val azBx: Float
+            val azBy: Float
+            if (flank) {
+                azAx = cos(a.azimuth); azAy = sin(a.azimuth)
+                azBx = cos(b.azimuth); azBy = sin(b.azimuth)
+            } else {
+                azAx = 0f; azAy = 0f; azBx = 0f; azBy = 0f
+            }
             while (nextAt <= traveled + segLen) {
                 // The direction a cross-section is laid across is the *travelled* direction,
                 // not the one measured between the last two samples — see TANGENT_SMOOTH_PX.
@@ -1014,8 +1277,46 @@ object GraphiteGrain {
                 val tilt = a.tilt + t * (b.tilt - a.tilt)
                 leanTilt += (tilt - leanTilt) * smoothing
                 coverTilt += (tilt - coverTilt) * covering
-                val half = base * widthFactor(leanTilt)
-                val coverLean = coverageFactor(coverTilt)
+                val half: Float
+                val coverLean: Float
+                val toBarrel: Float
+                if (flank) {
+                    // Shape from the lean of the instant, tone from the lean the hand has
+                    // settled into — Phase 11's division, unchanged. Here the "shape" is
+                    // how far the strip reaches and the "tone" is how pale it deposits.
+                    val ux = azAx + t * (azBx - azAx)
+                    val uy = azAy + t * (azBy - azAy)
+                    val ul = sqrt(ux * ux + uy * uy)
+                    if (ul > 1e-6f) {
+                        azX += (ux / ul - azX) * smoothing
+                        azY += (uy / ul - azY) * smoothing
+                        val al = sqrt(azX * azX + azY * azY)
+                        if (al > 1e-6f) {
+                            azX /= al
+                            azY /= al
+                        } else {
+                            azX = ux / ul
+                            azY = uy / ul
+                        }
+                    }
+                    half = base
+                    // How much of the strip's reach falls **across** the travel: the
+                    // projection onto the travel normal, which is where the whole
+                    // direction-dependence of this lead lives.
+                    val acrossTravel = azX * -travelY + azY * travelX
+                    toBarrel = flankExtent(base, flankBloom(leanTilt)) * acrossTravel
+                    // And how broad the mark is *becoming*, which is what the paleness
+                    // follows — the lean the hand has settled into (never the instant's,
+                    // Phase 11) crossed with the direction it is travelling. Zero down a
+                    // stroke drawn along its own lean, where nothing is spread over
+                    // anything; one across a full shading sweep.
+                    val spread = flankBloom(coverTilt) * abs(acrossTravel)
+                    coverLean = 1f - FLANK_LIGHTEN * spread
+                } else {
+                    half = base * widthFactor(leanTilt)
+                    coverLean = coverageFactor(coverTilt)
+                    toBarrel = 0f
+                }
                 val cx = a.x + t * dx
                 val cy = a.y + t * dy
                 val pressure = a.pressure + t * (b.pressure - a.pressure)
@@ -1029,8 +1330,9 @@ object GraphiteGrain {
                     lean = coverLean,
                     arc = nextAt,
                     station = station,
-                    lanes = laneCount(half),
+                    lanes = laneCount(span(half, toBarrel)),
                     half = half,
+                    toBarrel = toBarrel,
                     seed = seed,
                     density = density,
                 )
@@ -1039,6 +1341,7 @@ object GraphiteGrain {
                 lastPress = pressure
                 lastLean = coverLean
                 lastHalf = half
+                lastToBarrel = toBarrel
                 lastArc = nextAt
                 // The touch-down dome, laid before the body so everything already on the paper
                 // keeps its place as the stroke grows — only the lifting end moves with the pen.
@@ -1046,7 +1349,7 @@ object GraphiteGrain {
                     capped = true
                     cap(
                         out, cx, cy, travelX, travelY, pressure, coverLean, nextAt, half,
-                        seed, -1, -1f, density,
+                        toBarrel, seed, -1, -1f, density,
                     )
                 }
                 station++
@@ -1066,11 +1369,14 @@ object GraphiteGrain {
         state.coverTilt = coverTilt
         state.travelX = travelX
         state.travelY = travelY
+        state.azX = azX
+        state.azY = azY
         state.lastCx = lastCx
         state.lastCy = lastCy
         state.lastPress = lastPress
         state.lastLean = lastLean
         state.lastHalf = lastHalf
+        state.lastToBarrel = lastToBarrel
         state.lastArc = lastArc
         state.capped = capped
         state.full = full
@@ -1079,8 +1385,16 @@ object GraphiteGrain {
 
     /**
      * One cross-section of the mark: the lanes of tooth the lead spans at this instant.
-     * The normal is the travel direction turned a quarter turn, so [half] is measured
+     * The normal is the travel direction turned a quarter turn, so the contact is measured
      * across the stroke however it is heading.
+     *
+     * [half] is the lead's own radius and [toBarrel] is how far the flank's strip reaches
+     * across the travel — `0` for a round lead, and then this is the symmetric
+     * `[−half, +half]` cross-section it has always laid. With a flank the interval is
+     * **one-sided**: it runs from the tip, which is at `0` and is where the reported point
+     * is, out to [toBarrel], with the lead's own radius rounding both ends. That is the
+     * asymmetry the whole model is about, and it lives here rather than in the caller so
+     * the cap gets it for free.
      */
     private fun deposit(
         out: Sink,
@@ -1094,11 +1408,17 @@ object GraphiteGrain {
         station: Int,
         lanes: Int,
         half: Float,
+        toBarrel: Float,
         seed: Int,
         density: Float,
     ) {
         val nx = -ty
         val ny = tx
+        // The contact's footprint on the normal: centred at the strip's midpoint, half of
+        // its length either side. Both are exactly 0 and exactly [half] when there is no
+        // flank, which is what keeps the round lead's grain bit for bit what it was.
+        val mid = toBarrel * 0.5f
+        val reach = span(half, toBarrel)
         val press = pressure.coerceIn(0f, 1f).pow(PRESSURE_GAMMA)
         // Slide this cross-section's whole comb of lanes sideways by a random fraction of a lane.
         // Without it, the same lane recurs at the same offset station after station, and since a
@@ -1109,11 +1429,17 @@ object GraphiteGrain {
         val phase = unit(hash(seed, station, 0x1f7))
         for (lane in 0 until lanes) {
             val u = laneOffset(lane, lanes, phase)
-            val site = u * half
+            val site = mid + u * reach
+            // How far along the strip this site is, tip (0) to barrel (1) — see
+            // [FLANK_TAIL_BARE]. Sites on the tip's far side clamp to the tip, which is
+            // right: that is the lead's own rounded point, bearing the hand's weight.
+            // With no flank this is 0 and the fall is exactly 1.
+            val along = if (toBarrel != 0f) (site / toBarrel).coerceIn(0f, 1f) else 0f
+            val fall = 1f - FLANK_TAIL_BARE * along
             // [density] multiplies the coverage and only the coverage — see [of]. A site's own
             // toss in [catches] does not move with it, so thinning a mark removes flecks and
             // never relocates one.
-            val cover = coverage(press, u) * skate(arc, site, seed) * lean * density
+            val cover = coverage(press, u) * fall * skate(arc, site, seed) * lean * density
             if (cover <= 0f) continue
             val alongJitter = (unit(hash(seed, station, lane)) - 0.5f) *
                 (JITTER * TOOTH_PITCH_PX + 2f * LEVER_JITTER * abs(site))
@@ -1127,11 +1453,36 @@ object GraphiteGrain {
         }
     }
 
-    /** A tap: the same tooth lattice, filled over a disc instead of swept along a path. */
-    private fun tap(p: StrokePoint, base: Float, seed: Int, density: Float): Grain {
+    /**
+     * A tap: the lead touched down and lifted. A round lead leaves the disc of grit
+     * [tapDisc] fills; a flank leaves the **capsule** it is actually resting on
+     * ([tapStrip]) — a dab with the pen laid over is a short streak along the lean, not a
+     * dot, and it is the one place in this file where the mark exists with no travel
+     * direction to hang anything on.
+     */
+    private fun tap(p: StrokePoint, base: Float, seed: Int, density: Float, lead: Lead): Grain {
+        if (lead == Lead.FLANK) {
+            // A dab has no travel to spread the graphite over, so the whole strip prints at
+            // once and [FLANK_LIGHTEN] rides the lean alone — the one place the sweep's
+            // question ("how broad is this mark becoming") has no answer.
+            val bloom = flankBloom(p.tilt)
+            val lean = 1f - FLANK_LIGHTEN * bloom
+            val extent = flankExtent(base, bloom)
+            return if (extent > 0f) tapStrip(p, base, extent, lean, seed, density)
+            else tapDisc(p, base, lean, seed, density)
+        }
+        return tapDisc(p, base * widthFactor(p.tilt), coverageFactor(p.tilt), seed, density)
+    }
+
+    /** The disc of grit a round point leaves: the same tooth lattice, filled over a circle. */
+    private fun tapDisc(
+        p: StrokePoint,
+        half: Float,
+        lean: Float,
+        seed: Int,
+        density: Float,
+    ): Grain {
         val out = Sink()
-        val half = base * widthFactor(p.tilt)
-        val lean = coverageFactor(p.tilt)
         val press = p.pressure.coerceIn(0f, 1f).pow(PRESSURE_GAMMA)
         val lanes = laneCount(half)
         for (row in 0 until lanes) {
@@ -1148,6 +1499,57 @@ object GraphiteGrain {
                 val y = p.y + v * half + jy
                 if (!catches(cover, x, y, hash(seed, row, lane xor 0x2af1))) continue
                 out.add(x, y, levelOf(press, hash(seed, row, lane xor 0x11d7)))
+            }
+        }
+        return out.grain()
+    }
+
+    /**
+     * The streak a leaned lead leaves where it touched down and lifted: the same tooth
+     * lattice filled over the capsule of radius [base] running [extent] px from the tip
+     * along the lean, with the strip's own tip-to-barrel falloff.
+     *
+     * The lattice is laid in the **strip's** frame rather than the screen's, which is the
+     * same choice the swept mark makes (its combs are laid across the travel), and it is
+     * what keeps a dab and the first station of a stroke looking like the same tool.
+     */
+    private fun tapStrip(
+        p: StrokePoint,
+        base: Float,
+        extent: Float,
+        lean: Float,
+        seed: Int,
+        density: Float,
+    ): Grain {
+        val out = Sink()
+        val ax = cos(p.azimuth)
+        val ay = sin(p.azimuth)
+        val press = p.pressure.coerceIn(0f, 1f).pow(PRESSURE_GAMMA)
+        val rows = laneCount((extent + 2f * base) * 0.5f)
+        val lanes = laneCount(base)
+        for (row in 0 until rows) {
+            // Along the strip, from one radius behind the tip to one past the barrel end.
+            val s = -base + (row + unit(hash(seed, row, 0x3c1))) * (extent + 2f * base) / rows
+            for (lane in 0 until lanes) {
+                val v = laneOffset(lane, lanes, unit(hash(seed, row, 0x2e8))) * base
+                // The rounded ends: outside the capsule there is no lead on the paper.
+                val over = when {
+                    s < 0f -> sqrt(s * s + v * v)
+                    s > extent -> sqrt((s - extent) * (s - extent) + v * v)
+                    else -> abs(v)
+                }
+                if (over > base) continue
+                val along = (s / extent).coerceIn(0f, 1f)
+                val cover = coverage(press, over / base) * (1f - FLANK_TAIL_BARE * along) *
+                    lean * density
+                if (cover <= 0f) continue
+                val jx = (unit(hash(seed, row, lane)) - 0.5f) * JITTER * TOOTH_PITCH_PX
+                val jy = (unit(hash(seed, row, lane xor 0x5bf0)) - 0.5f) * JITTER * TOOTH_PITCH_PX
+                val x = p.x + ax * s - ay * v + jx
+                val y = p.y + ay * s + ax * v + jy
+                if (!catches(cover, x, y, hash(seed, row, lane xor 0x2af1))) continue
+                out.add(x, y, levelOf(press, hash(seed, row, lane xor 0x11d7)))
+                if (out.total >= MAX_FLECKS) return out.grain()
             }
         }
         return out.grain()

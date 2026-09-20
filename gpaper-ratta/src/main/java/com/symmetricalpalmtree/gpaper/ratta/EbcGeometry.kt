@@ -1,5 +1,7 @@
 package com.symmetricalpalmtree.gpaper.ratta
 
+import kotlin.math.atan2
+
 /**
  * Screen coordinates → panel coordinates (Phase 28). Pure Kotlin, no Android imports, so
  * the one thing that would be invisible on-device until a mark landed in the wrong quarter
@@ -37,6 +39,31 @@ internal object EbcGeometry {
     } else {
         screenY * panelW + screenX
     }
+
+    /**
+     * A direction the digitizer reported in its own axes, as a direction on the **screen**,
+     * in radians (`0` towards `+x`, `π/2` towards `+y` down the screen) — Phase 36.
+     *
+     * The stylus's tilt axes lie in the panel's frame, not the screen's, so on a turned
+     * panel a lean the hand means as "down and to the right" arrives pointing somewhere
+     * else entirely; and unlike the pixel mapping above, nothing on screen looks wrong
+     * until a flank lays itself on the opposite side of the nib. The turn is the same
+     * quarter the pixel rule applies — the vector map `(x, y) → (y, −x)`.
+     *
+     * **The direction of that turn is the hand's, not an inference.** Composing the pixel
+     * rule's *inverse* would turn the other way; the measurement says otherwise, and the
+     * measurement is two devices agreeing. The same right-handed shading grip reads ≈42° in
+     * the raw axes on a Manta, whose panel is the screen, and ≈137° on a Nomad, whose panel
+     * is a quarter turn away — and only `(x, y) → (y, −x)` brings 137° to ≈47° and makes the
+     * two the same grip (the user's hand, 2026-09-19, `probe-tilt`). Which of the two frames
+     * carries the sign convention that makes it come out this way is not visible from here,
+     * and pinning a derivation onto it would be dressing a guess as a fact.
+     *
+     * The lean's *magnitude* needs none of this: a hypotenuse does not care how the axes
+     * are turned.
+     */
+    fun screenAzimuth(rotated: Boolean, tiltX: Float, tiltY: Float): Float =
+        if (rotated) atan2(-tiltX, tiltY) else atan2(tiltY, tiltX)
 
     /**
      * The screen rect `[left, top, right, bottom)` as the panel rect DISPAREA wants, written

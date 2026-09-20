@@ -65,12 +65,21 @@ override fun onDestroy() { paper.release(); super.onDestroy() }
 
 ## The data model
 
-`StrokePoint(x, y, pressure = 1f, tilt = 0f, timeMillis = 0L)`
+`StrokePoint(x, y, pressure = 1f, tilt = 0f, timeMillis = 0L, azimuth = 0f)`
 `Stroke(id, points, color = BLACK, width = 3f, style = PEN)` with an eagerly computed `bounds`.
 
-- **Pressure and tilt are captured** on hardware that reports them;
+- **Pressure, tilt and lean direction are captured** on hardware that reports them;
   rendering may ignore them initially. Conventions follow `MotionEvent`: pressure `0..1`,
   tilt radians from vertical, `timeMillis` monotonic event time (not wall-clock).
+- **`azimuth` (0.1.51) is which way the pen is leaning**, in radians in **screen** space —
+  `0` towards `+x`, `π/2` towards `+y` down the screen — pointing from the tip towards
+  where the barrel lies. It is meaningless while `tilt` is `0` (a pen held upright leans
+  nowhere) and `0f` whenever an engine cannot honestly supply it, which is every engine but
+  Supernote's today. **How a HAL encodes tilt and direction is the engine's business**:
+  `CanvasPaperView.sampleTilt` / `sampleAzimuth` are `protected open` seams taking a
+  sample's raw `AXIS_TILT` and `AXIS_ORIENTATION`, defaulting to Android's own contract
+  (`AXIS_TILT` *is* the polar lean in radians, no direction). Supernote's overrides them,
+  because that HAL means signed tilt-X and tilt-Y in degrees by those two axes.
 - **Color is an ARGB Int**, width is px. No serialization opinions anywhere — the host
   persists strokes however it likes.
 - `Stroke.translated(dx, dy)` is the sanctioned way to move/copy a stroke: it shifts
@@ -342,7 +351,7 @@ verified on five BOOX devices; the Ratta 0…31 pen-code sweep on Nomad + Manta)
 | `PEN` | uniform width | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
 | `FOUNTAIN` | pressure/velocity width | `STROKE_STYLE_FOUNTAIN` (1) | `INK` (16) |
 | `MARKER` | uniform, semi-transparent | `STROKE_STYLE_MARKER` (2) | `NEEDLE` (10) |
-| `PENCIL` | graphite grain on tooth; pressure → darkness (tilt → width where an engine reports a lean; none does today) | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
+| `PENCIL` | graphite grain on tooth; pressure → darkness (a lean widens the mark where an engine reports one — Supernote's flank, 0.1.51; BOOX reports none) | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
 | `BRUSH` | broad, pressure-modulated | `STROKE_STYLE_NEO_BRUSH` (3) | `INK` (16) |
 | `CALLIGRAPHY` | chisel nib, direction-dependent | `STROKE_STYLE_SQUARE_PEN` (7) | code 15 (14 fallback) |
 | `DASH` | uniform, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
@@ -398,6 +407,20 @@ is a pencil held upright, a fixed-width mark, and that is the pencil this style 
 apparent width comes out roughly `width + 1 px`, the bleed of one fleck — except that **a fleck is
 never wider than the lead that lays it** (0.1.24), so a hairline lead bakes as the hairline it
 previewed as rather than at twice its width.
+
+**The flank (0.1.51, `GraphiteGrain.Lead`).** There are two claims about what a leaned lead
+does, and an engine picks one. `Lead.ROUND` is the default and is every caller before
+0.1.51 — the contact is a **disc** whose radius grows on the curve above. `Lead.FLANK` is
+Supernote's: a pencil laid over does not grow a bigger point, it lies *down*, so the contact
+is a **capsule** running from the tip towards the barrel along `StrokePoint.azimuth`, twenty
+lead-widths long when the pen is fully over. That makes the mark depend on which way the
+hand travels — across the lean it lays a broad band, along the lean it stays the lead's own
+width — which is how a real pencil shades. Below a **45°** polar lean the flank is bit for
+bit the upright mark (no widening, no lightening at all); it blooms to full between 45° and
+**54°**, the gap the `probe-tilt` measurement found between an ordinary writing grip and a
+deliberate shading one. Pressure keeps its usual job; the band pales as it widens, so a firm
+shading pass is grey rather than a slab. `Lead` is a parameter on `GraphiteGrain.of` and
+`GraphiteGrain.begin`, defaulted, so no existing caller moves.
 
 **Onyx live ink for `PENCIL` is the plain even line, style 0 (0.1.24).** It was `CHARCOAL_V2`
 from 0.1.9 to 0.1.23. That style broadens with the pen's lean inside the firmware and
@@ -457,7 +480,11 @@ of models whose tilt has actually been *measured*, and every model not on it rep
 Measured on a NoteAir5C: `hypot(tiltX, tiltY)` is degrees from vertical, directly (a hand at a
 deliberate 45° read 44.3). **`tilt = 0` is not a degraded mode** — it means a pencil held
 upright, so an unmeasured device gets a fixed-width pencil rather than a broken one. Adding a
-model to that list is a measurement, never an inference.
+model to that list is a measurement, never an inference. **And a HAL is free to mean
+something else by an axis** (0.1.51): Supernote's puts signed tilt-X on `AXIS_TILT` and
+signed tilt-Y on `AXIS_ORIENTATION`, both in degrees, so the platform's own contract read as
+written turned a raw `30` into 1719°. Decoding is therefore the engine's, through
+`sampleTilt` / `sampleAzimuth`.
 
 The grain is **deterministic**: it is seeded from the stroke's `id`, so the same stroke
 re-renders fleck for fleck on every reload, in `StrokeRasterizer`, and on any device. The

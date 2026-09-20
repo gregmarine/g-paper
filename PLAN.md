@@ -2628,6 +2628,136 @@ show the real raster without the tool change."*
   which clears the waiting runs and rebuilds the whole page `settled`, so a page turned to is
   shown in tone from its first frame.
 
+### Phase 36 — The flank: the Supernote pencil leans again (post-v0.1.0)
+**Status:** 🔨 In progress (2026-09-19) · **Publishes:** 0.1.51 · branch `side-lead` ·
+Opened by the user's decision for NSE · Sketch's arc 47 "Side" (Notesprout
+`extensions/sketch/SIDE_PLAN.md`), off the back of the `probe-tilt` walk of the same day.
+
+**Why.** Phase 22 took the lean out of the Supernote pencil because a hairline drawn at an
+ordinary writing angle baked 10–15× wider than it previewed, and Phase 28 decision 5 wrote
+that down as a policy — *"the Supernote pencil stays upright"*. Both were right about what
+the artist saw. **Neither was right about why**, and the difference matters, because a policy
+adopted to paper over a units bug outlives the bug and takes a whole feature with it.
+
+**What the probe measured** (the user's hand, Nomad and Manta, 2026-09-19; `probe-tilt`
+writes one CSV row a sample across five grips). Per grip, median polar lean from vertical:
+
+| grip | Nomad | Manta |
+|---|---|---|
+| upright | 10° (p95 17°) | 7° (p95 10°) |
+| writing | 39° (p95 43°) | 29° (p95 40°) |
+| shading | 56° (min 54°) | 61° (min 55°) |
+| flat | 54° (min 50°) | 61° (min 56°) |
+| physical ceiling | 62° | 72° |
+
+Two findings came out of it, and only one of them was the one being looked for.
+
+**The HAL does not follow Android's axis contract.** `AXIS_TILT` carries signed **tilt-X in
+degrees** and `AXIS_ORIENTATION` signed **tilt-Y in degrees** — both live, both in the
+*panel's* frame. The polar lean is their hypotenuse, exactly as the NoteAir5C measurement
+found on BOOX (Phase 11). `CanvasPaperView` read `AXIS_TILT` as radians, per the platform's
+own documentation, so a raw `30` meant **1719°** and ran off the end of every curve in
+`GraphiteGrain`. It hid for a year because the Nomad's sign happens to be negative, which
+clamps to upright and looks perfect; the Manta's is positive, which saturates — **and that
+saturation is the 10–15× bloom of 2026-09-17.** A units bug and a design decision are not
+the same shape of thing, and one was taken for the other.
+
+**And direction is there too, if the panel's turn is undone.** The lean azimuth is
+`atan2(tiltY, tiltX)` in panel space. The same right-handed shading grip reads ≈42° on the
+Manta, whose panel *is* the screen, and ≈137° on the Nomad, whose panel is a quarter turn
+away; mapping `(x, y) → (y, −x)` brings 137° to ≈47° and makes the two one grip. That is the
+*same* vector map the pixel rule applies, not its inverse — which is worth stating plainly
+rather than deriving, because composing the inverse turns the other way and the only thing
+that settles it is two devices agreeing (`EbcGeometry.screenAzimuth`, pinned by test).
+
+**The user's decisions (locked).**
+1. **Threshold response in polar lean:** tip only to **45°**, smoothstep bloom 45°→**54°**,
+   full flank from 54°. Below 45° the mark is *exactly* today's upright mark — no widening
+   at all. The two bands the probe found touch (writing p95 43°, shading min 54°), so the
+   threshold is the gap itself rather than a fitted midpoint.
+2. **Full-flank extent 20× the lead width** (4 px lead → 80 px), one named constant, the
+   walk's knob.
+3. **The flank pales as it widens** — `TILT_LIGHTEN`'s idea, retuned, so a fully-over lead
+   reads grey however hard it is pressed.
+4. **Asymmetric, physically.** The contact strip runs from the tip *along the azimuth
+   towards the barrel*: a one-sided extension, densest at the tip and trailing off toward
+   the barrel, never a symmetric widening across the travel normal. So a stroke dragged
+   along its own azimuth stays thin and one dragged across it lays a broad band — **that is
+   the real pencil and it is wanted**.
+5. Pressure keeps its current role (darkness/coverage) on the flank too.
+6. The needle fallback (panel closed) keeps `bakeTilt` = 0; the direct panel path passes
+   tilt **and** azimuth through, live and baked from the same `Sweep`.
+
+**This amends Phase 28 decision 5** — "the Supernote pencil stays upright" — to: upright for
+every ordinary grip, flank only past a side threshold the hand can reach only deliberately.
+
+**What landed**
+- **`StrokePoint.azimuth`** (radians, screen space, last field, defaulted `0f`), and two
+  `protected open` capture seams on `CanvasPaperView` — `sampleTilt(rawTilt, rawOrientation)`
+  and `sampleAzimuth(…)` — whose defaults are today's behaviour exactly, so only Supernote
+  moves. Decoding a HAL's axes is the **engine's** business; the base must not invent a
+  direction it cannot place (Phase 11's rule, one level up).
+- **`GraphiteGrain.Lead`** — `ROUND` (every caller before this phase; the disc that grows on
+  `TILT_GAIN`'s curve) and `FLANK`. The contact is a **capsule** from the tip to
+  `FLANK_EXTENT × width` along the smoothed azimuth, projected onto the travel normal, so
+  the direction-dependence falls out of the geometry instead of being written down and a
+  station still lays one cross-section. `ROUND` is **byte-identical**: `GraphiteGrainPinTest`
+  passes untouched, which is exactly what it was written for.
+- **The azimuth is smoothed causally over `TILT_SMOOTH_PX` and averaged as a unit vector**,
+  seeded from the first window like the lean. Never as an angle: a lean pointing up the
+  screen delivers `+179°` and `−179°` sample to sample, whose mean is the opposite
+  direction, and the flank would lay itself on the wrong side of the nib. Pinned by a
+  wrapping-azimuth case in both the prefix and incremental suites.
+- **The paleness follows the band, not the lean** — found by rendering. `TILT_LIGHTEN`'s
+  mark broadened in every direction, so lean and broadening were one fact; a flank's are
+  not, and lightening by the lean alone made a deliberate 60° line drawn *along* its own
+  lean ten times fainter than the same line drawn upright. It now rides
+  `flankBloom(coverTilt) × |azimuth · travel-normal|`: zero down the lean, one across a
+  full sweep.
+- **`FLANK_LIGHTEN` = 0.38 and `FLANK_TAIL_BARE` = 0.30, and 0.45 could not be carried over,
+  because `catches` is an S.** Coverage maps to the fraction of peaks that catch through a
+  curve centred near 0.5, and the round lead has always worked at the *top* of it — a
+  pressed hairline asks for 0.76 and catches 96 %. The flank works down the curve, where the
+  same proportional cut costs several times the ink: the first attempt (0.62, and a 0.55
+  tail) asked for 0.21, caught **one site in a hundred**, and rendered *fainter than the
+  upright hairline it was supposed to be a broad version of* — and the tail had quietly
+  become a truncation, the measured extent coming back at two thirds of the lead's reach.
+  **A multiplier is only proportional in the part of the curve you fitted it in.**
+- **Ratta:** `bakeTilt` relaxes on the direct panel path (the same rule that relaxed
+  `bakePressure` at 0.1.41 — with the panel open the preview *is* the grain, so there is
+  nothing left the preview cannot show) and stays 0 for the needle; `sampleTilt` /
+  `sampleAzimuth` overridden; all three `GraphiteGrain` entries on the direct path pass
+  `Lead.FLANK`. Arming it unconditionally is safe **because** decision 1 makes the flank
+  identical to the round lead below the threshold, so a needle-previewed page gets precisely
+  the mark it got before and "which model is this page drawn with" never has two answers.
+- **`EbcPanel.isRotated`** exposed, because the stylus's axes live in the panel's frame too.
+
+**Offline, at 1× (`FlankRenderHarness`, `$GPAPER_RENDER_DIR`), 4 px lead, press 0.65:**
+
+| cell | extent | × lead | ink /px | fill |
+|---|---|---|---|---|
+| a · upright 8° | 6.0 px | 1.5 | 3.69 | 0.61 |
+| b · writing 40° | 6.0 px | 1.5 | 3.64 | 0.61 |
+| c · mid-bloom 50° | 49.0 px | 12.3 | 21.13 | 0.43 |
+| d · shading 60°, **across** the lean | 79.0 px | 19.8 | 17.59 | 0.22 |
+| e · shading 60°, **along** the lean | 6.0 px | 1.5 | 3.65 | 0.61 |
+| f · 60° across, pressed hard (1.0) | 82.0 px | 20.5 | 46.85 | 0.57 |
+| g · 60° across, barely pressed (0.3) | 77.0 px | 19.3 | 2.10 | 0.03 |
+
+**b is pixel-identical to a and the harness asserts it**, which is decision 1 made
+falsifiable. d's band sits entirely below the nib (y 39…117, nib at 40): one-sided, as
+decided. f is grey at 0.57 fill rather than a slab. **g is the open question for the walk** —
+a light shading pass is very faint indeed, which is the S-curve again seen from the other
+end, and whether that is "a light touch" or "broken" is the hand's call.
+
+**Cost (`GraphiteGrainCostTest`, JVM, 2000-event stroke, 4 px lead):** flank **14.69 ms**
+(0.0073 ms/event, 37 152 flecks) against the round lead's 6.48 ms on the same stroke —
+2.3× for a cross-section a hundred lanes wide instead of six, and well inside the cadence
+Phase 28's 6 ms / 1252 events set. Doubling the stroke costs 1.99×, so the sweep is still
+linear and no re-derivation has crept back in.
+
+---
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

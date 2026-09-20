@@ -896,6 +896,21 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected open fun bakeTilt(style: StrokeStyle, tilt: Float): Float = tilt
 
     /**
+     * What width a stroke's **dirty region** should be computed from — [RasterDirty] pads a
+     * mark's point bounds by this on every side. The default is the stroke's own width,
+     * which is about twice a round lead's half-width and so has always been generous.
+     *
+     * The seam exists because a mark's footprint is only `width` while the tool draws
+     * within its own width, and a leaned `PENCIL` does not: a `GraphiteGrain.Lead.FLANK`
+     * shading sweep reaches twenty lead-widths past the path (Phase 36). **A dirty rect
+     * that misses part of a mark is not a cosmetic error** — the mark is clipped out of the
+     * raster composite that writes it, and the before-image the host takes for undo is of
+     * the wrong pixels. Engines whose pencil can lean override it with
+     * `GraphiteGrain.reach`; nothing else needs to.
+     */
+    protected open fun rasterDirtyWidth(stroke: Stroke): Float = stroke.width
+
+    /**
      * What pressure a captured sample should bake with on a **raster page** — the whole
      * point being that the preview and the bake agree, so this is where an engine gives
      * up a tone its hardware cannot show. The default is the pressure that was reported,
@@ -929,7 +944,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         val h = if (pageHeight > 0) pageHeight else height
         return RasterDirty.along(
             points = stroke.points,
-            width = stroke.width,
+            width = rasterDirtyWidth(stroke),
             pageWidth = w,
             pageHeight = h,
             maxSpanPx = RASTER_DIRTY_SPAN_PX,
@@ -2785,23 +2800,58 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     // ── MotionEvent → StrokePoint ────────────────────────────────────────────
 
+    /**
+     * The pen's lean, in radians from vertical, from one sample's raw axis values —
+     * `MotionEvent.AXIS_TILT` in [rawTilt] and `AXIS_ORIENTATION` in [rawOrientation].
+     *
+     * The default is Android's own contract: `AXIS_TILT` **is** the polar lean in radians,
+     * and `AXIS_ORIENTATION` says nothing about it. Every engine but Supernote's takes
+     * that default, because on BOOX and on a generic digitizer it is what arrives.
+     *
+     * The seam exists because **a HAL is free to mean something else by an axis, and
+     * nothing in the platform will say so** (Phase 36): Supernote's reports signed tilt-X
+     * in degrees on `AXIS_TILT` and signed tilt-Y in degrees on `AXIS_ORIENTATION`, so
+     * reading the contract as written gave a raw `30` the meaning "1719°" — off the end of
+     * every curve in [GraphiteGrain] — and it stayed invisible for a year because on the
+     * Nomad the sign happens to be negative and clamped to upright. Decoding is therefore
+     * the **engine's** business, not the base's, and it happens once, here, so a historical
+     * sample cannot take a different road from a current one.
+     */
+    protected open fun sampleTilt(rawTilt: Float, rawOrientation: Float): Float = rawTilt
+
+    /**
+     * Which way the pen is leaning, in radians in screen space, from the same two raw axis
+     * values — see [StrokePoint.azimuth] for the convention.
+     *
+     * `0` by default, which means *not supplied*: a base that cannot know how a HAL encodes
+     * direction must not invent one, exactly as [sampleTilt]'s allowlist rule on BOOX
+     * (Phase 11). The Supernote engine overrides it; a renderer must look right without it.
+     */
+    protected open fun sampleAzimuth(rawTilt: Float, rawOrientation: Float): Float = 0f
+
     /** Sample at [historyIndex] (−1 = the current sample) as a [StrokePoint]. */
     private fun MotionEvent.strokePointAt(historyIndex: Int): StrokePoint =
         if (historyIndex < 0) {
+            val rawTilt = getAxisValue(MotionEvent.AXIS_TILT)
+            val rawOrientation = getAxisValue(MotionEvent.AXIS_ORIENTATION)
             StrokePoint(
                 x = x,
                 y = y,
                 pressure = pressure,
-                tilt = getAxisValue(MotionEvent.AXIS_TILT),
+                tilt = sampleTilt(rawTilt, rawOrientation),
                 timeMillis = eventTime,
+                azimuth = sampleAzimuth(rawTilt, rawOrientation),
             )
         } else {
+            val rawTilt = getHistoricalAxisValue(MotionEvent.AXIS_TILT, historyIndex)
+            val rawOrientation = getHistoricalAxisValue(MotionEvent.AXIS_ORIENTATION, historyIndex)
             StrokePoint(
                 x = getHistoricalX(historyIndex),
                 y = getHistoricalY(historyIndex),
                 pressure = getHistoricalPressure(historyIndex),
-                tilt = getHistoricalAxisValue(MotionEvent.AXIS_TILT, historyIndex),
+                tilt = sampleTilt(rawTilt, rawOrientation),
                 timeMillis = getHistoricalEventTime(historyIndex),
+                azimuth = sampleAzimuth(rawTilt, rawOrientation),
             )
         }
 

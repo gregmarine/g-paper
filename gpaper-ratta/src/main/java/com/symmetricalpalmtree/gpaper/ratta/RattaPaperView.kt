@@ -21,6 +21,7 @@ import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.hypot
 
 /**
  * The Supernote (Ratta) engine: live strokes are painted by the firmware's ink daemon
@@ -713,15 +714,90 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         else pressure
 
     /**
-     * `PENCIL` bakes upright while the needle previews it: the firmware's live line cannot
-     * widen with lean, so a bake that did would be up to ~11× the line that was previewed
-     * (0.1.35, found on the Manta). Unlike [bakePressure] this does NOT relax on the direct
-     * panel path: the preview could show a leaned lead now, but the user's decision
-     * (2026-09-18, the Manta walk — "too wide for a 1.2 px lead") keeps the Supernote
-     * pencil upright. Width comes from the lead size alone.
+     * `PENCIL` bakes upright **while the needle previews it**: the firmware's live line
+     * cannot widen with lean, so a bake that did would be up to ~11× the line that was
+     * previewed (0.1.35, found on the Manta).
+     *
+     * **Phase 36 relaxes it on the direct panel path**, for exactly the reason [bakePressure]
+     * was relaxed at 0.1.41: with the panel open the preview is [GraphiteGrain]'s own flecks,
+     * live and baked from the same [GraphiteGrain.Sweep], so there is no longer anything the
+     * preview cannot show. Phase 28's decision 5 — *"the Supernote pencil stays upright"* —
+     * was made against a bake that could widen ~11× at an ordinary **writing** grip, and the
+     * measurement that made it (a raw `AXIS_TILT` in degrees read as radians) was wrong. The
+     * user's amendment stands in its place: upright for every ordinary grip, and the flank
+     * only past a side threshold the hand can only reach deliberately
+     * ([GraphiteGrain.Lead.FLANK]).
      */
     override fun bakeTilt(style: StrokeStyle, tilt: Float): Float =
-        if (style == StrokeStyle.PENCIL && firmware) 0f else tilt
+        if (style == StrokeStyle.PENCIL && firmware && !panel.isOpen) 0f else tilt
+
+    /**
+     * The lead this engine's pencil draws with: the flank, always, on this device.
+     *
+     * It is safe to leave armed because below [GraphiteGrain.flankBloom]'s threshold the
+     * flank **is** the round lead's upright mark, fleck for fleck — so a needle-previewed
+     * page, whose tilt [bakeTilt] zeroes, gets precisely the mark it got before, and the
+     * question "which model is this page drawn with" never has two answers.
+     */
+    private val pencilLead: GraphiteGrain.Lead get() = GraphiteGrain.Lead.FLANK
+
+    /**
+     * A leaned pencil's mark reaches far past its own width, so its dirty region must too —
+     * [GraphiteGrain.reach] at the furthest the pen leaned anywhere along the stroke, which
+     * is the bound the sweep's own causal filters stay inside.
+     *
+     * Doubled, because the base's default is `stroke.width` against a half-width of half
+     * that: the same factor of two the round lead has always been padded by, kept rather
+     * than tightened, since this is the rect the **bake** composites within and a mark
+     * clipped there is a mark half written. An upright pencil therefore lands within a
+     * pixel or two of the old number and only a stroke that actually leaned costs more.
+     */
+    override fun rasterDirtyWidth(stroke: Stroke): Float {
+        if (stroke.style != StrokeStyle.PENCIL) return stroke.width
+        var reach = 0f
+        for (p in stroke.points) {
+            val r = GraphiteGrain.reach(stroke.width, bakeTilt(stroke.style, p.tilt), pencilLead)
+            if (r > reach) reach = r
+        }
+        return maxOf(stroke.width, 2f * reach)
+    }
+
+    // ── What the digitizer actually reports (Phase 36) ───────────────────────
+
+    /**
+     * **The Ratta HAL does not follow Android's axis contract**, and nothing but a hand and
+     * a CSV was ever going to say so: `AXIS_TILT` carries signed **tilt-X in degrees** and
+     * `AXIS_ORIENTATION` signed **tilt-Y in degrees**, both live, both in the *panel's*
+     * frame. The polar lean from vertical is their hypotenuse — the same quantity, and the
+     * same reading, the NoteAir5C measurement found on BOOX (Phase 11).
+     *
+     * Read as written, `AXIS_TILT` is radians, so a raw `30` meant 1719° and ran off the end
+     * of every curve in [GraphiteGrain]. It hid for a year because the Nomad's sign is
+     * negative and clamped to upright; on the Manta it was positive and saturated, which is
+     * the 10–15× bloom of 2026-09-17 that Phase 22 answered by taking the lean away
+     * altogether. **A units bug and a policy decision are not the same shape of thing, and
+     * one was mistaken for the other** — the fix belonged here, one line, and instead the
+     * pencil lost its flank for two releases.
+     *
+     * Measured by the user's hand on both panels, 2026-09-19 (`probe-tilt/README.md`):
+     * upright 7–10°, writing 29–39°, shading 54–61°, and the digitizer stops tracking at
+     * 62° (Nomad) / 72° (Manta).
+     */
+    override fun sampleTilt(rawTilt: Float, rawOrientation: Float): Float =
+        Math.toRadians(hypot(rawTilt.toDouble(), rawOrientation.toDouble())).toFloat()
+
+    /**
+     * Which way the pen is leaning, turned out of the panel's frame into the screen's — see
+     * [EbcGeometry.screenAzimuth] for why the turn is the hand's finding and not a
+     * derivation, and [StrokePoint.azimuth] for the convention.
+     *
+     * `0` while the panel driver has not opened, because that is where the quarter turn is
+     * read from and a direction we cannot place is a direction we do not report (Phase 11's
+     * rule, and the flank is off on that path anyway — [bakeTilt] zeroes the lean there).
+     */
+    override fun sampleAzimuth(rawTilt: Float, rawOrientation: Float): Float =
+        if (panel.isOpen) EbcGeometry.screenAzimuth(panel.isRotated, rawTilt, rawOrientation)
+        else 0f
 
     // ── The direct raster page: painted onto the panel (Phase 28 · Phase 29, 0.1.43) ──
     //
@@ -904,7 +980,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // preview that reaches the renderer by a different road is a preview that can drift.
         val baked = bakePoints(points, StrokeStyle.PENCIL)
         val sweep = liveSweep
-            ?: GraphiteGrain.begin(penWidth, pendingStrokeSeed(), contactInk.density)
+            ?: GraphiteGrain.begin(penWidth, pendingStrokeSeed(), contactInk.density, pencilLead)
                 .also { liveSweep = it }
         val grain = sweep.extend(baked)
         if (grain.count == 0 && laidFlecks == 0) {
@@ -914,7 +990,8 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             // laying. It is the one place the whole stroke is still swept per event, and it
             // costs nothing: a stroke that short has barely any stations to decide.
             val provisionalGrain = GraphiteGrain.of(
-                baked, penWidth, pendingStrokeSeed(), prefix = false, density = contactInk.density,
+                baked, penWidth, pendingStrokeSeed(), prefix = false,
+                density = contactInk.density, lead = pencilLead,
             )
             if (provisionalGrain.count == 0) return
             provisional = true
@@ -1877,7 +1954,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             // Through the bake's own seams, exactly as the preview reached them.
             val baked = bakePoints(stroke.points, stroke.style)
             val sweep = liveSweep ?: GraphiteGrain.begin(
-                stroke.width, stroke.id.hashCode(), contactInk.density,
+                stroke.width, stroke.id.hashCode(), contactInk.density, pencilLead,
             ).also { liveSweep = it }
             if (provisional) {
                 // The provisional lay is not the mark: drop it, and let the finish below

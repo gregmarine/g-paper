@@ -15,6 +15,12 @@ package com.symmetricalpalmtree.gpaper.core.model
  * @property timeMillis Monotonic event time in milliseconds (`MotionEvent.getEventTime`
  *   timebase — milliseconds since boot, **not** wall-clock). `0` when unknown. Useful for
  *   velocity/replay; never interpret as a calendar date.
+ * @property azimuth Which way the pen is leaning, in radians in **screen** space: `0` is
+ *   towards `+x`, `π/2` towards `+y` (down the screen). The vector points from the tip
+ *   towards where the barrel lies, so it is the direction the flank of the lead trails in
+ *   (Phase 36). Meaningless while [tilt] is `0` — a pen held upright leans nowhere — and
+ *   `0.0` whenever the engine cannot honestly supply it, which is the same contract [tilt]
+ *   has had since Phase 11. Every engine but Supernote's reports `0.0` today.
  */
 data class StrokePoint(
     val x: Float,
@@ -22,6 +28,7 @@ data class StrokePoint(
     val pressure: Float = 1f,
     val tilt: Float = 0f,
     val timeMillis: Long = 0L,
+    val azimuth: Float = 0f,
 )
 
 /**

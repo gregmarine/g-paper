@@ -105,6 +105,14 @@ internal class EbcPanel {
     private var rotated = false
 
     /**
+     * Whether this panel's buffer is a quarter turn away from the screen — false until
+     * [open] has read the geometry. Public because the *stylus* axes lie in the panel's
+     * frame too, so the pencil's lean direction needs the same turn the pixels do
+     * ([EbcGeometry.screenAzimuth], Phase 36).
+     */
+    val isRotated: Boolean get() = rotated
+
+    /**
      * Open the driver, read the geometry, map frame 0 and start the display thread.
      * Idempotent; false (with one `Log.w`) when any step fails, and a failed attempt is
      * not retried — a driver that refused an app once will refuse it all session.

@@ -4,15 +4,13 @@ import com.symmetricalpalmtree.gpaper.core.geometry.GraphiteGrain
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.zip.CRC32
-import java.util.zip.Deflater
-import kotlin.math.ceil
-import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+
+/** The shared offline raster target — see [RenderSheet]. */
+private typealias Sheet = RenderSheet
 
 /**
  * **Render a new lead size to a PNG before it reaches a panel** — `CLAUDE.md`'s rule, and
@@ -78,177 +76,6 @@ class PencilRenderHarness {
 
         /** Magnification for the second sheet: nearest-neighbour, so a fleck stays a fleck. */
         const val ZOOM = 3
-
-        /** Sub-samples per axis when a fleck's disc is covered onto the pixel grid. */
-        const val AA_STEPS = 4
-    }
-
-    // ── A one-file raster target: 8-bit RGB, white paper, SrcOver discs ──────────
-
-    private class Sheet(val w: Int, val h: Int) {
-        /** Row-major RGB, three bytes a pixel, starting as bare paper. */
-        val px = ByteArray(w * h * 3) { 0xFF.toByte() }
-
-        fun set(x: Int, y: Int, r: Int, g: Int, b: Int) {
-            val i = (y * w + x) * 3
-            px[i] = r.toByte()
-            px[i + 1] = g.toByte()
-            px[i + 2] = b.toByte()
-        }
-
-        fun rgb(x: Int, y: Int): Triple<Int, Int, Int> {
-            val i = (y * w + x) * 3
-            return Triple(px[i].toInt() and 0xFF, px[i + 1].toInt() and 0xFF, px[i + 2].toInt() and 0xFF)
-        }
-
-        fun hLine(y: Int, v: Int) {
-            if (y !in 0 until h) return
-            for (x in 0 until w) set(x, y, v, v, v)
-        }
-
-        fun vLine(x: Int, v: Int) {
-            if (x !in 0 until w) return
-            for (y in 0 until h) set(x, y, v, v, v)
-        }
-
-        fun blit(src: Sheet, dx: Int, dy: Int) {
-            for (y in 0 until src.h) {
-                val ty = dy + y
-                if (ty !in 0 until h) continue
-                for (x in 0 until src.w) {
-                    val tx = dx + x
-                    if (tx !in 0 until w) continue
-                    val (r, g, b) = src.rgb(x, y)
-                    set(tx, ty, r, g, b)
-                }
-            }
-        }
-
-        /**
-         * One fleck: a disc of diameter [d] centred at ([cx], [cy]), composited SrcOver at
-         * [alpha] (0…1). Coverage is sub-sampled [AA_STEPS]² per pixel rather than computed
-         * analytically — a fleck is about a pixel across, so what matters is that a partly
-         * covered pixel is partly inked at all, and a smoothed edge is what Skia's round cap
-         * gives too.
-         */
-        fun disc(cx: Float, cy: Float, d: Float, r: Int, g: Int, b: Int, alpha: Float) {
-            val rad = d / 2f
-            val x0 = max(0, floor(cx - rad).toInt())
-            val x1 = min(w - 1, ceil(cx + rad).toInt())
-            val y0 = max(0, floor(cy - rad).toInt())
-            val y1 = min(h - 1, ceil(cy + rad).toInt())
-            val step = 1f / AA_STEPS
-            val rr = rad * rad
-            for (y in y0..y1) {
-                for (x in x0..x1) {
-                    var hits = 0
-                    for (sy in 0 until AA_STEPS) {
-                        val py = y + (sy + 0.5f) * step
-                        for (sx in 0 until AA_STEPS) {
-                            val pxx = x + (sx + 0.5f) * step
-                            val dx = pxx - cx
-                            val dy = py - cy
-                            if (dx * dx + dy * dy <= rr) hits++
-                        }
-                    }
-                    if (hits == 0) continue
-                    val a = alpha * hits / (AA_STEPS * AA_STEPS)
-                    val (dr, dg, db) = rgb(x, y)
-                    set(
-                        x, y,
-                        (dr + (r - dr) * a).toInt().coerceIn(0, 255),
-                        (dg + (g - dg) * a).toInt().coerceIn(0, 255),
-                        (db + (b - db) * a).toInt().coerceIn(0, 255),
-                    )
-                }
-            }
-        }
-
-        fun sub(x0: Int, y0: Int, w0: Int, h0: Int): Sheet {
-            val out = Sheet(w0, h0)
-            for (y in 0 until h0) {
-                for (x in 0 until w0) {
-                    val (r, g, b) = rgb((x0 + x).coerceIn(0, w - 1), (y0 + y).coerceIn(0, h - 1))
-                    out.set(x, y, r, g, b)
-                }
-            }
-            return out
-        }
-
-        /** Nearest-neighbour magnification — a smoothed one erases exactly what is being looked at. */
-        fun zoomed(factor: Int): Sheet {
-            val out = Sheet(w * factor, h * factor)
-            for (y in 0 until out.h) {
-                for (x in 0 until out.w) {
-                    val (r, g, b) = rgb(x / factor, y / factor)
-                    out.set(x, y, r, g, b)
-                }
-            }
-            return out
-        }
-
-        /** Ink darkness on white paper at ([x], [y]): 0 bare … 1 solid. */
-        fun darkness(x: Int, y: Int): Float {
-            val (r, g, b) = rgb(x, y)
-            return 1f - (0.299f * r + 0.587f * g + 0.114f * b) / 255f
-        }
-
-        /** The smallest legal PNG that holds this: one IHDR, one IDAT, one IEND, no filtering. */
-        fun toPng(): ByteArray {
-            val raw = ByteArray(h * (w * 3 + 1))
-            var o = 0
-            for (y in 0 until h) {
-                raw[o++] = 0 // filter type 0 (None) — the encoder's job here is to be obvious
-                System.arraycopy(px, y * w * 3, raw, o, w * 3)
-                o += w * 3
-            }
-            val out = ByteArrayOutputStream()
-            out.write(byteArrayOf(137.toByte(), 80, 78, 71, 13, 10, 26, 10))
-            val ihdr = ByteArrayOutputStream()
-            writeInt(ihdr, w)
-            writeInt(ihdr, h)
-            ihdr.write(8) // bit depth
-            ihdr.write(2) // colour type: truecolour RGB
-            ihdr.write(0) // deflate
-            ihdr.write(0) // adaptive filtering
-            ihdr.write(0) // no interlace
-            writeChunk(out, "IHDR", ihdr.toByteArray())
-            writeChunk(out, "IDAT", deflate(raw))
-            writeChunk(out, "IEND", ByteArray(0))
-            return out.toByteArray()
-        }
-
-        private fun writeInt(s: ByteArrayOutputStream, v: Int) {
-            s.write((v ushr 24) and 0xFF)
-            s.write((v ushr 16) and 0xFF)
-            s.write((v ushr 8) and 0xFF)
-            s.write(v and 0xFF)
-        }
-
-        private fun writeChunk(out: ByteArrayOutputStream, type: String, data: ByteArray) {
-            writeInt(out, data.size)
-            val typed = type.toByteArray(Charsets.US_ASCII)
-            out.write(typed)
-            out.write(data)
-            val crc = CRC32()
-            crc.update(typed)
-            crc.update(data)
-            writeInt(out, crc.value.toInt())
-        }
-
-        private fun deflate(data: ByteArray): ByteArray {
-            val d = Deflater(Deflater.BEST_SPEED)
-            d.setInput(data)
-            d.finish()
-            val out = ByteArrayOutputStream(data.size / 2)
-            val buf = ByteArray(1 shl 16)
-            while (!d.finished()) {
-                val n = d.deflate(buf)
-                if (n > 0) out.write(buf, 0, n)
-            }
-            d.end()
-            return out.toByteArray()
-        }
     }
 
     // ── The marks ───────────────────────────────────────────────────────────────
