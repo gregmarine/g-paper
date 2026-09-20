@@ -2715,6 +2715,8 @@ every ordinary grip, flank only past a side threshold the hand can reach only de
   `flankBloom(coverTilt) × |azimuth · travel-normal|`: zero down the lean, one across a
   full sweep.
 - **`FLANK_LIGHTEN` = 0.38 and `FLANK_TAIL_BARE` = 0.30, and 0.45 could not be carried over,
+  (0.38 → **0.61** at the first walk — see below; the reasoning is the same one, applied a
+  second time)
   because `catches` is an S.** Coverage maps to the fraction of peaks that catch through a
   curve centred near 0.5, and the round lead has always worked at the *top* of it — a
   pressed hairline asks for 0.76 and catches 96 %. The flank works down the curve, where the
@@ -2732,7 +2734,8 @@ every ordinary grip, flank only past a side threshold the hand can reach only de
   the mark it got before and "which model is this page drawn with" never has two answers.
 - **`EbcPanel.isRotated`** exposed, because the stylus's axes live in the panel's frame too.
 
-**Offline, at 1× (`FlankRenderHarness`, `$GPAPER_RENDER_DIR`), 4 px lead, press 0.65:**
+**Offline, at 1× (`FlankRenderHarness`, `$GPAPER_RENDER_DIR`), 4 px lead, press 0.65 — the
+first build, i.e. the one the hand looked at:**
 
 | cell | extent | × lead | ink /px | fill |
 |---|---|---|---|---|
@@ -2755,6 +2758,103 @@ end, and whether that is "a light touch" or "broken" is the hand's call.
 2.3× for a cross-section a hundred lanes wide instead of six, and well inside the cadence
 Phase 28's 6 ms / 1252 events set. Doubling the stroke costs 1.99×, so the sweep is still
 linear and no re-derivation has crept back in.
+
+#### First walk (the user, Nomad and Manta, 2026-09-19)
+
+**The finding.** *"The dabs/flecks seem too blotchy. It seems like the grain got bigger
+instead of just being wider overall. Almost like each particle just got bigger/wider instead
+of the spread of the stroke with the grains being the initial sizes they are without the
+tilt."*
+
+**The cause — and it is not the one the words describe.** No fleck had changed size:
+`fleckPx(level, width)` is a function of the lead and the darkness index, both untouched by
+the lean, and the flank and the hairline lay the identical fleck. What had changed is **where
+on `catches`'s curve the lead works**, and the sheet's say is not a constant across it.
+
+A site catches when `U·(1−w) + (1−tooth)·w < cover` — `U` its own toss, `tooth` a field
+correlated over `TOOTH_CELL_PX` (3.5 px) and three times that (10.5 px), `w = TOOTH_WEIGHT`
+0.55. At the round lead's coverage — a pressed hairline asks **0.76** — the tooth only ever
+moves a site's odds between about 0.8 and 1: nearly everything fills, the field is overruled,
+and *the grit the artist approved is in fact the per-site toss*. At the flank's **0.3–0.4**
+the same field moves those odds between 0 and about 0.5, so it stops shading the mark and
+starts **deciding** it, in whole cells — and a cell decided whole is a blotch about the size
+the hand reported. `skate` does the same along the other axis: 0.16 of coverage stolen is a
+few percent of a hairline's sites and a fifth of a band's, so its 26 × 5 px runs turn from a
+hint of streak into visible bars. **The blotches are the paper's own texture, arriving at a
+coverage where it is no longer a texture but a stencil.**
+
+Measured, not argued: `FlankRenderHarness` now reports a **clump** figure — the tiled standard
+deviation of the band's darkness over the deviation independent pixels would give, so 1 is an
+even spray and larger is patchy. The rejected build's shading band scored **2.89**; the
+hairline it is meant to be a broad version of scores **1.10**.
+
+**The grid** (`FlankRenderHarness`, the second test, skipped unless `GPAPER_RENDER_DIR` is
+set). Twelve variants of cell d — rows: flank tooth weight 0.55 / 0.35 / 0.20 / 0; columns:
+the patch octave on, off, and off with `skate` silenced too — **each one fitting its own
+`FLANK_LIGHTEN` back to the first build's 17.6 ink/px before it is looked at**. That matching
+is the method, not a nicety: a smoother `catches` fills more sites at the same coverage (the
+untouched band ran 17.6 → 40.6 ink/px across the grid) and a sparser mark looks blotchier
+whatever its correlation is, so an unmatched grid compares tones while pretending to compare
+textures.
+
+| tooth weight | fitted lighten | clump, patch on | patch off | patch + skate off |
+|---|---|---|---|---|
+| 0.55 (as built) | 0.38 | **2.89** | 2.62 | 2.61 |
+| 0.35 | 0.50 | 2.32 | 2.21 | 2.21 |
+| **0.20 (chosen)** | **0.61** | **1.84** | 1.88 | 1.86 |
+| 0.00 | 0.75 | 1.54 | 1.54 | 1.53 |
+
+**The weight does all of it, and it is one number rather than four.** Across the row the patch
+octave and the skate are worth about 0.02 of clump each — inside the measurement — because a
+weight of 0.20 has already flattened the field's whole influence. So they keep the sheet's own
+values, which is the better answer as well as the smaller one: **the tooth is a property of
+the paper, and two leads that disagreed about its octaves would be two leads drawing on
+different sheets** — a crossing would stop sharing its hollows. By eye, 0.35 still mottles
+visibly, 0 reads as television static, and 0.20 is even with a fibre still in it. (0.25 and
+0.15 were rendered too, at 1.98 and 1.72; 0.25 still patches.)
+
+**Chosen:** `FLANK_TOOTH_WEIGHT` **0.20**, blended in on the **spread** — the same quantity
+`FLANK_LIGHTEN` rides, exactly 0 for every ordinary grip — with `TOOTH_FINE`, `TOOTH_COARSE`
+and `SKATE_DEPTH` unchanged. `FLANK_LIGHTEN` **0.38 → 0.61**, re-fitted against the rendered
+band because the untouched band came back at 33.6 ink/px. **The round lead is byte-identical**:
+`GraphiteGrainPinTest` and the flank's own sub-threshold identity test pass untouched, which
+is what the blend-on-spread is for.
+
+**Offline, after (same harness, same seeds):**
+
+| cell | before | after |
+|---|---|---|
+| a · upright 8° | 3.69 ink/px · fill 0.61 · clump 1.10 | *identical* |
+| b · writing 40° | *= a* | *= a* |
+| c · mid-bloom 50° | 21.13 · 0.43 · 2.68 | 19.12 · 0.38 · **2.29** |
+| **d · shading 60° across** | **17.59** · 0.22 · **2.89** | **17.33** · 0.21 · **1.85** |
+| e · shading 60° along | 3.65 · 0.61 · 1.32 | *unchanged* |
+| f · 60° across, pressed hard | 46.85 · 0.57 · 3.01 | 37.36 · 0.45 · **1.85** |
+| g · 60° across, barely pressed | 2.10 · 0.03 · 2.47 | **3.68** · 0.05 · **1.84** |
+
+d lands **1.5 % under** the tone the hand has already seen, which was the constraint.
+
+**Two consequences that are not free, stated rather than buried.** The single compensation was
+fitted at d's coverage and the curve is flatter than it was, so the flank's **pressure range
+compresses**: f drops a fifth and g rises three quarters, f/g going from 22× to 10×. Both ends
+move *towards* the decisions — decision 3 wants a fully-over lead grey however hard it is
+pressed, and f at fill 0.45 is greyer than f at 0.57 — and **the g that Phase 36 flagged as
+"the open question for the walk" is no longer nearly invisible**, which is the S-curve
+answering from the other end. Whether the narrower range is right is the hand's call, and
+`FLANK_LIGHTEN` is the knob. The other consequence is bookkeeping:
+`GraphiteGrainFlankTest`'s "much more graphite in total than a hairline" bound is re-fitted
+4× → 3× (measured 3.82× hard, 3.03× light, against 4.8× before), with the reason in the test.
+
+**What landed for it.** `catches` and `skate` take their numbers from the caller instead of
+reading constants, and `deposit` / `cap` / `tapDisc` / `tapStrip` carry a `Grit` (the flank's
+five numbers, including its `lighten`) and the station's `spread`. `Grit` is `internal` and
+`FLANK_GRIT` is the only instance anything but a test ever sees — **no mutable global
+anywhere**, the Phase 21 rule kept while still giving the walk a door: the harness's seven
+cells honour `GPAPER_FLANK_TOOTH` / `_FINE` / `_COARSE` / `_SKATE` / `_LIGHTEN`, so a chosen
+variant can be re-rendered without an edit. And the finding itself is pinned — the harness's
+always-run test now asserts the shading band's clump stays under 2.2.
+
+**No version bump: 0.1.51 is republished.** It was never walked good.
 
 ---
 

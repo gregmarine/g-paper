@@ -190,6 +190,11 @@ object GraphiteGrain {
      * and a mark made of bars across it looks manufactured. Real graphite streaks *along* the
      * stroke: a facet of the lead, a groove in the sheet, each a few pixels wide. So the field is
      * two-dimensional, long along the travel and short across it.
+     *
+     * **How much a run shows is a function of where on [catches]'s curve the lead is
+     * working**, not of the depth alone: the same 0.16 of coverage stolen is a few percent
+     * of a pressed hairline's sites and a fifth of a shading band's. So [SKATE_DEPTH] is the
+     * round lead's end of a blend — see [FLANK_SKATE_DEPTH].
      */
     private const val SKATE_LEN_PX = 26f
     private const val SKATE_WIDTH_PX = 5f
@@ -252,11 +257,18 @@ object GraphiteGrain {
      * So the field lives in **page** coordinates, seeded by a constant rather than the stroke —
      * one sheet under everything drawn on it — and a site's catch is a blend of its own coin toss
      * and the tooth height under it, [TOOTH_WEIGHT] deciding how much the sheet gets to say.
-     * Two octaves, [TOOTH_CELL_PX] and three times that: fibre and patch. At full coverage the
-     * field is overruled and the mark goes solid, which is what a hard press does to any paper.
+     * Two octaves — [TOOTH_FINE] at [TOOTH_CELL_PX] and [TOOTH_COARSE] at three times that:
+     * fibre and patch. At full coverage the field is overruled and the mark goes solid, which
+     * is what a hard press does to any paper.
+     *
+     * **How much the sheet gets to say is not the same at every coverage**, which is why these
+     * four numbers are the round lead's end of a blend rather than the whole story — see
+     * [FLANK_TOOTH_WEIGHT].
      */
     private const val TOOTH_CELL_PX = 3.5f
     private const val TOOTH_WEIGHT = 0.55f
+    private const val TOOTH_FINE = 0.6f
+    private const val TOOTH_COARSE = 0.4f
     private const val TOOTH_SEED = 0x5ee7
 
     /** A stroke narrower than this still gets one lane of flecks rather than none. */
@@ -504,8 +516,15 @@ object GraphiteGrain {
      * against the rendered band and not against the lean: a firm shading pass lands at
      * roughly a third to a half covered — grey, which is the decision — and a light one is
      * genuinely light, because down here pressure has more bite than it does at the point.
+     *
+     * **Re-fitted 0.38 → 0.61 when [FLANK_TOOTH_WEIGHT] smoothed the curve** (the first
+     * walk, 2026-09-19). Nothing about the intent changed; the band simply fills more of its
+     * sites at the same coverage once the sheet stops vetoing whole cells of them, and the
+     * untouched band came back at 33.6 ink/px against the 17.6 the artist has in front of
+     * them. Fitted the same way as before and for the same reason — against the rendered
+     * band, until the tone the hand has already seen is back.
      */
-    private const val FLANK_LIGHTEN = 0.38f
+    private const val FLANK_LIGHTEN = 0.61f
 
     /**
      * How much of its coverage the strip has given up by the barrel end.
@@ -523,6 +542,87 @@ object GraphiteGrain {
      * a truncation.
      */
     private const val FLANK_TAIL_BARE = 0.30f
+
+    /**
+     * What the **sheet** gets to say about a site once the lead is on its flank: [catches]'s
+     * tooth weight, re-chosen for the band. (Its two octaves and [skate]'s depth were swept
+     * with it and kept — see below.)
+     *
+     * **The first walk's finding (the user, Nomad and Manta, 2026-09-19):** *"the dabs/flecks
+     * seem too blotchy. It seems like the grain got bigger instead of just being wider
+     * overall — almost like each particle just got bigger/wider instead of the spread of the
+     * stroke with the grains being the initial sizes they are."* **No fleck had changed
+     * size**, and measuring them says so. What changed was *where on [catches]'s curve the
+     * lead works*, and the sheet's say is not a constant across that curve.
+     *
+     * A site catches when `U·(1−w) + (1−tooth)·w < cover` — `U` the site's own toss, `tooth`
+     * a field correlated over [TOOTH_CELL_PX] and three times that. The round lead has always
+     * worked at the **top**: a pressed hairline asks 0.76, and there the tooth moves a site's
+     * odds only between about 0.8 and 1. Nearly everything fills, the field is overruled, and
+     * the grit the artist approved is in fact the **per-site toss**. The flank works at
+     * 0.3–0.4, where the very same field moves those odds between 0 and about 0.5 — so it
+     * stops shading the mark and starts *deciding* it, in whole cells. **A cell decided whole
+     * is a blotch, and a 10.5 px patch octave makes blotches about the size the hand
+     * reported.** [skate] does the same thing to the same mark along the other axis: 0.16 of
+     * coverage stolen is a few percent of a hairline's sites and a fifth of a band's, so its
+     * 26 × 5 px runs turn from a hint of streak into visible bars.
+     *
+     * So the flank leans the blend back towards the site's own toss: **the grit of the
+     * upright line, spread wide**, which is exactly what the hand asked for. The sheet is
+     * still under it — a band with no tooth at all is television static — it simply stops
+     * being the thing that decides.
+     *
+     * **And it is one number, not four.** The grid (`FlankRenderHarness`, twelve variants,
+     * every one thinned to the first build's tone so textures were compared and not tones)
+     * swept the tooth weight against dropping the patch octave and against silencing
+     * [skate]. The weight does all the work — blotchiness, as the tiled deviation of the
+     * band, falls 2.89 → 2.21 → 1.84 → 1.54 across weights 0.55 / 0.35 / 0.20 / 0 — and at
+     * 0.20 the other two are worth 0.02 of it each, within the measurement. So they keep the
+     * sheet's own values, which is the better answer as well as the smaller one: **the tooth
+     * is a property of the paper, and two leads that disagreed about its octaves would be two
+     * leads drawing on different sheets** — a crossing would stop sharing its hollows. 0.35
+     * still mottles visibly and 0 reads as television static; 0.20 is even and still has a
+     * fibre in it.
+     *
+     * Blended in on the **spread**, the same quantity [FLANK_LIGHTEN] rides and zero for every
+     * ordinary grip, so below the threshold this is exactly [TOOTH_WEIGHT] and the mark is bit
+     * for bit the round lead's. And because a smoother [catches] fills **more** sites at the
+     * same coverage — the same band, untouched, went from 17.6 ink/px to 33.6 — [FLANK_LIGHTEN]
+     * was re-fitted against the rendered band with it, 0.38 → 0.61. That is the Phase 36 lesson
+     * a second time, from the other side: a constant is only proportional in the part of the
+     * curve it was fitted in, and **changing the curve is changing the part you are in**.
+     */
+    private const val FLANK_TOOTH_WEIGHT = 0.20f
+
+    /**
+     * The far end of that blend, gathered into one value so a render harness can sweep all
+     * five numbers without a mutable global anywhere in the tree (the Phase 21 rule: a
+     * measurement door is temporary by construction, and this one never opens onto production
+     * at all). [FLANK_GRIT] is the only instance anything but a test ever sees, and three of
+     * its five fields hold the sheet's own constants because the grid said they should.
+     *
+     * [lighten] is in here with them rather than read straight off [FLANK_LIGHTEN] because
+     * **it cannot be fitted separately**: smoothing [catches] moves how many sites fill at a
+     * given coverage, so a grid that swept the texture at a fixed tone would be sweeping the
+     * tone as well. Every cell of it fits its own [lighten] back to the tone the artist has,
+     * and hands the winner over as a constant.
+     */
+    internal class Grit(
+        val toothWeight: Float,
+        val toothFine: Float,
+        val toothCoarse: Float,
+        val skateDepth: Float,
+        val lighten: Float,
+    )
+
+    /** The flank's own [Grit]: its two constants, and the sheet as the round lead reads it. */
+    internal val FLANK_GRIT = Grit(
+        toothWeight = FLANK_TOOTH_WEIGHT,
+        toothFine = TOOTH_FINE,
+        toothCoarse = TOOTH_COARSE,
+        skateDepth = SKATE_DEPTH,
+        lighten = FLANK_LIGHTEN,
+    )
 
     /**
      * Upper bound on flecks for one stroke. A mark long enough or broad enough to pass this
@@ -596,12 +696,29 @@ object GraphiteGrain {
         prefix: Boolean = false,
         density: Float = 1f,
         lead: Lead = Lead.ROUND,
+    ): Grain = of(points, width, seed, prefix, density, lead, FLANK_GRIT)
+
+    /**
+     * [of] with the flank's [Grit] named rather than taken from [FLANK_GRIT] — the render
+     * harness's entry, and the only reason a [Grit] is a value at all. Every caller outside
+     * this module's tests goes through the overload above and gets the constants.
+     */
+    internal fun of(
+        points: List<StrokePoint>,
+        width: Float,
+        seed: Int,
+        prefix: Boolean,
+        density: Float,
+        lead: Lead,
+        grit: Grit,
     ): Grain {
         if (points.isEmpty()) return EMPTY
         val d = density.coerceIn(0f, 1f)
         val base = (if (width < MIN_WIDTH_PX) MIN_WIDTH_PX else width) / 2f
-        if (points.size == 1) return if (prefix) EMPTY else tap(points[0], base, seed, d, lead)
-        return sweep(points, base, seed, prefix, d, lead)
+        if (points.size == 1) {
+            return if (prefix) EMPTY else tap(points[0], base, seed, d, lead, grit)
+        }
+        return sweep(points, base, seed, prefix, d, lead, grit)
     }
 
     /**
@@ -788,6 +905,8 @@ object GraphiteGrain {
         station0: Int,
         sign: Float,
         density: Float,
+        grit: Grit,
+        spread: Float,
     ) {
         if (half <= TOOTH_PITCH_PX) return
         var d = TOOTH_PITCH_PX
@@ -816,6 +935,8 @@ object GraphiteGrain {
                     toBarrel = toBarrel,
                     seed = seed,
                     density = density,
+                    grit = grit,
+                    spread = spread,
                 )
             }
             d += TOOTH_PITCH_PX
@@ -949,6 +1070,7 @@ object GraphiteGrain {
         val seed: Int,
         val density: Float,
         val lead: Lead,
+        val grit: Grit,
     ) {
         /** Set once the arrival trim and the two filter seeds have been decided. */
         var seeded = false
@@ -970,6 +1092,8 @@ object GraphiteGrain {
         var lastLean = 0f
         var lastHalf = 0f
         var lastToBarrel = 0f
+        /** How broad the last cross-section was becoming — see [FLANK_TOOTH_WEIGHT]. */
+        var lastSpread = 0f
         var lastArc = 0f
         var capped = false
         /** [MAX_FLECKS] reached: this stroke lays no more graphite, ever. */
@@ -1005,13 +1129,20 @@ object GraphiteGrain {
      *
      * Not thread-safe, and not meant to be: it belongs to one contact.
      */
-    class Sweep internal constructor(width: Float, seed: Int, density: Float, lead: Lead) {
+    class Sweep internal constructor(
+        width: Float,
+        seed: Int,
+        density: Float,
+        lead: Lead,
+        grit: Grit = FLANK_GRIT,
+    ) {
 
         private val state = SweepState(
             base = (if (width < MIN_WIDTH_PX) MIN_WIDTH_PX else width) / 2f,
             seed = seed,
             density = density.coerceIn(0f, 1f),
             lead = lead,
+            grit = grit,
         )
 
         /** Set by [finish]: the mark is complete and there is nothing further to lay. */
@@ -1062,7 +1193,9 @@ object GraphiteGrain {
             if (points.isEmpty()) return EMPTY
             if (points.size == 1) {
                 return if (state.laid > 0) EMPTY
-                else tap(points[0], state.base, state.seed, state.density, state.lead)
+                else tap(
+                    points[0], state.base, state.seed, state.density, state.lead, state.grit,
+                )
             }
             val out = Sink()
             out.carried = state.laid
@@ -1071,13 +1204,17 @@ object GraphiteGrain {
             advance(state, points, out, prefix = false)
             // Not one station reached: the whole mark is a tap, exactly as [of] says.
             if (state.station == 0) {
-                return tap(points[state.from], state.base, state.seed, state.density, state.lead)
+                return tap(
+                    points[state.from], state.base, state.seed, state.density, state.lead,
+                    state.grit,
+                )
             }
             if (!state.full) {
                 cap(
                     out, state.lastCx, state.lastCy, state.travelX, state.travelY,
                     state.lastPress, state.lastLean, state.lastArc, state.lastHalf,
                     state.lastToBarrel, state.seed, state.station + 1, 1f, state.density,
+                    state.grit, state.lastSpread,
                 )
             }
             state.laid += out.count
@@ -1104,8 +1241,9 @@ object GraphiteGrain {
         prefix: Boolean,
         density: Float,
         lead: Lead,
+        grit: Grit,
     ): Grain {
-        val state = SweepState(base, seed, density, lead)
+        val state = SweepState(base, seed, density, lead, grit)
         val out = Sink()
         // A prefix that has not travelled far enough to decide these things the way the
         // finished stroke will lays nothing: see [prefixDecidable].
@@ -1113,7 +1251,7 @@ object GraphiteGrain {
         // A path shorter than one pitch never reaches a station; it still left graphite —
         // but a tap is not a prefix of a sweep, so prefix mode waits for the first station.
         if (state.station == 0) {
-            return if (prefix) EMPTY else tap(points[state.from], base, seed, density, lead)
+            return if (prefix) EMPTY else tap(points[state.from], base, seed, density, lead, grit)
         }
         // And the lifting end gets its dome too — except under the pen, where that end is
         // the tip of the lead and has not come to rest anywhere yet. (Nor past MAX_FLECKS,
@@ -1123,6 +1261,7 @@ object GraphiteGrain {
                 out, state.lastCx, state.lastCy, state.travelX, state.travelY,
                 state.lastPress, state.lastLean, state.lastArc, state.lastHalf,
                 state.lastToBarrel, seed, state.station + 1, 1f, state.density,
+                grit, state.lastSpread,
             )
         }
         return out.grain()
@@ -1225,6 +1364,7 @@ object GraphiteGrain {
         var lastLean = state.lastLean
         var lastHalf = state.lastHalf
         var lastToBarrel = state.lastToBarrel
+        var lastSpread = state.lastSpread
         var lastArc = state.lastArc
         var capped = state.capped
         var full = false
@@ -1280,6 +1420,10 @@ object GraphiteGrain {
                 val half: Float
                 val coverLean: Float
                 val toBarrel: Float
+                // How broad the mark is *becoming*: what the paleness rides, and what the
+                // sheet's say rides with it — see [FLANK_TOOTH_WEIGHT]. Exactly 0 for a
+                // round lead and for every flank below the threshold.
+                val spread: Float
                 if (flank) {
                     // Shape from the lean of the instant, tone from the lean the hand has
                     // settled into — Phase 11's division, unchanged. Here the "shape" is
@@ -1310,12 +1454,13 @@ object GraphiteGrain {
                     // Phase 11) crossed with the direction it is travelling. Zero down a
                     // stroke drawn along its own lean, where nothing is spread over
                     // anything; one across a full shading sweep.
-                    val spread = flankBloom(coverTilt) * abs(acrossTravel)
-                    coverLean = 1f - FLANK_LIGHTEN * spread
+                    spread = flankBloom(coverTilt) * abs(acrossTravel)
+                    coverLean = 1f - state.grit.lighten * spread
                 } else {
                     half = base * widthFactor(leanTilt)
                     coverLean = coverageFactor(coverTilt)
                     toBarrel = 0f
+                    spread = 0f
                 }
                 val cx = a.x + t * dx
                 val cy = a.y + t * dy
@@ -1335,6 +1480,8 @@ object GraphiteGrain {
                     toBarrel = toBarrel,
                     seed = seed,
                     density = density,
+                    grit = state.grit,
+                    spread = spread,
                 )
                 lastCx = cx
                 lastCy = cy
@@ -1342,6 +1489,7 @@ object GraphiteGrain {
                 lastLean = coverLean
                 lastHalf = half
                 lastToBarrel = toBarrel
+                lastSpread = spread
                 lastArc = nextAt
                 // The touch-down dome, laid before the body so everything already on the paper
                 // keeps its place as the stroke grows — only the lifting end moves with the pen.
@@ -1349,7 +1497,7 @@ object GraphiteGrain {
                     capped = true
                     cap(
                         out, cx, cy, travelX, travelY, pressure, coverLean, nextAt, half,
-                        toBarrel, seed, -1, -1f, density,
+                        toBarrel, seed, -1, -1f, density, state.grit, spread,
                     )
                 }
                 station++
@@ -1377,6 +1525,7 @@ object GraphiteGrain {
         state.lastLean = lastLean
         state.lastHalf = lastHalf
         state.lastToBarrel = lastToBarrel
+        state.lastSpread = lastSpread
         state.lastArc = lastArc
         state.capped = capped
         state.full = full
@@ -1411,9 +1560,18 @@ object GraphiteGrain {
         toBarrel: Float,
         seed: Int,
         density: Float,
+        grit: Grit,
+        spread: Float,
     ) {
         val nx = -ty
         val ny = tx
+        // How much the sheet decides here and how streaky the ride is, blended on how broad
+        // the contact is becoming — see [FLANK_TOOTH_WEIGHT]. At [spread] `0` every one of
+        // these is exactly the round lead's constant, which is what keeps that grain's bits.
+        val toothWeight = TOOTH_WEIGHT + (grit.toothWeight - TOOTH_WEIGHT) * spread
+        val toothFine = TOOTH_FINE + (grit.toothFine - TOOTH_FINE) * spread
+        val toothCoarse = TOOTH_COARSE + (grit.toothCoarse - TOOTH_COARSE) * spread
+        val skateDepth = SKATE_DEPTH + (grit.skateDepth - SKATE_DEPTH) * spread
         // The contact's footprint on the normal: centred at the strip's midpoint, half of
         // its length either side. Both are exactly 0 and exactly [half] when there is no
         // flank, which is what keeps the round lead's grain bit for bit what it was.
@@ -1439,7 +1597,8 @@ object GraphiteGrain {
             // [density] multiplies the coverage and only the coverage — see [of]. A site's own
             // toss in [catches] does not move with it, so thinning a mark removes flecks and
             // never relocates one.
-            val cover = coverage(press, u) * fall * skate(arc, site, seed) * lean * density
+            val cover =
+                coverage(press, u) * fall * skate(arc, site, seed, skateDepth) * lean * density
             if (cover <= 0f) continue
             val alongJitter = (unit(hash(seed, station, lane)) - 0.5f) *
                 (JITTER * TOOTH_PITCH_PX + 2f * LEVER_JITTER * abs(site))
@@ -1448,7 +1607,11 @@ object GraphiteGrain {
             val across = site + acrossJitter
             val x = cx + tx * alongJitter + nx * across
             val y = cy + ty * alongJitter + ny * across
-            if (!catches(cover, x, y, hash(seed, station, lane xor 0x2af1))) continue
+            if (!catches(
+                    cover, x, y, hash(seed, station, lane xor 0x2af1),
+                    toothWeight, toothFine, toothCoarse,
+                )
+            ) continue
             out.add(x, y, levelOf(press, hash(seed, station, lane xor 0x11d7)))
         }
     }
@@ -1460,18 +1623,29 @@ object GraphiteGrain {
      * dot, and it is the one place in this file where the mark exists with no travel
      * direction to hang anything on.
      */
-    private fun tap(p: StrokePoint, base: Float, seed: Int, density: Float, lead: Lead): Grain {
+    private fun tap(
+        p: StrokePoint,
+        base: Float,
+        seed: Int,
+        density: Float,
+        lead: Lead,
+        grit: Grit,
+    ): Grain {
         if (lead == Lead.FLANK) {
             // A dab has no travel to spread the graphite over, so the whole strip prints at
             // once and [FLANK_LIGHTEN] rides the lean alone — the one place the sweep's
             // question ("how broad is this mark becoming") has no answer.
             val bloom = flankBloom(p.tilt)
-            val lean = 1f - FLANK_LIGHTEN * bloom
+            val lean = 1f - grit.lighten * bloom
             val extent = flankExtent(base, bloom)
-            return if (extent > 0f) tapStrip(p, base, extent, lean, seed, density)
-            else tapDisc(p, base, lean, seed, density)
+            // A dab lays its whole strip broadside, so it is as much "a band" as a mark
+            // gets and the bloom is its spread.
+            return if (extent > 0f) tapStrip(p, base, extent, lean, seed, density, grit, bloom)
+            else tapDisc(p, base, lean, seed, density, grit, 0f)
         }
-        return tapDisc(p, base * widthFactor(p.tilt), coverageFactor(p.tilt), seed, density)
+        return tapDisc(
+            p, base * widthFactor(p.tilt), coverageFactor(p.tilt), seed, density, grit, 0f,
+        )
     }
 
     /** The disc of grit a round point leaves: the same tooth lattice, filled over a circle. */
@@ -1481,7 +1655,12 @@ object GraphiteGrain {
         lean: Float,
         seed: Int,
         density: Float,
+        grit: Grit,
+        spread: Float,
     ): Grain {
+        val toothWeight = TOOTH_WEIGHT + (grit.toothWeight - TOOTH_WEIGHT) * spread
+        val toothFine = TOOTH_FINE + (grit.toothFine - TOOTH_FINE) * spread
+        val toothCoarse = TOOTH_COARSE + (grit.toothCoarse - TOOTH_COARSE) * spread
         val out = Sink()
         val press = p.pressure.coerceIn(0f, 1f).pow(PRESSURE_GAMMA)
         val lanes = laneCount(half)
@@ -1497,7 +1676,11 @@ object GraphiteGrain {
                 val jy = (unit(hash(seed, row, lane xor 0x5bf0)) - 0.5f) * JITTER * TOOTH_PITCH_PX
                 val x = p.x + u * half + jx
                 val y = p.y + v * half + jy
-                if (!catches(cover, x, y, hash(seed, row, lane xor 0x2af1))) continue
+                if (!catches(
+                        cover, x, y, hash(seed, row, lane xor 0x2af1),
+                        toothWeight, toothFine, toothCoarse,
+                    )
+                ) continue
                 out.add(x, y, levelOf(press, hash(seed, row, lane xor 0x11d7)))
             }
         }
@@ -1520,7 +1703,12 @@ object GraphiteGrain {
         lean: Float,
         seed: Int,
         density: Float,
+        grit: Grit,
+        spread: Float,
     ): Grain {
+        val toothWeight = TOOTH_WEIGHT + (grit.toothWeight - TOOTH_WEIGHT) * spread
+        val toothFine = TOOTH_FINE + (grit.toothFine - TOOTH_FINE) * spread
+        val toothCoarse = TOOTH_COARSE + (grit.toothCoarse - TOOTH_COARSE) * spread
         val out = Sink()
         val ax = cos(p.azimuth)
         val ay = sin(p.azimuth)
@@ -1547,7 +1735,11 @@ object GraphiteGrain {
                 val jy = (unit(hash(seed, row, lane xor 0x5bf0)) - 0.5f) * JITTER * TOOTH_PITCH_PX
                 val x = p.x + ax * s - ay * v + jx
                 val y = p.y + ay * s + ax * v + jy
-                if (!catches(cover, x, y, hash(seed, row, lane xor 0x2af1))) continue
+                if (!catches(
+                        cover, x, y, hash(seed, row, lane xor 0x2af1),
+                        toothWeight, toothFine, toothCoarse,
+                    )
+                ) continue
                 out.add(x, y, levelOf(press, hash(seed, row, lane xor 0x11d7)))
                 if (out.total >= MAX_FLECKS) return out.grain()
             }
@@ -1591,8 +1783,15 @@ object GraphiteGrain {
     /**
      * Whether the site at page position ([x], [y]) catches graphite at this [cover], given the
      * site's own coin toss [h]. The toss and the sheet's tooth under the site are blended by
-     * [TOOTH_WEIGHT]; a hollow needs more coverage to fill than a peak does, and at full coverage
+     * [toothWeight]; a hollow needs more coverage to fill than a peak does, and at full coverage
      * everything fills.
+     *
+     * **[toothWeight], [toothFine] and [toothCoarse] are the caller's**, because the answer to
+     * "how much does the sheet decide here" depends on where on this curve the lead is working
+     * and the two leads do not work in the same place — [FLANK_TOOTH_WEIGHT] is the argument.
+     * They are [TOOTH_WEIGHT] / [TOOTH_FINE] / [TOOTH_COARSE] for every round-lead caller and
+     * for every flank below the threshold, which is what keeps that mark bit for bit the one
+     * it was.
      *
      * **The toss is independent of [cover]**, which is what makes the whole thing monotone in
      * coverage: lower the coverage and a site that caught may stop catching, but no site that
@@ -1600,19 +1799,32 @@ object GraphiteGrain {
      * property of this shape, not an accident, so a future `catches` that mixed the coverage
      * into the toss would break a thinned mark's promise to be a subset of the full one.
      */
-    private fun catches(cover: Float, x: Float, y: Float, h: Int): Boolean {
-        val draw = unit(h) * (1f - TOOTH_WEIGHT) + (1f - tooth(x, y)) * TOOTH_WEIGHT
+    private fun catches(
+        cover: Float,
+        x: Float,
+        y: Float,
+        h: Int,
+        toothWeight: Float,
+        toothFine: Float,
+        toothCoarse: Float,
+    ): Boolean {
+        val draw = unit(h) * (1f - toothWeight) +
+            (1f - tooth(x, y, toothFine, toothCoarse)) * toothWeight
         return draw < cover
     }
 
     /**
      * The sheet's tooth height at page position ([x], [y]), `0` a hollow to `1` a peak — see
      * [TOOTH_CELL_PX]. A property of the page, so the same under every stroke on it.
+     *
+     * [fineWeight] and [coarseWeight] are how much of the fibre octave and the patch octave
+     * this lead reads; they sum to one, so the height stays a `0`..`1` reading whichever
+     * mixture is asked for. Dropping the patch is [FLANK_TOOTH_COARSE]'s whole business.
      */
-    private fun tooth(x: Float, y: Float): Float {
+    private fun tooth(x: Float, y: Float, fineWeight: Float, coarseWeight: Float): Float {
         val fine = valueNoise(x / TOOTH_CELL_PX, y / TOOTH_CELL_PX, TOOTH_SEED)
         val coarse = valueNoise(x / (TOOTH_CELL_PX * 3f), y / (TOOTH_CELL_PX * 3f), TOOTH_SEED + 1)
-        return fine * 0.6f + coarse * 0.4f
+        return fine * fineWeight + coarse * coarseWeight
     }
 
     /** Smooth value noise on a unit lattice: bilinear over four hashed corners, `0`..`1`. */
@@ -1636,9 +1848,12 @@ object GraphiteGrain {
      * Smooth value noise over the mark — [arc] px along it, [across] px out from its centre
      * line: the runs where the lead lifts and catches again. Long cells along, short across, so
      * the runs are streaks in the direction of travel — see [SKATE_WIDTH_PX].
+     *
+     * [depth] is how much coverage a run may steal at its lightest: [SKATE_DEPTH] for the
+     * round lead, blended towards [FLANK_SKATE_DEPTH] as the contact becomes a band.
      */
-    private fun skate(arc: Float, across: Float, seed: Int): Float =
-        1f - SKATE_DEPTH * valueNoise(arc / SKATE_LEN_PX, across / SKATE_WIDTH_PX, seed xor 0x7d1)
+    private fun skate(arc: Float, across: Float, seed: Int, depth: Float): Float =
+        1f - depth * valueNoise(arc / SKATE_LEN_PX, across / SKATE_WIDTH_PX, seed xor 0x7d1)
 
     // ── Deterministic noise ──────────────────────────────────────────────────
 

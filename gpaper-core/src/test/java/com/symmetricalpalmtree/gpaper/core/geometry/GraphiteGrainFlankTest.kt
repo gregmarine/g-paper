@@ -167,9 +167,16 @@ class GraphiteGrainFlankTest {
         // And it is not merely spread thinner: far more graphite goes down in total, because
         // far more lead is on the paper. That is the half of the argument [TILT_LIGHTEN]'s
         // KDoc makes and the reason the figure is not 1/width.
+        //
+        // **3x, re-fitted from 4x at the first walk** (2026-09-19). Nothing about the claim
+        // moved; FLANK_LIGHTEN did, from 0.38 to 0.61, when FLANK_TOOTH_WEIGHT smoothed
+        // `catches` and the same coverage started filling far more sites. Measured at 3.82x
+        // here and 3.03x at a light touch, against 4.8x before — the flattened curve gives a
+        // little of the flank's pressure range back to its light end, which is the same
+        // trade that made a light shading pass visible at all.
         assertTrue(
             "a shading sweep should lay much more graphite in total than a hairline",
-            flankHard.count > 4 * uprightHard.count,
+            flankHard.count > 3 * uprightHard.count,
         )
     }
 
