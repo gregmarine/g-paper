@@ -1974,6 +1974,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      */
     override fun onRasterErasedBatch(rect: Rect) {
         if (!directRaster) return
+        // A rub is not a mark: whatever was waiting settles first (window only — the hand
+        // is down), so the corridor this batch posts is always in tone, never the dither
+        // of a run the announce below would have settled a moment later (0.1.49).
+        settleInkTone(panel = false)
         toneAndPost(rect)
     }
 

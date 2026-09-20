@@ -2607,6 +2607,12 @@ natural with real tones with the grain?"*
   **live** picture, the tone the settled one. Whether a pale lead's low-alpha grain survives the
   compositor's 16-level table (no level 9) is the walk's question.
 
+**Phase 34 maintenance (0.1.49, 2026-09-19):** the rubber's per-batch post ran before the batch's
+own announce settled what was waiting, so the first corridor across an unsettled stroke posted
+dithered. `onRasterErasedBatch` now settles (window only, the hand being down) before it posts, so
+a rub is always shown in tone. The user's question: *"Does the eraser work with this too … I just
+want to be sure it isn't dithering if it doesn't need to."*
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
