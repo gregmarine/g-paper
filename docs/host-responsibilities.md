@@ -53,7 +53,7 @@ fun turnPage(next: PageId) {
 
 A raster page (`pageMode = PageMode.RASTER`) has no rows: the whole page is an image —
 **two images since 0.1.39** (`RasterLayer.GRAPHITE` for the pencil, `RasterLayer.INK` for
-every other style, seen flattened with `DARKEN`). Persist a blob per layer per page,
+every other style, seen with the ink drawn over the graphite). Persist a blob per layer per page,
 overwritten on save, never per stroke:
 
 ```kotlin

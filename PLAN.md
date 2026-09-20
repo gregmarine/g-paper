@@ -2497,6 +2497,479 @@ pencil lines less — the ghost is the fine dot field itself (thousands of isola
 transitions), not the waveform choice. Accepted as is; one future thread if ever wanted: a coarser
 dither (fewer, larger dots at the same tone). `direct-raster` merged to `main`; 0.1.43 published.
 
+### Phase 30 — Ink over graphite (post-v0.1.0)
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.44 · branch `ink-over`.
+Opened on the user's word during Notesprout's arc 46 "Palette" walk: *"The white pen should be able
+to write over the pencil. It correctly writes over the darker pen. In the real world, a white gel
+pen can write over anything."* — and the decision, asked plainly: **ink sits on top of graphite
+everywhere; pencil over an ink line is hidden by the ink.**
+
+**Design**
+- **The flatten is `SRC_OVER`, ink over graphite** — one operator change at the three sites that
+  are the one flatten: `CanvasPaperView.drawRasterLayers` (a `null` paint; `flattenPaint` and its
+  `DARKEN` xfermode are gone), `DitherFlatten.luma(graphite, ink)` (ink blended over the
+  graphite-over-white result rather than `min`'d against it) and the `band` kernel (the same
+  arithmetic written out). The live half is untouched: it still composites the live layer into its
+  own image with `srcOver` and asks the one `luma`, so live and baked still dither identically.
+- **Why `DARKEN` had to go:** it is `min` per channel, so a white or pale ink could never show over
+  darker graphite — the one thing the user asked for. `SRC_OVER` is the physical order the two
+  rasters were built to model (0.1.39: *ink is more permanent than pencil*): gel ink sits on the
+  sheet over graphite; graphite laid over dry ink mostly slides off.
+- **What moves and what does not:** on white paper with **black** ink the two operators are
+  pixel-identical, so every page drawn so far with the black gel pen renders exactly as before.
+  A page with pencil hatched *over* a black pen line now shows the line clean where the two cross
+  (the graphite is under it). A grey or white pen now covers pencil.
+- Prose everywhere `DARKEN` was named (`PaperView`, `RasterLayer`, `CanvasPaperView`,
+  `RattaPaperView`, `RattaPanelTone`, `docs/api.md`, `docs/host-responsibilities.md`) says the
+  new order and why. `DitherFlattenTest`'s darken test becomes the over test (a white pen covers a
+  black pencil; half-transparent ink blends over graphite, not over white).
+- No API change; SN re-pins 0.1.44 and flips the same operator in its own two flatten copies
+  (`SketchRaster`, `SketchCover`).
+
+### Phase 31 — Baked ink shows its true tone (post-v0.1.0)
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.45 · branch `ink-true`.
+Opened on the user's word during the arc 46 walk: *"I understand that we are dithering the pen to
+get the tone to work … But I see that the panel is capable of showing the true tone without
+dithering. So, if the dithering is just so the stroke keeps with the nib, can we have it rebake
+with the true tone of the pen? I'm only asking about the pen tool … not pencil."*
+
+**Design**
+- **One display rule, per pixel** — `DitherFlatten.coverage` (black coverage 0…255): a pixel the
+  **ink image** covers with **no live ink** on it answers `255 − luma` (its true tone); every
+  other pixel — bare graphite, and live ink under the nib — answers `255` or `0` through the
+  dither, exactly as `black` does. The band kernel writes the same bytes. So the panel under the
+  nib, the pen-up re-present and the window's frame all still come from one function.
+- **Live ink stays a dither**, deliberately: the panel's waveform reaches a grey only through
+  black, so a grey painted live trails the nib (Phase 28's second walk). At pen-up
+  `bakeCapturedStroke` composites the live alpha into the ink image (which zeroes the mask) and
+  then **posts each run again** through `toneAndPost`; with the mask gone the rule answers tone,
+  and the line lands solid. The window's `regenDitherRuns` for the same rects agrees.
+- **The display byte is now a coverage, not a bit.** The `ALPHA_8` display bitmap is drawn in
+  black, so its byte already *is* "how black"; `landDitherRect` writes the byte as the alpha,
+  `presentPageViaPanel` maps it through `LEVEL_OF_COVERAGE` (the compositor's grey → level table,
+  `RattaPanelTone`, back on the path for exactly this), and `DITHER_INK` is gone.
+- **Graphite is never shown in tone** — a pencil's grain is dots already, and a fleck's alpha
+  through the tone table would be a smear where the dither is grain. The two halves of a page
+  now look different on purpose, which is what Atelier does and what the user asked for.
+- `DitherFlattenTest`: the band-kernel mirror is pinned against `coverage`; a new test pins tone
+  for baked ink, dither for live ink and bare graphite, the blend at an anti-aliased ink edge.
+
+**What only a device can answer:** what the pen-up re-present looks like — a dithered run going
+to solid grey means its white dots pass through black on the way; whether a partly-opaque ink
+edge over dithered graphite reads clean; and whether a grey pen line's pen-up feels late.
+
+### Phase 32 — Ink settles, not at pen-up (post-v0.1.0)
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.46 · branch `ink-true` (on Phase 31).
+The user's word after the Phase 31 walk: *"That looks okayish … Instead of on pen up, perhaps when
+the tool is changed, or when flipping pages, or anything other than drawing. Let's try that …
+anything other than drawing will rebake with the correct tone."*
+
+**Design**
+- The pen-up bake no longer re-presents; the mark stays on the glass as the dither it was drawn
+  as. Its runs go into `pendingInk`, and `DitherFlatten.coverage` / `band` take a `toneInk`
+  flag: false inside a waiting run (dither), true elsewhere (settled ink in tone).
+- **`settleInkTone()`** re-renders the waiting runs in tone (window via `regenDitherRuns`, panel
+  via `toneAndPost` when no contact is down) and forgets them. It is called from **every
+  non-drawing event the engine sees**: the `tool` / `penColor` / `penWidth` / `penStyle` setters
+  (a tool pick, a shade pick), and every `onRasterPixelsChanged` that is not the ink bake's own
+  announce (`inkJustBaked` marks that one) — a rub's batches, an undo/redo swap, a page load
+  (which clears the list, the whole page being rebuilt in tone anyway).
+- What the engine cannot see — a chrome flip, a finger gesture with no raster change — does not
+  settle; the host would need a door for that, which nobody has asked for.
+
+### Phase 33 — The host's settle door (post-v0.1.0)
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.47 · branch `ink-true`.
+The user's walk of Phase 32: *"when I tap the pen tool to change shades, it doesn't immediately
+do the rebake. But once I select another shade, it does … if part of the pen stroke is under the
+palette overlay, it paints that area over the overlay with the overlay still showing … If the
+rebake happened before the overlay pops up, that probably wouldn't happen?"* Two causes: the
+re-tap changes no engine property, and a settle posts straight to the panel, which knows nothing
+of a bar floating over the page.
+- **`PaperView.settleDisplay()`** — a defaulted no-op on the interface; Ratta settles the waiting
+  ink through the window **and** the panel. The host calls it before its chrome opens (SN's sketch
+  face: before the shade panel shows, before a chrome flip).
+- **Setter-triggered settles are window-only** (`settleInkTone(panel = false)`): the tap that set
+  the property is a button's, and that button's chrome may be over the page; the compositor
+  carries the frame to the panel a beat later. Raster-change settles (a rub, an undo) and the host
+  door still post to the panel directly.
+
+### Phase 34 — The pencil settles in tone too (post-v0.1.0)
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.48 · branch `ink-true`.
+The user's word after the Phase 33 walk: *"That works. Let's try to do something similar for
+pencil. The grain looks good. But if it is just black being dithered, perhaps it will look more
+natural with real tones with the grain?"*
+- `DitherFlatten.coverage` / `band`: the `toneInk` flag becomes **`settled`**, and a settled pixel
+  **either** image covers, with no live layer on it, answers `255 − luma` — a fleck at its own
+  alpha in the lead's tone. The graphite bake's runs go into the same `pendingRuns` the ink's do
+  (`markJustBaked`), and settle at the same events. A loaded page is shown settled, so the dots
+  now appear only under the nib and between pen-up and the next non-drawing event.
+- Phase 28's decision 7 ("the display is dithered") is amended by this: the dither is the
+  **live** picture, the tone the settled one. Whether a pale lead's low-alpha grain survives the
+  compositor's 16-level table (no level 9) is the walk's question.
+
+**Phase 34 maintenance (0.1.49, 2026-09-19):** the rubber's per-batch post ran before the batch's
+own announce settled what was waiting, so the first corridor across an unsettled stroke posted
+dithered. `onRasterErasedBatch` now settles (window only, the hand being down) before it posts, so
+a rub is always shown in tone. The user's question: *"Does the eraser work with this too … I just
+want to be sure it isn't dithering if it doesn't need to."*
+
+### Phase 35 — The pause settle (post-v0.1.0)
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.50 · branch `ink-true`.
+The user's word: *"I'd like to consider a timed rebake … a pause in drawing for like 2–3 seconds
+… while active drawing, nothing gets rebaked, but a pause can give the screen an opportunity to
+show the real raster without the tool change."*
+- `armPauseSettle()` at every direct bake posts `settleOnPause` at `SETTLE_IDLE_MS` = **2500 ms**;
+  any new contact (a pen kind's `beginLivePreview`, a rub's start) disarms it, so active drawing
+  never settles; a settle from any other cause disarms it too (nothing left to settle). When it
+  fires under an active pen (hover counts) it waits `SETTLE_RETRY_MS` = 500 ms and asks again —
+  a frame never lands under a hand about to draw. It settles through window **and** panel: no
+  chrome opens without `settleDisplay()` first, so nothing is over the page.
+- **Page flips were already covered** (asked the same day): a load is `onRasterPixelsChanged(null)`,
+  which clears the waiting runs and rebuilds the whole page `settled`, so a page turned to is
+  shown in tone from its first frame.
+
+### Phase 36 — The flank: the Supernote pencil leans again (post-v0.1.0)
+**Status:** ✅ Complete + frozen (2026-09-20, the user's Nomad + Manta walks — "This feels good. Let's freeze the arc.") · **Publishes:** 0.1.51 · branch `side-lead` (merged to `main` 2026-09-20, deleted) ·
+Opened by the user's decision for NSE · Sketch's arc 47 "Side" (Notesprout
+`extensions/sketch/SIDE_PLAN.md`), off the back of the `probe-tilt` walk of the same day.
+
+**Why.** Phase 22 took the lean out of the Supernote pencil because a hairline drawn at an
+ordinary writing angle baked 10–15× wider than it previewed, and Phase 28 decision 5 wrote
+that down as a policy — *"the Supernote pencil stays upright"*. Both were right about what
+the artist saw. **Neither was right about why**, and the difference matters, because a policy
+adopted to paper over a units bug outlives the bug and takes a whole feature with it.
+
+**What the probe measured** (the user's hand, Nomad and Manta, 2026-09-19; `probe-tilt`
+writes one CSV row a sample across five grips). Per grip, median polar lean from vertical:
+
+| grip | Nomad | Manta |
+|---|---|---|
+| upright | 10° (p95 17°) | 7° (p95 10°) |
+| writing | 39° (p95 43°) | 29° (p95 40°) |
+| shading | 56° (min 54°) | 61° (min 55°) |
+| flat | 54° (min 50°) | 61° (min 56°) |
+| physical ceiling | 62° | 72° |
+
+Two findings came out of it, and only one of them was the one being looked for.
+
+**The HAL does not follow Android's axis contract.** `AXIS_TILT` carries signed **tilt-X in
+degrees** and `AXIS_ORIENTATION` signed **tilt-Y in degrees** — both live, both in the
+*panel's* frame. The polar lean is their hypotenuse, exactly as the NoteAir5C measurement
+found on BOOX (Phase 11). `CanvasPaperView` read `AXIS_TILT` as radians, per the platform's
+own documentation, so a raw `30` meant **1719°** and ran off the end of every curve in
+`GraphiteGrain`. It hid for a year because the Nomad's sign happens to be negative, which
+clamps to upright and looks perfect; the Manta's is positive, which saturates — **and that
+saturation is the 10–15× bloom of 2026-09-17.** A units bug and a design decision are not
+the same shape of thing, and one was taken for the other.
+
+**And direction is there too, if the panel's turn is undone.** The lean azimuth is
+`atan2(tiltY, tiltX)` in panel space. The same right-handed shading grip reads ≈42° on the
+Manta, whose panel *is* the screen, and ≈137° on the Nomad, whose panel is a quarter turn
+away; mapping `(x, y) → (y, −x)` brings 137° to ≈47° and makes the two one grip. That is the
+*same* vector map the pixel rule applies, not its inverse — which is worth stating plainly
+rather than deriving, because composing the inverse turns the other way and the only thing
+that settles it is two devices agreeing (`EbcGeometry.screenAzimuth`, pinned by test).
+
+**The user's decisions (locked).**
+1. **Threshold response in polar lean:** tip only to **45°**, smoothstep bloom 45°→**54°**,
+   full flank from 54°. Below 45° the mark is *exactly* today's upright mark — no widening
+   at all. The two bands the probe found touch (writing p95 43°, shading min 54°), so the
+   threshold is the gap itself rather than a fitted midpoint.
+2. **Full-flank extent 20× the lead width** (4 px lead → 80 px), one named constant, the
+   walk's knob.
+3. **The flank pales as it widens** — `TILT_LIGHTEN`'s idea, retuned, so a fully-over lead
+   reads grey however hard it is pressed.
+4. **Asymmetric, physically.** The contact strip runs from the tip *along the azimuth
+   towards the barrel*: a one-sided extension, densest at the tip and trailing off toward
+   the barrel, never a symmetric widening across the travel normal. So a stroke dragged
+   along its own azimuth stays thin and one dragged across it lays a broad band — **that is
+   the real pencil and it is wanted**.
+5. Pressure keeps its current role (darkness/coverage) on the flank too.
+6. The needle fallback (panel closed) keeps `bakeTilt` = 0; the direct panel path passes
+   tilt **and** azimuth through, live and baked from the same `Sweep`.
+
+**This amends Phase 28 decision 5** — "the Supernote pencil stays upright" — to: upright for
+every ordinary grip, flank only past a side threshold the hand can reach only deliberately.
+
+**What landed**
+- **`StrokePoint.azimuth`** (radians, screen space, last field, defaulted `0f`), and two
+  `protected open` capture seams on `CanvasPaperView` — `sampleTilt(rawTilt, rawOrientation)`
+  and `sampleAzimuth(…)` — whose defaults are today's behaviour exactly, so only Supernote
+  moves. Decoding a HAL's axes is the **engine's** business; the base must not invent a
+  direction it cannot place (Phase 11's rule, one level up).
+- **`GraphiteGrain.Lead`** — `ROUND` (every caller before this phase; the disc that grows on
+  `TILT_GAIN`'s curve) and `FLANK`. The contact is a **capsule** from the tip to
+  `FLANK_EXTENT × width` along the smoothed azimuth, projected onto the travel normal, so
+  the direction-dependence falls out of the geometry instead of being written down and a
+  station still lays one cross-section. `ROUND` is **byte-identical**: `GraphiteGrainPinTest`
+  passes untouched, which is exactly what it was written for.
+- **The azimuth is smoothed causally over `TILT_SMOOTH_PX` and averaged as a unit vector**,
+  seeded from the first window like the lean. Never as an angle: a lean pointing up the
+  screen delivers `+179°` and `−179°` sample to sample, whose mean is the opposite
+  direction, and the flank would lay itself on the wrong side of the nib. Pinned by a
+  wrapping-azimuth case in both the prefix and incremental suites.
+- **The paleness follows the band, not the lean** — found by rendering. `TILT_LIGHTEN`'s
+  mark broadened in every direction, so lean and broadening were one fact; a flank's are
+  not, and lightening by the lean alone made a deliberate 60° line drawn *along* its own
+  lean ten times fainter than the same line drawn upright. It now rides
+  `flankBloom(coverTilt) × |azimuth · travel-normal|`: zero down the lean, one across a
+  full sweep.
+- **`FLANK_LIGHTEN` = 0.38 and `FLANK_TAIL_BARE` = 0.30, and 0.45 could not be carried over,
+  (0.38 → **0.61** at the first walk — see below; the reasoning is the same one, applied a
+  second time)
+  because `catches` is an S.** Coverage maps to the fraction of peaks that catch through a
+  curve centred near 0.5, and the round lead has always worked at the *top* of it — a
+  pressed hairline asks for 0.76 and catches 96 %. The flank works down the curve, where the
+  same proportional cut costs several times the ink: the first attempt (0.62, and a 0.55
+  tail) asked for 0.21, caught **one site in a hundred**, and rendered *fainter than the
+  upright hairline it was supposed to be a broad version of* — and the tail had quietly
+  become a truncation, the measured extent coming back at two thirds of the lead's reach.
+  **A multiplier is only proportional in the part of the curve you fitted it in.**
+- **Ratta:** `bakeTilt` relaxes on the direct panel path (the same rule that relaxed
+  `bakePressure` at 0.1.41 — with the panel open the preview *is* the grain, so there is
+  nothing left the preview cannot show) and stays 0 for the needle; `sampleTilt` /
+  `sampleAzimuth` overridden; all three `GraphiteGrain` entries on the direct path pass
+  `Lead.FLANK`. Arming it unconditionally is safe **because** decision 1 makes the flank
+  identical to the round lead below the threshold, so a needle-previewed page gets precisely
+  the mark it got before and "which model is this page drawn with" never has two answers.
+- **`EbcPanel.isRotated`** exposed, because the stylus's axes live in the panel's frame too.
+
+**Offline, at 1× (`FlankRenderHarness`, `$GPAPER_RENDER_DIR`), 4 px lead, press 0.65 — the
+first build, i.e. the one the hand looked at:**
+
+| cell | extent | × lead | ink /px | fill |
+|---|---|---|---|---|
+| a · upright 8° | 6.0 px | 1.5 | 3.69 | 0.61 |
+| b · writing 40° | 6.0 px | 1.5 | 3.64 | 0.61 |
+| c · mid-bloom 50° | 49.0 px | 12.3 | 21.13 | 0.43 |
+| d · shading 60°, **across** the lean | 79.0 px | 19.8 | 17.59 | 0.22 |
+| e · shading 60°, **along** the lean | 6.0 px | 1.5 | 3.65 | 0.61 |
+| f · 60° across, pressed hard (1.0) | 82.0 px | 20.5 | 46.85 | 0.57 |
+| g · 60° across, barely pressed (0.3) | 77.0 px | 19.3 | 2.10 | 0.03 |
+
+**b is pixel-identical to a and the harness asserts it**, which is decision 1 made
+falsifiable. d's band sits entirely below the nib (y 39…117, nib at 40): one-sided, as
+decided. f is grey at 0.57 fill rather than a slab. **g is the open question for the walk** —
+a light shading pass is very faint indeed, which is the S-curve again seen from the other
+end, and whether that is "a light touch" or "broken" is the hand's call.
+
+**Cost (`GraphiteGrainCostTest`, JVM, 2000-event stroke, 4 px lead):** flank **14.69 ms**
+(0.0073 ms/event, 37 152 flecks) against the round lead's 6.48 ms on the same stroke —
+2.3× for a cross-section a hundred lanes wide instead of six, and well inside the cadence
+Phase 28's 6 ms / 1252 events set. Doubling the stroke costs 1.99×, so the sweep is still
+linear and no re-derivation has crept back in.
+
+#### First walk (the user, Nomad and Manta, 2026-09-19)
+
+**The finding.** *"The dabs/flecks seem too blotchy. It seems like the grain got bigger
+instead of just being wider overall. Almost like each particle just got bigger/wider instead
+of the spread of the stroke with the grains being the initial sizes they are without the
+tilt."*
+
+**The cause — and it is not the one the words describe.** No fleck had changed size:
+`fleckPx(level, width)` is a function of the lead and the darkness index, both untouched by
+the lean, and the flank and the hairline lay the identical fleck. What had changed is **where
+on `catches`'s curve the lead works**, and the sheet's say is not a constant across it.
+
+A site catches when `U·(1−w) + (1−tooth)·w < cover` — `U` its own toss, `tooth` a field
+correlated over `TOOTH_CELL_PX` (3.5 px) and three times that (10.5 px), `w = TOOTH_WEIGHT`
+0.55. At the round lead's coverage — a pressed hairline asks **0.76** — the tooth only ever
+moves a site's odds between about 0.8 and 1: nearly everything fills, the field is overruled,
+and *the grit the artist approved is in fact the per-site toss*. At the flank's **0.3–0.4**
+the same field moves those odds between 0 and about 0.5, so it stops shading the mark and
+starts **deciding** it, in whole cells — and a cell decided whole is a blotch about the size
+the hand reported. `skate` does the same along the other axis: 0.16 of coverage stolen is a
+few percent of a hairline's sites and a fifth of a band's, so its 26 × 5 px runs turn from a
+hint of streak into visible bars. **The blotches are the paper's own texture, arriving at a
+coverage where it is no longer a texture but a stencil.**
+
+Measured, not argued: `FlankRenderHarness` now reports a **clump** figure — the tiled standard
+deviation of the band's darkness over the deviation independent pixels would give, so 1 is an
+even spray and larger is patchy. The rejected build's shading band scored **2.89**; the
+hairline it is meant to be a broad version of scores **1.10**.
+
+**The grid** (`FlankRenderHarness`, the second test, skipped unless `GPAPER_RENDER_DIR` is
+set). Twelve variants of cell d — rows: flank tooth weight 0.55 / 0.35 / 0.20 / 0; columns:
+the patch octave on, off, and off with `skate` silenced too — **each one fitting its own
+`FLANK_LIGHTEN` back to the first build's 17.6 ink/px before it is looked at**. That matching
+is the method, not a nicety: a smoother `catches` fills more sites at the same coverage (the
+untouched band ran 17.6 → 40.6 ink/px across the grid) and a sparser mark looks blotchier
+whatever its correlation is, so an unmatched grid compares tones while pretending to compare
+textures.
+
+| tooth weight | fitted lighten | clump, patch on | patch off | patch + skate off |
+|---|---|---|---|---|
+| 0.55 (as built) | 0.38 | **2.89** | 2.62 | 2.61 |
+| 0.35 | 0.50 | 2.32 | 2.21 | 2.21 |
+| **0.20 (chosen)** | **0.61** | **1.84** | 1.88 | 1.86 |
+| 0.00 | 0.75 | 1.54 | 1.54 | 1.53 |
+
+**The weight does all of it, and it is one number rather than four.** Across the row the patch
+octave and the skate are worth about 0.02 of clump each — inside the measurement — because a
+weight of 0.20 has already flattened the field's whole influence. So they keep the sheet's own
+values, which is the better answer as well as the smaller one: **the tooth is a property of
+the paper, and two leads that disagreed about its octaves would be two leads drawing on
+different sheets** — a crossing would stop sharing its hollows. By eye, 0.35 still mottles
+visibly, 0 reads as television static, and 0.20 is even with a fibre still in it. (0.25 and
+0.15 were rendered too, at 1.98 and 1.72; 0.25 still patches.)
+
+**Chosen:** `FLANK_TOOTH_WEIGHT` **0.20**, blended in on the **spread** — the same quantity
+`FLANK_LIGHTEN` rides, exactly 0 for every ordinary grip — with `TOOTH_FINE`, `TOOTH_COARSE`
+and `SKATE_DEPTH` unchanged. `FLANK_LIGHTEN` **0.38 → 0.61**, re-fitted against the rendered
+band because the untouched band came back at 33.6 ink/px. **The round lead is byte-identical**:
+`GraphiteGrainPinTest` and the flank's own sub-threshold identity test pass untouched, which
+is what the blend-on-spread is for.
+
+**Offline, after (same harness, same seeds):**
+
+| cell | before | after |
+|---|---|---|
+| a · upright 8° | 3.69 ink/px · fill 0.61 · clump 1.10 | *identical* |
+| b · writing 40° | *= a* | *= a* |
+| c · mid-bloom 50° | 21.13 · 0.43 · 2.68 | 19.12 · 0.38 · **2.29** |
+| **d · shading 60° across** | **17.59** · 0.22 · **2.89** | **17.33** · 0.21 · **1.85** |
+| e · shading 60° along | 3.65 · 0.61 · 1.32 | *unchanged* |
+| f · 60° across, pressed hard | 46.85 · 0.57 · 3.01 | 37.36 · 0.45 · **1.85** |
+| g · 60° across, barely pressed | 2.10 · 0.03 · 2.47 | **3.68** · 0.05 · **1.84** |
+
+d lands **1.5 % under** the tone the hand has already seen, which was the constraint.
+
+**Two consequences that are not free, stated rather than buried.** The single compensation was
+fitted at d's coverage and the curve is flatter than it was, so the flank's **pressure range
+compresses**: f drops a fifth and g rises three quarters, f/g going from 22× to 10×. Both ends
+move *towards* the decisions — decision 3 wants a fully-over lead grey however hard it is
+pressed, and f at fill 0.45 is greyer than f at 0.57 — and **the g that Phase 36 flagged as
+"the open question for the walk" is no longer nearly invisible**, which is the S-curve
+answering from the other end. Whether the narrower range is right is the hand's call, and
+`FLANK_LIGHTEN` is the knob. The other consequence is bookkeeping:
+`GraphiteGrainFlankTest`'s "much more graphite in total than a hairline" bound is re-fitted
+4× → 3× (measured 3.82× hard, 3.03× light, against 4.8× before), with the reason in the test.
+
+**What landed for it.** `catches` and `skate` take their numbers from the caller instead of
+reading constants, and `deposit` / `cap` / `tapDisc` / `tapStrip` carry a `Grit` (the flank's
+five numbers, including its `lighten`) and the station's `spread`. `Grit` is `internal` and
+`FLANK_GRIT` is the only instance anything but a test ever sees — **no mutable global
+anywhere**, the Phase 21 rule kept while still giving the walk a door: the harness's seven
+cells honour `GPAPER_FLANK_TOOTH` / `_FINE` / `_COARSE` / `_SKATE` / `_LIGHTEN`, so a chosen
+variant can be re-rendered without an edit. And the finding itself is pinned — the harness's
+always-run test now asserts the shading band's clump stays under 2.2.
+
+**No version bump: 0.1.51 is republished.** It was never walked good.
+
+#### Second walk (the user, Manta, 2026-09-19)
+
+**The finding.** *"The individual graphite feels clumpy and not natural at all"* — *"the grain
+isn't the right size"*. A 4× crop of the settled panel shows the band made of connected,
+worm-like filaments and blobs three to six px across with bare paper between them, while the
+upright hairline on the same page is the fine even grit it should be. Offline, cell d at the
+chosen tooth weight looks even. **So the synthetic stroke is not the input the device sees**,
+and the first walk's fix was fitted against a straw man.
+
+**So the harness reads the hand.** `FlankRenderHarness` now renders the `probe-tilt` CSV
+itself — every stroke of the `shading` and `flat` passes, decoded exactly as `RattaPaperView`
+decodes it live (the HAL's degrees undone out of the CSV's `Math.toDegrees`, the lean their
+hypotenuse, the azimuth `atan2(tiltY, tiltX)` on the Manta's unturned panel) — together with a
+**substitution grid**: the same real stroke with one column at a time replaced by the
+synthetic value the harness used to assume. It also drives the same input through
+`begin`/`extend` in the batches an event stream arrives in and asserts the live path and the
+committed mark are the same flecks, on a real hand's jitter rather than on a straight line.
+It is skipped unless `GPAPER_PROBE_CSV` and `GPAPER_RENDER_DIR` are both set.
+
+What the hand's input actually is, which is the first half of the answer: **press 0.18–0.32**
+(the harness assumed 0.65), lean 56–63°, azimuth ~41° and steady to the degree, samples 2–3.5
+px apart, and a shading pass that **turns around every 150–270 px** — a scribbled patch of
+overlapping passes, never the 340 px straight sweep the cells draw.
+
+**The cause, measured.** Substituting the pressure, the lean, the azimuth, the sample spacing,
+or smoothing the path, each on its own, moves the clumping by nothing (2.17–2.38 against the
+real stroke's 2.24). **Unwinding the path does all of it**: laid straight with its own step
+lengths, its own pressure and lean, and each sample's azimuth carried over as the angle it
+made with the travel at that instant, the same stroke drops to 1.54 — and one single pass of
+it, which cannot cross ink it has already laid, drops from 1.83 to **0.86**. Silencing the
+sheet's tooth entirely does *not* help (3.24, worse), which rules out the first walk's
+suspect.
+
+**The fan.** A station lays one comb across the travelled direction and the stations sit a
+tooth pitch apart *along the path*, which is the right spacing for every lane **only while the
+comb translates**. Let the direction turn by `dθ` between stations and the lane `site` px out
+advances by `pitch − site·dθ`, because the comb is rotating about the nib and that lane is out
+on the lever arm. The user's own hand turns the smoothed direction a median **0.24°** and a
+p95 of **4.6°** per station — a median 0.34 px and a p95 of 6.4 px of slip at the flank's
+eighty px rim, against a pitch of 0.8 px. The rim's own spacing therefore swings from 0.7× the
+lattice to nine times it, and three stations in a hundred fold back over the one before:
+crowded, the same graphite lands three deep; opened, there is nothing at all for six px.
+**That is the worm.** On the round lead the arm is three px and there was never anything to
+see, which is why this survived every phase.
+
+**What landed for it — two things, and neither is a smaller constant.**
+
+- **`FAN_SPLIT_MAX`.** Deposit per unit of **paper** instead of per unit of comb-advance:
+  every lane's coverage is scaled by how much paper that lane actually swept
+  (`advance × |1 − site·curve|` rows of tooth — a magnitude, so a lane sweeping back across
+  the strip it laid a station ago deposits on what it covers rather than nothing, which is
+  what a shading turnaround looks like), and the stations are **split** where the fan opens so
+  the fastest lane never skips a row — `pitch = TOOTH_PITCH_PX / (1 + |curve|·reach)`, floored
+  at eight stations to the row. Scaling alone would fix the crowding and leave the gaps;
+  splitting alone would fix the gaps and leave the crowding three deep.
+- **`FLANK_TOOTH_DEPTH` = 0.5**, because the fan correction on its own *lost 40 % of the
+  mark*. `catches` was never linear in the coverage: the sheet enters it as an **offset**,
+  `U·(1−w) + (1−tooth)·w < cover`, whose size relative to the mark grows without bound as the
+  mark gets lighter — rearranged, every site below `cover/w` of tooth height has a **negative**
+  threshold and can never catch, however many passes go over it. At the round lead's 0.76 that
+  never happens; at a real shading pass's 0.17 it happens over most of the sheet. So halving a
+  station's coverage is nothing like halving its catches, **and every other correction in this
+  file is distorted by it**. The flank now asks the sheet a proportional question instead —
+  `U < cover·(1 + depth·(2·tooth − 1))`, peaks catching `1+depth` as readily as the average and
+  hollows `1−depth`, a fixed contrast at every tone with no clamp in it. `0.5` is the depth the
+  first walk actually chose: at cell d's coverage its approved weight put a peak's odds at
+  three times a hollow's, and `1.5/0.5` is three. Blended in on the **spread** like everything
+  else, so at zero it is the weighted average bit for bit.
+
+**And `FLANK_LIGHTEN` 0.61 → 0.84, fitted against a different thing.** Both earlier fits were
+made against the synthetic sweep at press 0.65 on the argument that it was "the tone the artist
+has in front of them". It was not. The number is now fitted against the **hand's own strokes**,
+rendered from the probe, until their measured fill is what the walk saw.
+
+**Offline, after (`FlankRenderHarness`, same seeds):**
+
+| mark | before | after |
+|---|---|---|
+| a · upright 8° · b · writing 40° · e · 60° along the lean | 3.69 / 3.64 / 3.65 ink/px | *bit for bit identical* |
+| c · mid-bloom 50° | 19.12 · fill 0.38 · clump 2.29 | 16.99 · 0.34 · **1.91** |
+| d · shading 60° across | 17.33 · 0.21 · 1.85 | 11.67 · 0.14 · **1.59** |
+| f · 60° across, pressed hard | 37.36 · 0.45 · 1.85 | 22.51 · 0.27 · 1.61 |
+| g · 60° across, barely pressed | 3.68 · 0.05 · 1.84 | 4.59 · 0.06 · 1.51 |
+| **the hand's own shading strokes** (5) | fill 0.21–0.34 · clump 2.62–3.00 | fill **0.20–0.31** · clump **2.31–2.73** |
+| **one pass of one**, which crosses nothing | 1.83 | **1.07** (its unwound twin: 1.11) |
+| the synthetic sweep, wandering 0 / 0.3 / 0.6 px | 3.27 / 3.19 / 3.21 ink/px · clump 1.50 / 1.37 / 1.65 | 4.38 / 4.22 / 4.34 · **1.22 / 1.18 / 1.16** |
+
+The last two rows are the fix stated twice: **a real pass now renders exactly as clean as the
+same pass with its turning taken out**, and a synthetic mark's tone and texture no longer
+depend on whether the hand wandered. The whole-patch figure stays near 2.5 and should: those
+are scribbles of overlapping passes and the variation left in them is the gesture, at the scale
+of the band, not of the grain — the pictures are an even grit where they were filaments.
+
+**Three consequences, stated rather than buried.** The flank's pressure range compresses again,
+hard over light 10.2× → 4.9×, because what has gone is the stencil that used to eat a light
+mark — and a light mark is what shading *is*; both ends move towards decision 3, and
+`FLANK_LIGHTEN` remains the knob. `GraphiteGrainFlankTest`'s "much more graphite in total than a
+hairline" bound is re-fitted 3× → 1.8× (measured 2.06× hard, 3.61× light) for the third time and
+for the same reason each time: the claim is about how much lead is on the paper and the bound is
+about where on `catches` the two marks work. And a turning mark now costs what its turning is
+worth — 2.8× the stations on the user's own sweep, **21.07 ms for a 2000-event stroke** against
+the straight sweep's 14.72 (`GraphiteGrainCostTest`, JVM, now measuring a wandering stroke too),
+which is 0.0105 ms an event and still an order inside Phase 28's cadence.
+
+**The harness's grid follows the question.** Its rows swept the tooth *weight*; at a full sweep
+that number no longer decides anything, and the grid says so itself by fitting the identical
+`lighten` (0.84) at every one of them. It now sweeps `FLANK_TOOTH_DEPTH` — 0.25 / 0.5 / 0.75 /
+1.0, clump 1.57 / 1.59 / 1.61 / 1.65 at a matched tone — which is the knob a walk can now argue
+with.
+
+**No version bump: 0.1.51 is republished again.** It has still never been walked good.
+
+---
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

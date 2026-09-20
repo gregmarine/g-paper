@@ -121,9 +121,10 @@ class GraphiteGrainIncrementalTest {
         seed: Int,
         cuts: List<Int>,
         what: String,
+        lead: GraphiteGrain.Lead = GraphiteGrain.Lead.ROUND,
     ) {
-        val whole = GraphiteGrain.of(points, width, seed, prefix = true)
-        val sweep = GraphiteGrain.begin(width, seed)
+        val whole = GraphiteGrain.of(points, width, seed, prefix = true, lead = lead)
+        val sweep = GraphiteGrain.begin(width, seed, lead = lead)
         val laid = Laid()
         var previously = 0
         for (k in cuts) {
@@ -170,16 +171,29 @@ class GraphiteGrainIncrementalTest {
         seed: Int,
         cuts: List<Int>,
         what: String,
+        lead: GraphiteGrain.Lead = GraphiteGrain.Lead.ROUND,
+        expectCap: Boolean = true,
     ) {
-        val whole = GraphiteGrain.of(points, width, seed)
-        val sweep = GraphiteGrain.begin(width, seed)
+        val whole = GraphiteGrain.of(points, width, seed, lead = lead)
+        val sweep = GraphiteGrain.begin(width, seed, lead = lead)
         val laid = Laid()
         for (k in cuts) laid.add(sweep.extend(points.subList(0, k)))
         val previewed = laid.level.size
         laid.add(sweep.finish(points))
         assertEquals("$what: fleck count once finished", whole.count, laid.level.size)
         assertEquals("$what: the sweep's own count", whole.count, sweep.count)
-        assertTrue("$what: the cap should have added something", laid.level.size > previewed)
+        // A dome exists whenever the lead's own radius is worth more than a tooth or two —
+        // but on a 4 px lead it is a couple of strips of grit, and at an ordinary pressure
+        // it can honestly catch nothing. [expectCap] is that fact, not a weakened invariant:
+        // where a cap is expected it must be there, and the fleck-for-fleck comparison below
+        // is what actually pins the finish either way.
+        assertTrue(
+            "$what: the finish may only ever add flecks",
+            laid.level.size >= previewed,
+        )
+        if (expectCap) {
+            assertTrue("$what: the cap should have added something", laid.level.size > previewed)
+        }
         for (i in 0 until whole.count) {
             assertEquals("$what: x[$i]", whole.xy[i * 2], laid.xy[i * 2], 0f)
             assertEquals("$what: y[$i]", whole.xy[i * 2 + 1], laid.xy[i * 2 + 1], 0f)
@@ -192,13 +206,20 @@ class GraphiteGrainIncrementalTest {
     }
 
     /** Every chunking a stroke can arrive in: sample by sample, in random bites, and whole. */
-    private fun assertEveryChunkingAgrees(points: List<StrokePoint>, width: Float, seed: Int, name: String) {
+    private fun assertEveryChunkingAgrees(
+        points: List<StrokePoint>,
+        width: Float,
+        seed: Int,
+        name: String,
+        lead: GraphiteGrain.Lead = GraphiteGrain.Lead.ROUND,
+        expectCap: Boolean = true,
+    ) {
         val n = points.size
-        assertChunkingAgrees(points, width, seed, (2..n).toList(), "$name, one sample at a time")
-        assertChunkingAgrees(points, width, seed, listOf(n), "$name, all at once")
-        assertFinishAgrees(points, width, seed, (2..n).toList(), "$name, finished one at a time")
-        assertFinishAgrees(points, width, seed, listOf(n), "$name, finished after one extend")
-        assertFinishAgrees(points, width, seed, emptyList(), "$name, finished with no extend at all")
+        assertChunkingAgrees(points, width, seed, (2..n).toList(), "$name, one sample at a time", lead)
+        assertChunkingAgrees(points, width, seed, listOf(n), "$name, all at once", lead)
+        assertFinishAgrees(points, width, seed, (2..n).toList(), "$name, finished one at a time", lead, expectCap)
+        assertFinishAgrees(points, width, seed, listOf(n), "$name, finished after one extend", lead, expectCap)
+        assertFinishAgrees(points, width, seed, emptyList(), "$name, finished with no extend at all", lead, expectCap)
         val rng = Random(name.hashCode())
         repeat(6) { round ->
             val cuts = ArrayList<Int>()
@@ -207,12 +228,95 @@ class GraphiteGrainIncrementalTest {
                 at = (at + 1 + rng.nextInt(17)).coerceAtMost(n)
                 cuts.add(at)
             }
-            assertChunkingAgrees(points, width, seed, cuts, "$name, random bites #$round")
-            assertFinishAgrees(points, width, seed, cuts, "$name, finished after random bites #$round")
+            assertChunkingAgrees(points, width, seed, cuts, "$name, random bites #$round", lead)
+            assertFinishAgrees(points, width, seed, cuts, "$name, finished after random bites #$round", lead, expectCap)
         }
         // And the same stroke fed in two halves, which is the shortest resume there is.
-        assertChunkingAgrees(points, width, seed, listOf(n / 2, n), "$name, two halves")
-        assertFinishAgrees(points, width, seed, listOf(n / 2, n), "$name, finished after two halves")
+        assertChunkingAgrees(points, width, seed, listOf(n / 2, n), "$name, two halves", lead)
+        assertFinishAgrees(
+            points, width, seed, listOf(n / 2, n), "$name, finished after two halves", lead, expectCap,
+        )
+    }
+
+    /** A shading sweep: the pen laid over on its side, travelling across the lean. */
+    private fun shading(n: Int, leanDeg: Float, azimuthDeg: Float): List<StrokePoint> =
+        (0 until n).map {
+            StrokePoint(
+                x = 120f + it * 3f,
+                y = 300f,
+                pressure = 0.6f,
+                tilt = deg(leanDeg),
+                azimuth = deg(azimuthDeg),
+            )
+        }
+
+    /** The hand rolling the pen over *and* turning it as it shades — the flank's own
+     *  filters moving, on top of every filter the round lead already had. */
+    private fun rollingFlank(n: Int): List<StrokePoint> = (0 until n).map {
+        val t = it * 0.05f
+        StrokePoint(
+            x = 200f + 240f * sin(t),
+            y = 400f + 160f * (1f - cos(t)),
+            pressure = 0.4f + 0.4f * sin(t * 1.9f) * sin(t * 1.9f),
+            tilt = deg(42f + 18f * (0.5f + 0.5f * sin(t * 0.8f))),
+            azimuth = deg(70f + 50f * sin(t * 0.6f)),
+        )
+    }
+
+    /**
+     * A lean pointing straight up the screen, whose reported azimuth flips between `+179°`
+     * and `−179°` sample to sample. The flank's filter averages unit **vectors** precisely
+     * so this cannot happen; averaged as angles the mark would jump to the opposite side of
+     * the nib, and a resumed sweep would disagree with a whole one about when.
+     */
+    private fun wrapping(n: Int): List<StrokePoint> = (0 until n).map {
+        StrokePoint(
+            x = 150f + it * 2.6f,
+            y = 380f,
+            pressure = 0.55f,
+            tilt = deg(58f),
+            azimuth = deg(if (it % 2 == 0) 179.4f else -179.6f),
+        )
+    }
+
+    @Test
+    fun `a flank shading sweep sweeps the same in any chunking`() {
+        assertEveryChunkingAgrees(
+            shading(90, 60f, 90f), 4f, "flank-across".hashCode(), "flank across the lean",
+            GraphiteGrain.Lead.FLANK,
+        )
+    }
+
+    @Test
+    fun `a flank stroke drawn along its own lean sweeps the same in any chunking`() {
+        assertEveryChunkingAgrees(
+            shading(90, 60f, 0f), 4f, "flank-along".hashCode(), "flank along the lean",
+            GraphiteGrain.Lead.FLANK, expectCap = false,
+        )
+    }
+
+    @Test
+    fun `a rolling, turning flank stroke sweeps the same in any chunking`() {
+        assertEveryChunkingAgrees(
+            rollingFlank(110), 4f, "flank-roll".hashCode(), "rolling flank",
+            GraphiteGrain.Lead.FLANK,
+        )
+    }
+
+    @Test
+    fun `a flank stroke whose azimuth wraps through pi sweeps the same in any chunking`() {
+        assertEveryChunkingAgrees(
+            wrapping(90), 4f, "flank-wrap".hashCode(), "wrapping azimuth",
+            GraphiteGrain.Lead.FLANK, expectCap = false,
+        )
+    }
+
+    @Test
+    fun `a flank stroke below the threshold sweeps the same in any chunking`() {
+        assertEveryChunkingAgrees(
+            shading(80, 30f, 90f), 4f, "flank-writing".hashCode(), "writing grip",
+            GraphiteGrain.Lead.FLANK, expectCap = false,
+        )
     }
 
     @Test

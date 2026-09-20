@@ -19,10 +19,10 @@ import com.symmetricalpalmtree.gpaper.core.geometry.Dither
  *
  * The flatten is `drawCommittedContent`'s own, in the same order and with the same
  * operator: white paper, the graphite image with this contact's flecks over it, and the ink
- * image with this contact's ink over *it*, the two meeting through `DARKEN` — the darker of
- * the two per channel, which is commutative, so the pair has no top and no bottom to get
- * wrong. The display half simply passes live alphas of zero, because by then the mark is in
- * the image it belongs to.
+ * image with this contact's ink over *it*, the ink laid **over** the graphite (`SRC_OVER`,
+ * Phase 30 — ink is on top, the way gel ink sits on graphite; until 0.1.43 the two met
+ * through `DARKEN`). The display half simply passes live alphas of zero, because by then the
+ * mark is in the image it belongs to.
  *
  * **Since Phase 29 the bake is here too** ([srcOver]). The live layer is composited into
  * the page image with the very arithmetic the live flatten applied to it, so the mirror is
@@ -45,8 +45,8 @@ internal object DitherFlatten {
     /**
      * The grey (0…255) a page pixel shows, with a live layer over **each** image: the
      * graphite side is the graphite image plus [liveGraphite] flecks in [graphiteColor],
-     * the ink side is the ink image plus [liveInk] in [inkColor], and the two meet through
-     * `DARKEN`. See the class KDoc for the order.
+     * the ink side is the ink image plus [liveInk] in [inkColor], and the ink side goes
+     * **over** the graphite side. See the class KDoc for the order.
      *
      * Both live alphas are `0` for the display half, where whatever was live has been
      * baked into the image beside it, and at most one of them is ever non-zero under the
@@ -66,7 +66,7 @@ internal object DitherFlatten {
 
     /**
      * The grey (0…255) the two page images alone show: white paper, the graphite image
-     * over it, the ink image through `DARKEN`.
+     * over it, the ink image **over that** (`SRC_OVER` — Phase 30; `DARKEN` before it).
      *
      * **This is the only flatten there is.** The live half above does not have a second
      * one: it composites its live layer into the page pixel with [srcOver] — the very call
@@ -88,13 +88,15 @@ internal object DitherFlatten {
             b = over(graphite and 0xFF, ga)
         }
         val ia = ink ushr 24
-        if (ia != 0) {
-            val ir = over(ink ushr 16 and 0xFF, ia)
-            val ig = over(ink ushr 8 and 0xFF, ia)
-            val ib = over(ink and 0xFF, ia)
-            if (ir < r) r = ir
-            if (ig < g) g = ig
-            if (ib < b) b = ib
+        if (ia == 255) {
+            r = ink ushr 16 and 0xFF
+            g = ink ushr 8 and 0xFF
+            b = ink and 0xFF
+        } else if (ia != 0) {
+            val inv = 255 - ia
+            r = ((ink ushr 16 and 0xFF) * ia + r * inv) / 255
+            g = ((ink ushr 8 and 0xFF) * ia + g * inv) / 255
+            b = ((ink and 0xFF) * ia + b * inv) / 255
         }
         return (LUMA_R * r + LUMA_G * g + LUMA_B * b) shr 8
     }
@@ -125,6 +127,45 @@ internal object DitherFlatten {
     /** [black] with a live layer on the **graphite** side only. */
     fun black(graphite: Int, liveAlpha: Int, liveColor: Int, ink: Int, x: Int, y: Int): Boolean =
         black(graphite, liveAlpha, liveColor, ink, 0, 0, x, y)
+
+    /**
+     * What page pixel ([x], [y]) **shows**, as black coverage 0…255 — the one display rule
+     * since Phase 31 (0.1.45), for the panel under the nib and for the window alike:
+     *
+     * - **Settled marks show their true tone.** With [settled] true, a pixel either page
+     *   image covers (any alpha) and no live layer is on answers `255 − luma` — the panel
+     *   can hold sixteen greys: a gel pen's line reads better solid than as dots (the
+     *   user's ask, Phase 31: *"can we have it rebake with the true tone of the pen?"*),
+     *   and a pencil's flecks, each at its own alpha in the lead's tone, read as grain in
+     *   grey rather than grain in black (Phase 34: *"perhaps it will look more natural
+     *   with real tones with the grain?"*).
+     * - **Everything else dithers** — a **live** mark under the nib, and any mark the
+     *   caller has not yet *settled* ([settled] false) — answering `255` or `0` through
+     *   [Dither], exactly as [black] does. A live mark stays a dither on purpose: the
+     *   panel's waveform reaches a grey only through black, so a grey painted live trails
+     *   the nib while black dots land at once. A just-baked mark stays dithered too (the
+     *   user's ask, Phase 32: not at pen-up — "anything other than drawing will rebake
+     *   with the correct tone"); the caller settles it, in tone, at the next thing that is
+     *   not a mark: a tool or pen change, a page swap, an undo, a rub, or its own chrome
+     *   about to open (`settleDisplay`).
+     */
+    fun coverage(
+        graphite: Int,
+        liveGraphite: Int,
+        graphiteColor: Int,
+        ink: Int,
+        liveInk: Int,
+        inkColor: Int,
+        x: Int,
+        y: Int,
+        settled: Boolean = true,
+    ): Int {
+        val g = srcOver(graphite, graphiteColor, liveGraphite)
+        val k = srcOver(ink, inkColor, liveInk)
+        val grey = luma(g, k)
+        if (settled && liveInk == 0 && liveGraphite == 0 && ((k or g) ushr 24) != 0) return 255 - grey
+        return if (Dither.black(grey, x, y)) 255 else 0
+    }
 
     /** One channel of an unpremultiplied pixel composited over white paper. */
     private fun over(channel: Int, alpha: Int): Int =
@@ -195,8 +236,13 @@ internal object DitherFlatten {
 
     /**
      * Flatten and dither a whole band of the page: `[x0, x0 + w) × [y0, y0 + h)` in page
-     * coordinates, into [out] as [inked] where the pixel shows black and [blank] where it
-     * shows paper.
+     * coordinates, into [out] as [inked] where the pixel dithers black, [blank] where it
+     * dithers paper, and — since Phase 31 — the pixel's **black coverage** (`255 − luma`)
+     * where either image covers it and [settled] is true, so a settled mark shows in its
+     * true tone — a pen's line solid, a pencil's flecks as grain in grey ([coverage]'s
+     * rule; [inked] is expected to be `0xFF` and [blank] `0` so the three agree as one
+     * scale). With [settled] false every pixel dithers — the band holds a mark not yet
+     * settled.
      *
      * [graphite] and [ink] are the two page images' pixels over exactly that band, row
      * major, [w] to a row — what `Bitmap.getPixels` leaves. Either may be absent
@@ -226,6 +272,7 @@ internal object DitherFlatten {
         outStride: Int,
         inked: Byte,
         blank: Byte,
+        settled: Boolean = true,
     ) {
         if (w <= 0 || h <= 0) return
         val n = w * h
@@ -258,8 +305,8 @@ internal object DitherFlatten {
                 val kp = if (k) ink[src + x] else 0
                 var grey = 255
                 if ((gp or kp) ushr 24 != 0) {
-                    // White paper, the graphite image over it, the ink image through
-                    // DARKEN — [luma]'s own order, written out so nothing is called here.
+                    // White paper, the graphite image over it, the ink image OVER that —
+                    // [luma]'s own order, written out so nothing is called here.
                     var r = 255
                     var gg = 255
                     var b = 255
@@ -275,23 +322,21 @@ internal object DitherFlatten {
                         b = ((gp and 0xFF) * ga + inv) / 255
                     }
                     val ia = kp ushr 24
-                    if (ia != 0) {
-                        var ir = kp ushr 16 and 0xFF
-                        var ig = kp ushr 8 and 0xFF
-                        var ib = kp and 0xFF
-                        if (ia != 255) {
-                            val inv = 255 * (255 - ia)
-                            ir = (ir * ia + inv) / 255
-                            ig = (ig * ia + inv) / 255
-                            ib = (ib * ia + inv) / 255
-                        }
-                        if (ir < r) r = ir
-                        if (ig < gg) gg = ig
-                        if (ib < b) b = ib
+                    if (ia == 255) {
+                        r = kp ushr 16 and 0xFF
+                        gg = kp ushr 8 and 0xFF
+                        b = kp and 0xFF
+                    } else if (ia != 0) {
+                        val inv = 255 - ia
+                        r = ((kp ushr 16 and 0xFF) * ia + r * inv) / 255
+                        gg = ((kp ushr 8 and 0xFF) * ia + gg * inv) / 255
+                        b = ((kp and 0xFF) * ia + b * inv) / 255
                     }
                     grey = (LUMA_R * r + LUMA_G * gg + LUMA_B * b) shr 8
                 }
-                out[dst + x] = if (limit[grey] < cut[phase]) inked else blank
+                out[dst + x] =
+                    if (settled) (255 - grey).toByte()
+                    else if (limit[grey] < cut[phase]) inked else blank
                 x++
                 phase = (phase + 1) and (BlueNoise64.SIZE - 1)
             }

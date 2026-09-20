@@ -4,6 +4,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.sin
 
 /**
  * Screen → panel, pinned on both measured devices.
@@ -112,5 +115,67 @@ class EbcGeometryTest {
             assertTrue("($x,$y) → ($px,$py) outside ${out.toList()}", px >= out[0] && px < out[2])
             assertTrue("($x,$y) → ($px,$py) outside ${out.toList()}", py >= out[1] && py < out[3])
         }
+    }
+
+    // ── The stylus's axes live in the panel's frame too (Phase 36) ───────────
+
+    /** [EbcGeometry.screenAzimuth] in degrees, which is how the measurement was written down. */
+    private fun screenAzimuthDeg(rotated: Boolean, tiltX: Float, tiltY: Float): Float {
+        val r = EbcGeometry.screenAzimuth(rotated, tiltX, tiltY)
+        return Math.toDegrees(r.toDouble()).toFloat()
+    }
+
+    /** A lean of [deg] in the raw axes, as the HAL reports it: signed tilt-X, signed tilt-Y. */
+    private fun rawLean(deg: Float): Pair<Float, Float> {
+        val r = Math.toRadians(deg.toDouble())
+        return cos(r).toFloat() * 30f to sin(r).toFloat() * 30f
+    }
+
+    @Test
+    fun `the same shading grip reads the same on a Manta and on a Nomad`() {
+        // **The measurement, pinned** (the user's hand, `probe-tilt`, 2026-09-19). One
+        // right-handed shading grip, two devices: the Manta's panel *is* the screen and the
+        // raw axes read ~42 degrees; the Nomad's panel is a quarter turn away and the same
+        // grip reads ~137. Only the turn `(x, y) -> (y, -x)` brings 137 to ~47 and makes
+        // them one grip — which is why the direction of this turn is the hand's finding and
+        // not a composition of the pixel rule's inverse, which turns the other way.
+        val (mx, my) = rawLean(42f)
+        assertEquals(42f, screenAzimuthDeg(false, mx, my), 0.5f)
+        val (nx, ny) = rawLean(137f)
+        assertEquals(47f, screenAzimuthDeg(true, nx, ny), 0.5f)
+        // Which is the whole point: the two are the same direction on the glass to within
+        // the hand's own steadiness.
+        assertEquals(
+            screenAzimuthDeg(false, mx, my),
+            screenAzimuthDeg(true, nx, ny),
+            5.5f,
+        )
+    }
+
+    @Test
+    fun `an identity panel hands the lean straight through`() {
+        for (deg in floatArrayOf(0f, 42f, 90f, 179f, -3f, -120f)) {
+            val (x, y) = rawLean(deg)
+            assertEquals(deg, screenAzimuthDeg(false, x, y), 0.01f)
+        }
+    }
+
+    @Test
+    fun `a turned panel takes exactly a quarter off the lean`() {
+        for (deg in floatArrayOf(0f, 42f, 137f, -90f)) {
+            val (x, y) = rawLean(deg)
+            val turned = screenAzimuthDeg(true, x, y)
+            // Compared as a direction, because an azimuth wraps and -180 is 180.
+            val delta = Math.toRadians((turned - (deg - 90f)).toDouble())
+            assertEquals("$deg deg turned to $turned", 1.0, cos(delta), 1e-4)
+        }
+    }
+
+    @Test
+    fun `the lean's magnitude does not care how the panel is turned`() {
+        // Which is why only the *direction* needs any of this: `hypot` is rotation-blind,
+        // so the polar lean is the one reading both devices agree on without help.
+        val (x, y) = rawLean(137f)
+        assertEquals(hypot(x.toDouble(), y.toDouble()), 30.0, 1e-3)
     }
 }

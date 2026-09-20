@@ -266,6 +266,35 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   would be a second, later opinion about pixels the hand can already see — the same reason
   the mark's pen-up is a no-op there. *A cadence exists to show the artist something; where
   something else already shows it, the right cadence is none.*
+- **Supernote's stylus axes are not Android's, and the panel's quarter turn is in them too
+  (Phase 36, 0.1.51).** The Ratta HAL puts signed **tilt-X in degrees** on `AXIS_TILT` and
+  signed **tilt-Y in degrees** on `AXIS_ORIENTATION` — both live, both in the **panel's**
+  frame. The polar lean from vertical is `hypot(tiltX, tiltY)` in degrees, the same reading
+  the NoteAir5C measurement found on BOOX; the lean *direction* is `atan2(tiltY, tiltX)`,
+  and on a turned panel it needs the same quarter turn the pixels do
+  (`EbcGeometry.screenAzimuth` — and **the direction of that turn is the hand's finding, not
+  a composition of the pixel rule's inverse**, which turns the other way: one shading grip
+  reads ≈42° on a Manta and ≈137° on a Nomad, and only `(x, y) → (y, −x)` makes those one
+  grip). Read as the platform documents it, a raw `30` on `AXIS_TILT` is 1719° of lean —
+  which is what **Phase 22's 10–15× bake actually was**, and it hid for a year because the
+  Nomad's sign is negative and clamps to upright while the Manta's saturates. So
+  **Phase 28's decision 5 — "the Supernote pencil stays upright" — is amended by Phase 36**
+  to: upright for every ordinary grip, the flank only past a side threshold (45°→54°, the
+  gap the `probe-tilt` walk found between writing and shading). Decoding a HAL's axes is the
+  **engine's** business — `CanvasPaperView.sampleTilt` / `sampleAzimuth`, defaulting to
+  Android's contract — and a units bug mistaken for a design decision outlives the bug and
+  takes a feature with it.
+- **A multiplier is only proportional in the part of the curve it was fitted in (Phase 36).**
+  `GraphiteGrain.catches` maps coverage to the fraction of peaks that catch through an
+  S centred near 0.5, and the round lead has always worked at the **top** of it: a pressed
+  hairline asks for 0.76 and catches 96 %. The flank works *down* it, where the same
+  proportional cut costs several times the ink — `TILT_LIGHTEN`'s 0.45 carried over as 0.62
+  asked for 0.21, caught **one site in a hundred**, and rendered fainter than the upright
+  hairline it was meant to be a broad version of; the 0.55 tail falloff had become an
+  outright truncation at two thirds of the lead's reach. Both numbers were re-chosen against
+  the **rendered band** rather than against the lean. The corollary is the Phase 25 habit
+  again: a constant that survives a change of regime has not been tested, it has been
+  carried.
 - **A firmware preview cannot lean, so on Ratta the `PENCIL` bakes upright (Phase 22, 0.1.35).**
   `GraphiteGrain` widens a leaned lead up to ~11×; the Supernote live line is one width whatever
   the tilt, so a hairline drawn at a writing angle baked 10–15× wider than it previewed (found on

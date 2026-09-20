@@ -66,11 +66,17 @@ class GraphiteGrainPrefixTest {
      * is not compared, because the whole stroke's grain ends with one and a prefix's does
      * not; what is compared is that the prefix's flecks ARE the whole's first `count`.
      */
-    private fun assertEveryPrefixHolds(points: List<StrokePoint>, width: Float, seed: Int) {
-        val whole = GraphiteGrain.of(points, width, seed)
+    private fun assertEveryPrefixHolds(
+        points: List<StrokePoint>,
+        width: Float,
+        seed: Int,
+        lead: GraphiteGrain.Lead = GraphiteGrain.Lead.ROUND,
+        expectCap: Boolean = true,
+    ) {
+        val whole = GraphiteGrain.of(points, width, seed, lead = lead)
         var laid = 0
         for (k in 1..points.size) {
-            val prefix = GraphiteGrain.of(points.take(k), width, seed, prefix = true)
+            val prefix = GraphiteGrain.of(points.take(k), width, seed, prefix = true, lead = lead)
             assertTrue(
                 "prefix of $k points laid ${prefix.count} flecks, more than the whole stroke's " +
                     "${whole.count}",
@@ -88,11 +94,17 @@ class GraphiteGrainPrefixTest {
             }
         }
         assertTrue("the full-length prefix laid nothing at all", laid > 0)
-        assertTrue(
-            "the full-length prefix ($laid) should stop short of the whole stroke's end cap " +
-                "(${whole.count})",
-            laid < whole.count,
-        )
+        assertTrue("the prefix ($laid) overran the whole (${whole.count})", laid <= whole.count)
+        // On a 4 px lead the end dome is a couple of strips of grit and may honestly catch
+        // nothing at all, so [expectCap] says where one is expected — see the same note in
+        // `GraphiteGrainIncrementalTest`.
+        if (expectCap) {
+            assertTrue(
+                "the full-length prefix ($laid) should stop short of the whole stroke's end cap " +
+                    "(${whole.count})",
+                laid < whole.count,
+            )
+        }
     }
 
     @Test
@@ -113,6 +125,66 @@ class GraphiteGrainPrefixTest {
     @Test
     fun `a hairline prefixes as exactly as a broad lead does`() {
         assertEveryPrefixHolds(curved(80), 1.2f, "hairline".hashCode())
+    }
+
+    /**
+     * A shading stroke drawn across the lean, which is the flank's own case: the mark is
+     * twenty lead-widths broad, every station's cross-section is one-sided, and the lean
+     * direction carries its own causal filter. **The prefix invariant has to survive all
+     * of that**, because on Supernote's direct path the flecks go straight onto the panel
+     * and there is no frame to take one back with (Phase 36).
+     */
+    private fun shading(n: Int, leanDeg: Float, azimuthDeg: Float): List<StrokePoint> =
+        (0 until n).map {
+            StrokePoint(
+                x = 120f + it * 3f,
+                y = 300f,
+                pressure = 0.6f,
+                tilt = deg(leanDeg),
+                azimuth = deg(azimuthDeg),
+            )
+        }
+
+    /** The hand rolling the pen over and turning it as it shades — every flank filter moving. */
+    private fun rollingFlank(n: Int): List<StrokePoint> = (0 until n).map {
+        val t = it * 0.05f
+        StrokePoint(
+            x = 200f + 240f * sin(t),
+            y = 400f + 160f * (1f - cos(t)),
+            pressure = 0.4f + 0.4f * sin(t * 1.9f) * sin(t * 1.9f),
+            tilt = deg(42f + 18f * (0.5f + 0.5f * sin(t * 0.8f))),
+            azimuth = deg(70f + 50f * sin(t * 0.6f)),
+        )
+    }
+
+    @Test
+    fun `every prefix of a flank shading sweep is an ordered prefix of the whole`() {
+        assertEveryPrefixHolds(
+            shading(90, 60f, 90f), 4f, "flank-across".hashCode(), GraphiteGrain.Lead.FLANK,
+        )
+    }
+
+    @Test
+    fun `every prefix of a flank stroke drawn along its own lean holds too`() {
+        assertEveryPrefixHolds(
+            shading(90, 60f, 0f), 4f, "flank-along".hashCode(), GraphiteGrain.Lead.FLANK,
+            expectCap = false,
+        )
+    }
+
+    @Test
+    fun `every prefix of a rolling, turning flank stroke is an ordered prefix of the whole`() {
+        assertEveryPrefixHolds(rollingFlank(110), 4f, "flank-roll".hashCode(), GraphiteGrain.Lead.FLANK)
+    }
+
+    @Test
+    fun `every prefix of a flank stroke below the threshold holds`() {
+        // Below 45 degrees the flank *is* the upright mark, so this is also a check that
+        // the bloom's zero branch takes the same road through the file the round lead does.
+        assertEveryPrefixHolds(
+            shading(80, 30f, 90f), 4f, "flank-writing".hashCode(), GraphiteGrain.Lead.FLANK,
+            expectCap = false,
+        )
     }
 
     @Test

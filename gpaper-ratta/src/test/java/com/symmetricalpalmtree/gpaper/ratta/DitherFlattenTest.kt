@@ -63,19 +63,22 @@ class DitherFlattenTest {
     }
 
     @Test
-    fun `ink darkens and never lightens`() {
-        // DARKEN, per channel: the pair has no top and no bottom.
+    fun `ink sits over graphite - a white pen covers a black pencil`() {
+        // SRC_OVER, ink on top (0.1.44): the ink side wins wherever it is opaque, lighter or
+        // darker, and a pale graphite never shows through a dark ink.
         assertEquals(0, DitherFlatten.luma(transparent, 0, black, black))
-        assertEquals(0, DitherFlatten.luma(black, 0, black, white))
+        assertEquals(255, DitherFlatten.luma(black, 0, black, white))
         assertEquals(255, DitherFlatten.luma(white, 0, black, transparent))
         val grey = 0xFF808080.toInt()
-        assertEquals(
-            DitherFlatten.luma(grey, 0, black, transparent),
-            DitherFlatten.luma(transparent, 0, black, grey),
-        )
-        // Order-independent: whichever is darker wins, either way round.
+        assertEquals(0x80, DitherFlatten.luma(grey, 0, black, transparent))
+        assertEquals(0x80, DitherFlatten.luma(transparent, 0, black, grey))
+        // Not order-independent any more: the ink side is on top either way round.
         val dark = 0xFF303030.toInt()
-        assertEquals(DitherFlatten.luma(dark, 0, black, grey), DitherFlatten.luma(grey, 0, black, dark))
+        assertEquals(0x80, DitherFlatten.luma(dark, 0, black, grey))
+        assertEquals(0x30, DitherFlatten.luma(grey, 0, black, dark))
+        // Half-transparent ink blends over the graphite, not over white.
+        val halfBlack = 0x80000000.toInt()
+        assertEquals(0x80 * (255 - 0x80) / 255, DitherFlatten.luma(grey, 0, black, halfBlack))
     }
 
     @Test
@@ -195,14 +198,14 @@ class DitherFlattenTest {
         val pen = 0xFF000000.toInt()
         val lead = 0xFF808080.toInt()
         val graphite = 0xFF909090.toInt()
-        // Live ink over bare ink paper: DARKEN against the graphite side.
+        // Live ink over bare ink paper: on top of the graphite side.
         assertEquals(0, DitherFlatten.luma(graphite, 0, lead, 0, 255, pen))
         // …and with no live ink at all the graphite side stands alone.
         assertEquals(
             DitherFlatten.luma(graphite, 0, lead, 0),
             DitherFlatten.luma(graphite, 0, lead, 0, 0, pen),
         )
-        // A live fleck on the graphite side, with ink present, still goes through DARKEN.
+        // A live fleck on the graphite side, with ink present, still goes under the ink.
         val ink = 0xFFC0C0C0.toInt()
         assertEquals(
             DitherFlatten.luma(0xFF404040.toInt(), 0, lead, ink),
@@ -271,16 +274,67 @@ class DitherFlattenTest {
         )
         for (y in 0 until h) {
             for (x in 0 until w) {
-                val expected = DitherFlatten.black(
-                    graphite[y * w + x], 0, 0, ink[y * w + x], x0 + x, y0 + y,
+                val expected = DitherFlatten.coverage(
+                    graphite[y * w + x], 0, 0, ink[y * w + x], 0, 0, x0 + x, y0 + y,
                 )
                 assertEquals(
                     "pixel ($x, $y)",
-                    if (expected) ON else OFF,
+                    expected.toByte(),
                     out[offset + y * stride + x],
                 )
             }
         }
+    }
+
+    @Test
+    fun `settled marks show their true tone, live marks and unsettled ones dither`() {
+        // Phases 31 and 34: a settled pixel either image covers answers 255 − luma; a live
+        // mark, and anything not yet settled, is one of the two dither ends, exactly as
+        // `black` says.
+        val greyInk = 0xFF808080.toInt()
+        val greyLead = 0xFF808080.toInt()
+        for (y in intArrayOf(0, 5, 63)) for (x in intArrayOf(0, 7, 511)) {
+            assertEquals(255 - 0x80, DitherFlatten.coverage(transparent, 0, 0, greyInk, 0, 0, x, y))
+            assertEquals(255, DitherFlatten.coverage(transparent, 0, 0, black, 0, 0, x, y))
+            assertEquals(0, DitherFlatten.coverage(transparent, 0, 0, white, 0, 0, x, y))
+            // Ink over graphite: the ink's tone, the graphite under it hidden.
+            assertEquals(255 - 0x80, DitherFlatten.coverage(black, 0, 0, greyInk, 0, 0, x, y))
+            // Half-transparent ink over black graphite blends toward the graphite.
+            val half = DitherFlatten.coverage(black, 0, 0, 0x80808080.toInt(), 0, 0, x, y)
+            assertTrue("edge pixel $half", half in 190..200)
+            // Live ink dithers, whatever its colour.
+            val live = DitherFlatten.coverage(transparent, 0, 0, transparent, 255, greyInk, x, y)
+            assertTrue(live == 0 || live == 255)
+            assertEquals(if (DitherFlatten.black(transparent, 0, 0, transparent, 255, greyInk, x, y)) 255 else 0, live)
+            // Settled graphite shows its tone too (Phase 34): a fleck at half alpha in a
+            // black lead is a mid grey, grain in grey rather than grain in dots.
+            assertEquals(255 - 0x80, DitherFlatten.coverage(greyLead, 0, 0, transparent, 0, 0, x, y))
+            val fleck = DitherFlatten.coverage(0x80000000.toInt(), 0, 0, transparent, 0, 0, x, y)
+            assertTrue("half-alpha fleck $fleck", fleck in 126..130)
+            // A live fleck dithers, whatever is baked under it.
+            val liveFleck = DitherFlatten.coverage(transparent, 255, black, greyInk, 0, 0, x, y)
+            assertTrue(liveFleck == 0 || liveFleck == 255)
+            // A mark not yet settled (Phase 32) dithers exactly as `black` says.
+            val waiting = DitherFlatten.coverage(transparent, 0, 0, greyInk, 0, 0, x, y, settled = false)
+            assertEquals(if (Dither.black(0x80, x, y)) 255 else 0, waiting)
+            val waitingLead = DitherFlatten.coverage(greyLead, 0, 0, transparent, 0, 0, x, y, settled = false)
+            assertEquals(if (Dither.black(0x80, x, y)) 255 else 0, waitingLead)
+        }
+    }
+
+    @Test
+    fun `the band kernel dithers unsettled marks`() {
+        val w = 64
+        val h = 4
+        val ink = IntArray(w * h) { 0xFF808080.toInt() }
+        val blank = IntArray(w * h)
+        val out = ByteArray(w * h)
+        DitherFlatten.band(blank, false, ink, true, 0, 0, w, h, out, 0, w, ON, OFF, settled = false)
+        for (i in 0 until w * h) {
+            assertEquals(if (Dither.black(0x80, i % w, i / w)) ON else OFF, out[i])
+        }
+        DitherFlatten.band(blank, false, ink, true, 0, 0, w, h, out, 0, w, ON, OFF, settled = true)
+        assertTrue(out.all { it == (255 - 0x80).toByte() })
     }
 
     @Test

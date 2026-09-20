@@ -7,8 +7,6 @@ import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.RenderNode
@@ -75,7 +73,7 @@ import java.util.UUID
  *   composited into at pen-up through the very same [StrokeRenderer]. Everything before
  *   pen-up is shared with stroke mode; only what is *kept* differs. See [pageMode].
  *   **Two images since 0.1.39** ([RasterLayer]): [graphiteRaster] and [inkRaster],
- *   routed by style, flattened with `DARKEN` — so the rubber can lift graphite and leave
+ *   routed by style, ink drawn over graphite — so the rubber can lift graphite and leave
  *   ink, which one bitmap could never do because a pixel does not know what laid it.
  *
  * Input is stylus-only: finger events are never consumed, so host gestures work above and
@@ -208,9 +206,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * know which tool laid it**: the rubber lifts alpha wherever it sweeps, so one image
      * meant a gel pen came up exactly as graphite did, and no colour key can separate a
      * black pen from a black pencil honestly. The artist's rule is the physical one — ink
-     * is more permanent than pencil — so the answer is the page's data model. The two are
-     * flattened with `DARKEN` wherever the page is seen ([drawCommittedContent]), which is
-     * order-independent: there is no top layer here and nothing for a host to z-order.
+     * is more permanent than pencil — so the answer is the page's data model. The ink image
+     * is drawn **over** the graphite one wherever the page is seen ([drawCommittedContent],
+     * Phase 30): ink sits on top of graphite as gel ink sits on pencil, and there is still
+     * nothing for a host to z-order — the order is the media's, not a choice.
      *
      * The cost is a second page-sized bitmap **only once ink lands** — a pencil-only page
      * never allocates it, and neither does an erase, which never reads this image at all.
@@ -218,23 +217,19 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var inkRaster: Bitmap? = null
 
     /**
-     * The flatten (0.1.39): the ink image goes over the graphite one through
-     * `PorterDuff.Mode.DARKEN` — the darker of the two per channel.
+     * The flatten (0.1.39, reordered 0.1.44): the ink image goes **over** the graphite one —
+     * plain `SRC_OVER`, ink on top.
      *
-     * `DARKEN` rather than the ordinary over-draw because a flatten must not have a top
-     * and a bottom. Neither raster is "above" the other in anything the artist did: they
-     * are two media on one sheet, and `min` is commutative, so the picture is the same
-     * whichever is painted first. It is also the right answer for a coloured ink later
-     * (two transparent media overlaid darken each channel independently), and on white
-     * paper with grey marks it is pixel-identical to `SRC_OVER`, so nothing about the
-     * pencil-only page the artist already approved moves.
-     *
-     * Allocated once and reused; a `Paint` per frame is a page's worth of garbage on a
-     * panel that re-records whenever anything changes.
+     * 0.1.39–0.1.43 flattened with `DARKEN` (the darker of the two per channel) so the
+     * pair had no top and no bottom. Phase 30 puts ink on top by the user's decision — *"a
+     * white gel pen can write over anything"* — which `DARKEN` cannot give: a white or pale
+     * ink could never show over darker graphite. The physical model is the same one the
+     * two rasters were built for (ink is more permanent than pencil): gel ink sits on the
+     * sheet over the graphite, and graphite laid over dry ink mostly slides off, so pencil
+     * over an ink line is hidden by the ink. On white paper with black ink over grey
+     * graphite the two operators are pixel-identical, so nothing about a page with a black
+     * pen moves. A `null` paint is the over-draw; nothing is allocated for it.
      */
-    private val flattenPaint = Paint().apply {
-        xfermode = PorterDuffXfermode(PorterDuff.Mode.DARKEN)
-    }
 
     private val contentRenderers = ArrayList<ContentRenderer>()
 
@@ -735,7 +730,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      *
      * It exists for Ratta's direct panel preview (Phase 28), which must work out the grey a
      * pixel is about to show — white, then graphite, then the live flecks, then ink through
-     * `DARKEN` — outside the window's own drawing, because on that path there is no frame.
+     * ink over graphite — outside the window's own drawing, because on that path there is no frame.
      * Everything else asks [drawCommittedContent] for the page and lets Canvas do it.
      */
     protected fun rasterFor(layer: RasterLayer): Bitmap? = raster(layer)
@@ -901,6 +896,21 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected open fun bakeTilt(style: StrokeStyle, tilt: Float): Float = tilt
 
     /**
+     * What width a stroke's **dirty region** should be computed from — [RasterDirty] pads a
+     * mark's point bounds by this on every side. The default is the stroke's own width,
+     * which is about twice a round lead's half-width and so has always been generous.
+     *
+     * The seam exists because a mark's footprint is only `width` while the tool draws
+     * within its own width, and a leaned `PENCIL` does not: a `GraphiteGrain.Lead.FLANK`
+     * shading sweep reaches twenty lead-widths past the path (Phase 36). **A dirty rect
+     * that misses part of a mark is not a cosmetic error** — the mark is clipped out of the
+     * raster composite that writes it, and the before-image the host takes for undo is of
+     * the wrong pixels. Engines whose pencil can lean override it with
+     * `GraphiteGrain.reach`; nothing else needs to.
+     */
+    protected open fun rasterDirtyWidth(stroke: Stroke): Float = stroke.width
+
+    /**
      * What pressure a captured sample should bake with on a **raster page** — the whole
      * point being that the preview and the bake agree, so this is where an engine gives
      * up a tone its hardware cannot show. The default is the pressure that was reported,
@@ -934,7 +944,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         val h = if (pageHeight > 0) pageHeight else height
         return RasterDirty.along(
             points = stroke.points,
-            width = stroke.width,
+            width = rasterDirtyWidth(stroke),
             pageWidth = w,
             pageHeight = h,
             maxSpanPx = RASTER_DIRTY_SPAN_PX,
@@ -1429,8 +1439,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * Draw the raster page onto [canvas]: two blits where the stroke loop would run. The
      * page images sit at the page origin, over the paper and under the host's
      * above-strokes content, exactly where the baked strokes would have been. The ink goes
-     * on through `DARKEN` — the darker of the two per channel — so the pair flattens with
-     * no top and no bottom (see [flattenPaint]); a page with only one of them is one blit.
+     * on **over** the graphite — `SRC_OVER`, ink on top (Phase 30; see the note on
+     * [inkRaster]); a page with only one of them is one blit.
      *
      * **The seam exists because a panel may not be able to show the page as it is**
      * (Phase 28). Supernote's direct path shows the artist a *dither* of this same
@@ -1442,7 +1452,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      */
     protected open fun drawRasterLayers(canvas: Canvas, forDisplay: Boolean) {
         graphiteRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
-        inkRaster?.let { canvas.drawBitmap(it, 0f, 0f, flattenPaint) }
+        inkRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
     }
 
     /**
@@ -2790,23 +2800,58 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     // ── MotionEvent → StrokePoint ────────────────────────────────────────────
 
+    /**
+     * The pen's lean, in radians from vertical, from one sample's raw axis values —
+     * `MotionEvent.AXIS_TILT` in [rawTilt] and `AXIS_ORIENTATION` in [rawOrientation].
+     *
+     * The default is Android's own contract: `AXIS_TILT` **is** the polar lean in radians,
+     * and `AXIS_ORIENTATION` says nothing about it. Every engine but Supernote's takes
+     * that default, because on BOOX and on a generic digitizer it is what arrives.
+     *
+     * The seam exists because **a HAL is free to mean something else by an axis, and
+     * nothing in the platform will say so** (Phase 36): Supernote's reports signed tilt-X
+     * in degrees on `AXIS_TILT` and signed tilt-Y in degrees on `AXIS_ORIENTATION`, so
+     * reading the contract as written gave a raw `30` the meaning "1719°" — off the end of
+     * every curve in [GraphiteGrain] — and it stayed invisible for a year because on the
+     * Nomad the sign happens to be negative and clamped to upright. Decoding is therefore
+     * the **engine's** business, not the base's, and it happens once, here, so a historical
+     * sample cannot take a different road from a current one.
+     */
+    protected open fun sampleTilt(rawTilt: Float, rawOrientation: Float): Float = rawTilt
+
+    /**
+     * Which way the pen is leaning, in radians in screen space, from the same two raw axis
+     * values — see [StrokePoint.azimuth] for the convention.
+     *
+     * `0` by default, which means *not supplied*: a base that cannot know how a HAL encodes
+     * direction must not invent one, exactly as [sampleTilt]'s allowlist rule on BOOX
+     * (Phase 11). The Supernote engine overrides it; a renderer must look right without it.
+     */
+    protected open fun sampleAzimuth(rawTilt: Float, rawOrientation: Float): Float = 0f
+
     /** Sample at [historyIndex] (−1 = the current sample) as a [StrokePoint]. */
     private fun MotionEvent.strokePointAt(historyIndex: Int): StrokePoint =
         if (historyIndex < 0) {
+            val rawTilt = getAxisValue(MotionEvent.AXIS_TILT)
+            val rawOrientation = getAxisValue(MotionEvent.AXIS_ORIENTATION)
             StrokePoint(
                 x = x,
                 y = y,
                 pressure = pressure,
-                tilt = getAxisValue(MotionEvent.AXIS_TILT),
+                tilt = sampleTilt(rawTilt, rawOrientation),
                 timeMillis = eventTime,
+                azimuth = sampleAzimuth(rawTilt, rawOrientation),
             )
         } else {
+            val rawTilt = getHistoricalAxisValue(MotionEvent.AXIS_TILT, historyIndex)
+            val rawOrientation = getHistoricalAxisValue(MotionEvent.AXIS_ORIENTATION, historyIndex)
             StrokePoint(
                 x = getHistoricalX(historyIndex),
                 y = getHistoricalY(historyIndex),
                 pressure = getHistoricalPressure(historyIndex),
-                tilt = getHistoricalAxisValue(MotionEvent.AXIS_TILT, historyIndex),
+                tilt = sampleTilt(rawTilt, rawOrientation),
                 timeMillis = getHistoricalEventTime(historyIndex),
+                azimuth = sampleAzimuth(rawTilt, rawOrientation),
             )
         }
 
