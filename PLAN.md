@@ -2629,7 +2629,7 @@ show the real raster without the tool change."*
   shown in tone from its first frame.
 
 ### Phase 36 — The flank: the Supernote pencil leans again (post-v0.1.0)
-**Status:** 🔨 In progress (2026-09-19) · **Publishes:** 0.1.51 · branch `side-lead` ·
+**Status:** ✅ Complete + frozen (2026-09-20, the user's Nomad + Manta walks — "This feels good. Let's freeze the arc.") · **Publishes:** 0.1.51 · branch `side-lead` (merged to `main` 2026-09-20, deleted) ·
 Opened by the user's decision for NSE · Sketch's arc 47 "Side" (Notesprout
 `extensions/sketch/SIDE_PLAN.md`), off the back of the `probe-tilt` walk of the same day.
 
