@@ -132,25 +132,22 @@ internal object DitherFlatten {
      * What page pixel ([x], [y]) **shows**, as black coverage 0…255 — the one display rule
      * since Phase 31 (0.1.45), for the panel under the nib and for the window alike:
      *
-     * - **Settled ink shows its true tone.** With [toneInk] true, a pixel the ink image
-     *   covers (any alpha) and no live ink is on answers `255 − luma` — the panel can hold
-     *   sixteen greys and a gel pen's line reads better solid than as dots (the user's
-     *   ask: *"can we have it rebake with the true tone of the pen?"*). Where such a
-     *   pixel's ink is only partly opaque (an anti-aliased edge) the tone is of the ink
-     *   over whatever graphite is under it.
-     * - **Everything else dithers** — bare graphite, **live** ink under the nib, and ink
-     *   the caller has not yet *settled* ([toneInk] false) — answering `255` or `0`
-     *   through [Dither], exactly as [black] does. Live ink stays a dither on purpose: the
+     * - **Settled marks show their true tone.** With [settled] true, a pixel either page
+     *   image covers (any alpha) and no live layer is on answers `255 − luma` — the panel
+     *   can hold sixteen greys: a gel pen's line reads better solid than as dots (the
+     *   user's ask, Phase 31: *"can we have it rebake with the true tone of the pen?"*),
+     *   and a pencil's flecks, each at its own alpha in the lead's tone, read as grain in
+     *   grey rather than grain in black (Phase 34: *"perhaps it will look more natural
+     *   with real tones with the grain?"*).
+     * - **Everything else dithers** — a **live** mark under the nib, and any mark the
+     *   caller has not yet *settled* ([settled] false) — answering `255` or `0` through
+     *   [Dither], exactly as [black] does. A live mark stays a dither on purpose: the
      *   panel's waveform reaches a grey only through black, so a grey painted live trails
      *   the nib while black dots land at once. A just-baked mark stays dithered too (the
-     *   user's second ask: not at pen-up — "anything other than drawing will rebake with
-     *   the correct tone"); the caller settles it, in tone, at the next thing that is not
-     *   a mark: a tool or pen change, a page swap, an undo, a rub.
-     *
-     * The graphite is never shown in tone: a pencil's grain is dots already, and a
-     * fleck's alpha through the panel's tone table would be a smear where the dither is
-     * grain. The two halves of one page therefore differ on purpose — dots under the
-     * pencil, tone under the pen — which is what the user saw on Atelier and asked for.
+     *   user's ask, Phase 32: not at pen-up — "anything other than drawing will rebake
+     *   with the correct tone"); the caller settles it, in tone, at the next thing that is
+     *   not a mark: a tool or pen change, a page swap, an undo, a rub, or its own chrome
+     *   about to open (`settleDisplay`).
      */
     fun coverage(
         graphite: Int,
@@ -161,12 +158,12 @@ internal object DitherFlatten {
         inkColor: Int,
         x: Int,
         y: Int,
-        toneInk: Boolean = true,
+        settled: Boolean = true,
     ): Int {
         val g = srcOver(graphite, graphiteColor, liveGraphite)
         val k = srcOver(ink, inkColor, liveInk)
         val grey = luma(g, k)
-        if (toneInk && liveInk == 0 && (k ushr 24) != 0) return 255 - grey
+        if (settled && liveInk == 0 && liveGraphite == 0 && ((k or g) ushr 24) != 0) return 255 - grey
         return if (Dither.black(grey, x, y)) 255 else 0
     }
 
@@ -241,10 +238,11 @@ internal object DitherFlatten {
      * Flatten and dither a whole band of the page: `[x0, x0 + w) × [y0, y0 + h)` in page
      * coordinates, into [out] as [inked] where the pixel dithers black, [blank] where it
      * dithers paper, and — since Phase 31 — the pixel's **black coverage** (`255 − luma`)
-     * where the ink image covers it and [toneInk] is true, so a settled gel pen's line
-     * shows in its true tone ([coverage]'s rule; [inked] is expected to be `0xFF` and
-     * [blank] `0` so the three agree as one scale). With [toneInk] false every pixel
-     * dithers — the band holds ink not yet settled.
+     * where either image covers it and [settled] is true, so a settled mark shows in its
+     * true tone — a pen's line solid, a pencil's flecks as grain in grey ([coverage]'s
+     * rule; [inked] is expected to be `0xFF` and [blank] `0` so the three agree as one
+     * scale). With [settled] false every pixel dithers — the band holds a mark not yet
+     * settled.
      *
      * [graphite] and [ink] are the two page images' pixels over exactly that band, row
      * major, [w] to a row — what `Bitmap.getPixels` leaves. Either may be absent
@@ -274,7 +272,7 @@ internal object DitherFlatten {
         outStride: Int,
         inked: Byte,
         blank: Byte,
-        toneInk: Boolean = true,
+        settled: Boolean = true,
     ) {
         if (w <= 0 || h <= 0) return
         val n = w * h
@@ -337,7 +335,7 @@ internal object DitherFlatten {
                     grey = (LUMA_R * r + LUMA_G * gg + LUMA_B * b) shr 8
                 }
                 out[dst + x] =
-                    if (toneInk && kp ushr 24 != 0) (255 - grey).toByte()
+                    if (settled) (255 - grey).toByte()
                     else if (limit[grey] < cut[phase]) inked else blank
                 x++
                 phase = (phase + 1) and (BlueNoise64.SIZE - 1)

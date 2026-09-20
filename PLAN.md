@@ -2593,6 +2593,20 @@ of a bar floating over the page.
   carries the frame to the panel a beat later. Raster-change settles (a rub, an undo) and the host
   door still post to the panel directly.
 
+### Phase 34 — The pencil settles in tone too (post-v0.1.0)
+**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.48 · branch `ink-true`.
+The user's word after the Phase 33 walk: *"That works. Let's try to do something similar for
+pencil. The grain looks good. But if it is just black being dithered, perhaps it will look more
+natural with real tones with the grain?"*
+- `DitherFlatten.coverage` / `band`: the `toneInk` flag becomes **`settled`**, and a settled pixel
+  **either** image covers, with no live layer on it, answers `255 − luma` — a fleck at its own
+  alpha in the lead's tone. The graphite bake's runs go into the same `pendingRuns` the ink's do
+  (`markJustBaked`), and settle at the same events. A loaded page is shown settled, so the dots
+  now appear only under the nib and between pen-up and the next non-drawing event.
+- Phase 28's decision 7 ("the display is dithered") is amended by this: the dither is the
+  **live** picture, the tone the settled one. Whether a pale lead's low-alpha grain survives the
+  compositor's 16-level table (no level 9) is the walk's question.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

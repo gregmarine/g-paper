@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.47**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.48**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -239,15 +239,14 @@ what makes the mirror exact rather than close, and takes the second that a dense
 commit used to cost. A style this path cannot preview honestly — `MARKER`, `FOUNTAIN`,
 `DASH`, `CROSS`, none of them offered by SN — still commits exactly as it always did and
 simply appears at pen-up.
-**While that panel is ours the raster page is *shown* dithered** — a blue-noise dither
-of the same flatten, so every pixel on the glass is black or white — **except baked ink,
-which is shown in its true tone since 0.1.45**: a gel pen's line dithers while it is under
-the nib (so it lands at once) and stays dithered at pen-up; it settles solid — the grey the
-page holds — at the next thing that is not a mark (0.1.46): a tool or pen-property change, a
-page load, an undo, a rub — or the host's own `settleDisplay()` (0.1.47), which a host calls
-**before** opening chrome over the page, since the engine cannot see chrome and a settle
-painted onto the panel after a bar opened would paint over it. The pencil's graphite is dots
-throughout. This panel's greys arrive
+**While that panel is ours a mark is *shown* dithered until it settles** — a blue-noise
+dither of the same flatten while it is under the nib (so it lands at once) and still at
+pen-up; it settles into its true tone — a gel pen's line solid (0.1.45), a pencil's flecks
+each at their own alpha in the lead's tone, grain in grey (0.1.48) — at the next thing that
+is not a mark (0.1.46): a tool or pen-property change, a page load, an undo, a rub — or the
+host's own `settleDisplay()` (0.1.47), which a host calls **before** opening chrome over the
+page, since the engine cannot see chrome and a settle painted onto the panel after a bar
+opened would paint over it. A loaded page is shown settled. This panel's greys arrive
 a beat late and its black arrives at once, so a dither is the one picture it can show
 truthfully under a moving nib; it is how Supernote's own Atelier draws, and it is why a pale
 lead there keeps its whole shape. **It is a display decision and goes no further**: the

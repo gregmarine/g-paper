@@ -1108,13 +1108,13 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * both land on the panel's first frame, so the mark is under the nib rather than a beat
      * behind it, and the whole-page dither the window presents at pen-up
      * ([regenDither]) is the same arithmetic at the same page coordinates, so it agrees
-     * pixel for pixel. **Settled ink is the one thing painted in tone** (Phase 31,
-     * [DitherFlatten.coverage]): a pixel the ink image covers, with no live ink on it and
-     * outside the runs still waiting ([pendingInk], Phase 32), goes to the panel at its
+     * pixel for pixel. **A settled mark is painted in tone** (Phases 31 and 34,
+     * [DitherFlatten.coverage]): a pixel either image covers, with no live layer on it and
+     * outside the runs still waiting ([pendingRuns], Phase 32), goes to the panel at its
      * grey's own level ([LEVEL_OF_COVERAGE], [RattaPanelTone]'s table back on this path for
      * exactly that); the window's own frame agrees.
      */
-    private fun toneAndPost(rect: Rect, settled: Boolean = !overlapsPendingInk(rect)) {
+    private fun toneAndPost(rect: Rect, settled: Boolean = !overlapsPending(rect)) {
         val w = rect.width()
         val h = rect.height()
         val n = w * h
@@ -1262,8 +1262,8 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     // The live half above paints the panel under the nib. This half is what the window
     // presents afterwards, and the two must be the same picture — so the page is drawn to
     // the glass as exactly the flatten [toneAndPost] sends, through exactly the same
-    // [DitherFlatten] at exactly the same page coordinates: a blue-noise dither of the
-    // graphite, and — since Phase 31 — the baked ink in its **true tone**
+    // [DitherFlatten] at exactly the same page coordinates: a blue-noise dither of any
+    // mark still waiting, and — Phases 31 and 34 — every settled mark in its **true tone**
     // ([DitherFlatten.coverage]). Then the compositor's rewrite of frame 0 is a no-op on
     // every pixel and there is nothing to see at pen-up.
     //
@@ -1273,8 +1273,8 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     // is for.
 
     /**
-     * The page as black coverage, one byte a pixel — dots for graphite, tone for baked ink
-     * (Phase 31) — an `ALPHA_8` bitmap because the only
+     * The page as black coverage, one byte a pixel — dots for a mark still waiting, tone
+     * for a settled one (Phases 31–34) — an `ALPHA_8` bitmap because the only
      * thing being said about a pixel is whether it is inked, and a black [android.graphics.Paint]
      * at draw time supplies the colour. A quarter of the memory of the page it mirrors.
      *
@@ -1328,8 +1328,8 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * Draw the raster page for [forDisplay].
      *
      * On the glass, with the panel ours, that is the display image and **not** the page
-     * images: graphite as black-or-white dots and baked ink in its tone, which is what the
-     * panel was painted with under the nib and at pen-up. Anywhere else — a cover, an export, the host's own data — it is the
+     * images: a waiting mark as black-or-white dots and a settled one in its tone, which
+     * is what the panel was painted with under the nib and after the settle. Anywhere else — a cover, an export, the host's own data — it is the
      * base's two blits and the artist's true greys. The dither is drawn with a black paint
      * because an `ALPHA_8` bitmap takes its colour from the paint.
      */
@@ -1361,10 +1361,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (!ditherDisplayed) return
         // A change that is not the pen's own bake is "anything other than drawing": the
         // ink waiting in dots settles into its tone first (Phase 32).
-        val baked = inkJustBaked
-        inkJustBaked = false
+        val baked = markJustBaked
+        markJustBaked = false
         if (!baked) {
-            if (rect == null) pendingInk.clear() else settleInkTone()
+            if (rect == null) pendingRuns.clear() else settleInkTone()
         }
         if (rect == null) {
             if (rasterFor(RasterLayer.GRAPHITE) == null && rasterFor(RasterLayer.INK) == null) {
@@ -1399,48 +1399,49 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      */
     override fun onRasterPixelsChanged(rects: List<Rect>) {
         if (!ditherDisplayed || rects.isEmpty()) return
-        val baked = inkJustBaked
-        inkJustBaked = false
+        val baked = markJustBaked
+        markJustBaked = false
         if (!baked) settleInkTone()
         if (ditherCoalescer.onRect() == DitherCoalescer.Action.REBUILD_RECT) {
             regenDitherRuns(rects)
         }
     }
 
-    // ── Ink waiting to settle (Phase 32) ──────────────────────────────────────
+    // ── Marks waiting to settle (Phase 32; the pencil too since Phase 34) ───────
     //
-    // A pen mark is baked at pen-up but stays on the glass as the dither it was drawn as;
-    // it goes to its true tone at the next thing that is not a mark. The user's word:
-    // *"Instead of on pen up, perhaps when the tool is changed, or when flipping pages, or
-    // anything other than drawing … anything other than drawing will rebake with the
-    // correct tone."* The runs waiting are kept here; the display rule dithers ink inside
-    // them and tones ink outside them ([toneAndPost]'s and [flattenDither]'s `toneInk`).
+    // A mark is baked at pen-up but stays on the glass as the dither it was drawn as; it
+    // goes to its true tone at the next thing that is not a mark. The user's word: *"Instead
+    // of on pen up, perhaps when the tool is changed, or when flipping pages, or anything
+    // other than drawing … anything other than drawing will rebake with the correct tone."*
+    // — and for the pencil, *"perhaps it will look more natural with real tones with the
+    // grain?"* The runs waiting are kept here; the display rule dithers inside them and
+    // tones outside them ([toneAndPost]'s and [flattenDither]'s `settled`).
 
     /** The host's door (0.1.47): settle before chrome opens over the page. */
     override fun settleDisplay() = settleInkTone(panel = true)
 
-    /** The runs of ink baked since the last settle — in page coordinates. */
-    private val pendingInk = ArrayList<Rect>()
+    /** The runs baked since the last settle, either layer — in page coordinates. */
+    private val pendingRuns = ArrayList<Rect>()
 
-    /** Set by the ink bake for the announce that follows it, so that one change is not
-     *  taken for "something other than drawing". */
-    private var inkJustBaked = false
+    /** Set by the bake for the announce that follows it, so that one change is not taken
+     *  for "something other than drawing". */
+    private var markJustBaked = false
 
-    private fun overlapsPendingInk(rect: Rect): Boolean {
-        for (r in pendingInk) if (Rect.intersects(r, rect)) return true
+    private fun overlapsPending(rect: Rect): Boolean {
+        for (r in pendingRuns) if (Rect.intersects(r, rect)) return true
         return false
     }
 
     /**
-     * Show every waiting ink run in its true tone — in the window's display image and,
-     * with the panel ours and no contact down, on the panel itself — and forget them.
+     * Show every waiting run in its true tone — in the window's display image and, with
+     * the panel ours and no contact down, on the panel itself — and forget them.
      * Idempotent and cheap when nothing waits, which is the common case, so every caller
      * asks without checking.
      */
     private fun settleInkTone(panel: Boolean = true) {
-        if (pendingInk.isEmpty()) return
-        val runs = ArrayList(pendingInk)
-        pendingInk.clear()
+        if (pendingRuns.isEmpty()) return
+        val runs = ArrayList(pendingRuns)
+        pendingRuns.clear()
         if (!ditherDisplayed) return
         val t0 = System.nanoTime()
         regenDitherRuns(runs)
@@ -1458,7 +1459,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 if (toneRect.intersect(0, 0, liveAlphaW, liveAlphaH)) toneAndPost(toneRect, settled = true)
             }
         }
-        Log.i(TAG, "ink settled: ${runs.size} run(s) in ${(System.nanoTime() - t0) / 1_000_000} ms")
+        Log.i(TAG, "settled: ${runs.size} run(s) in ${(System.nanoTime() - t0) / 1_000_000} ms")
     }
 
     /** The posted whole-page rebuild: build it once, show it on the panel, then present
@@ -1566,7 +1567,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         val wholeCopy = DitherCost.preferWholeCopy(
             area.width(), area.height(), bitmap.width, bitmap.height, DITHER_WHOLE_COPY_FRACTION,
         )
-        flattenDither(area, out, stride, toneInk = !overlapsPendingInk(area))
+        flattenDither(area, out, stride, settled = !overlapsPending(area))
         if (wholeCopy) landWholeDither(bitmap) else landDitherRect(bitmap, area, out, stride)
         val ms = (System.nanoTime() - t0) / 1_000_000
         if (whole) {
@@ -1607,7 +1608,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             union = union?.apply { union(area) } ?: Rect(area)
         }
         val span = union ?: return
-        for (area in areas) flattenDither(area, out, stride, toneInk = !overlapsPendingInk(area))
+        for (area in areas) flattenDither(area, out, stride, settled = !overlapsPending(area))
         val wholeCopy = DitherCost.preferWholeCopyForRuns(
             areas.size, span.width(), span.height(), bitmap.width, bitmap.height,
             DITHER_WHOLE_COPY_FRACTION, DITHER_MAX_SETPIXELS_RECTS,
@@ -1633,14 +1634,14 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * own four. Nothing reaches the bitmap here; the array is the truth and the landing is
      * a separate decision.
      */
-    private fun flattenDither(area: Rect, out: ByteArray, stride: Int, toneInk: Boolean = true) {
+    private fun flattenDither(area: Rect, out: ByteArray, stride: Int, settled: Boolean = true) {
         val w = area.width()
         val bandH = (DITHER_BAND_PX / w).coerceIn(1, area.height())
         ensureBandScratch(w * bandH)
         var top = area.top
         while (top < area.bottom) {
             val bottom = minOf(top + bandH, area.bottom)
-            ditherBand(area, top, bottom, out, top * stride + area.left, stride, toneInk)
+            ditherBand(area, top, bottom, out, top * stride + area.left, stride, settled)
             top = bottom
         }
     }
@@ -1690,7 +1691,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         out: ByteArray,
         offset: Int,
         stride: Int,
-        toneInk: Boolean,
+        settled: Boolean,
     ) {
         bandRect.set(area.left, top, area.right, bottom)
         val hasGraphite = readRasterBand(RasterLayer.GRAPHITE, bandRect, bandGraphite)
@@ -1698,7 +1699,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         DitherFlatten.band(
             bandGraphite, hasGraphite, bandInk, hasInk,
             area.left, top, area.width(), bottom - top,
-            out, offset, stride, DITHER_ON, DITHER_OFF, toneInk,
+            out, offset, stride, DITHER_ON, DITHER_OFF, settled,
         )
     }
 
@@ -1885,16 +1886,15 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         }
         val target = rasterForWrite(layer) ?: return false
         for (r in dirty) compositeLiveInto(target, mask, r, color)
-        if (layer == RasterLayer.INK) {
-            // The mark stays on the glass as the dither it was drawn as (Phase 32): its
-            // runs wait here, and the next thing that is not a mark settles them in tone.
-            // The announce that follows this bake must not count as that thing.
-            for (r in dirty) {
-                val run = Rect(r)
-                if (run.intersect(0, 0, liveAlphaW, liveAlphaH)) pendingInk.add(run)
-            }
-            inkJustBaked = true
+        // The mark stays on the glass as the dither it was drawn as (Phase 32; the pencil
+        // too since Phase 34): its runs wait here, and the next thing that is not a mark
+        // settles them in tone. The announce that follows this bake must not count as
+        // that thing.
+        for (r in dirty) {
+            val run = Rect(r)
+            if (run.intersect(0, 0, liveAlphaW, liveAlphaH)) pendingRuns.add(run)
         }
+        markJustBaked = true
         return true
     }
 

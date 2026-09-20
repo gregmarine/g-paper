@@ -287,9 +287,10 @@ class DitherFlattenTest {
     }
 
     @Test
-    fun `baked ink shows its true tone, live ink and graphite dither`() {
-        // Phase 31: a pixel the ink image covers answers 255 − luma; everything else is
-        // one of the two dither ends, exactly as `black` says.
+    fun `settled marks show their true tone, live marks and unsettled ones dither`() {
+        // Phases 31 and 34: a settled pixel either image covers answers 255 − luma; a live
+        // mark, and anything not yet settled, is one of the two dither ends, exactly as
+        // `black` says.
         val greyInk = 0xFF808080.toInt()
         val greyLead = 0xFF808080.toInt()
         for (y in intArrayOf(0, 5, 63)) for (x in intArrayOf(0, 7, 511)) {
@@ -305,29 +306,34 @@ class DitherFlattenTest {
             val live = DitherFlatten.coverage(transparent, 0, 0, transparent, 255, greyInk, x, y)
             assertTrue(live == 0 || live == 255)
             assertEquals(if (DitherFlatten.black(transparent, 0, 0, transparent, 255, greyInk, x, y)) 255 else 0, live)
-            // Bare graphite dithers.
-            val lead = DitherFlatten.coverage(greyLead, 0, 0, transparent, 0, 0, x, y)
-            assertEquals(if (Dither.black(0x80, x, y)) 255 else 0, lead)
-            // A live fleck over baked ink: the pixel still has ink and no live ink → tone.
-            assertEquals(255 - 0x80, DitherFlatten.coverage(transparent, 255, black, greyInk, 0, 0, x, y))
-            // Ink not yet settled (Phase 32) dithers exactly as `black` says.
-            val waiting = DitherFlatten.coverage(transparent, 0, 0, greyInk, 0, 0, x, y, toneInk = false)
+            // Settled graphite shows its tone too (Phase 34): a fleck at half alpha in a
+            // black lead is a mid grey, grain in grey rather than grain in dots.
+            assertEquals(255 - 0x80, DitherFlatten.coverage(greyLead, 0, 0, transparent, 0, 0, x, y))
+            val fleck = DitherFlatten.coverage(0x80000000.toInt(), 0, 0, transparent, 0, 0, x, y)
+            assertTrue("half-alpha fleck $fleck", fleck in 126..130)
+            // A live fleck dithers, whatever is baked under it.
+            val liveFleck = DitherFlatten.coverage(transparent, 255, black, greyInk, 0, 0, x, y)
+            assertTrue(liveFleck == 0 || liveFleck == 255)
+            // A mark not yet settled (Phase 32) dithers exactly as `black` says.
+            val waiting = DitherFlatten.coverage(transparent, 0, 0, greyInk, 0, 0, x, y, settled = false)
             assertEquals(if (Dither.black(0x80, x, y)) 255 else 0, waiting)
+            val waitingLead = DitherFlatten.coverage(greyLead, 0, 0, transparent, 0, 0, x, y, settled = false)
+            assertEquals(if (Dither.black(0x80, x, y)) 255 else 0, waitingLead)
         }
     }
 
     @Test
-    fun `the band kernel dithers unsettled ink`() {
+    fun `the band kernel dithers unsettled marks`() {
         val w = 64
         val h = 4
         val ink = IntArray(w * h) { 0xFF808080.toInt() }
         val blank = IntArray(w * h)
         val out = ByteArray(w * h)
-        DitherFlatten.band(blank, false, ink, true, 0, 0, w, h, out, 0, w, ON, OFF, toneInk = false)
+        DitherFlatten.band(blank, false, ink, true, 0, 0, w, h, out, 0, w, ON, OFF, settled = false)
         for (i in 0 until w * h) {
             assertEquals(if (Dither.black(0x80, i % w, i / w)) ON else OFF, out[i])
         }
-        DitherFlatten.band(blank, false, ink, true, 0, 0, w, h, out, 0, w, ON, OFF, toneInk = true)
+        DitherFlatten.band(blank, false, ink, true, 0, 0, w, h, out, 0, w, ON, OFF, settled = true)
         assertTrue(out.all { it == (255 - 0x80).toByte() })
     }
 
