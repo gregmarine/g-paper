@@ -2498,7 +2498,7 @@ transitions), not the waveform choice. Accepted as is; one future thread if ever
 dither (fewer, larger dots at the same tone). `direct-raster` merged to `main`; 0.1.43 published.
 
 ### Phase 30 — Ink over graphite (post-v0.1.0)
-**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.44 · branch `ink-over`.
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.44 · branch `ink-over`.
 Opened on the user's word during Notesprout's arc 46 "Palette" walk: *"The white pen should be able
 to write over the pencil. It correctly writes over the darker pen. In the real world, a white gel
 pen can write over anything."* — and the decision, asked plainly: **ink sits on top of graphite
@@ -2527,7 +2527,7 @@ everywhere; pencil over an ink line is hidden by the ink.**
   (`SketchRaster`, `SketchCover`).
 
 ### Phase 31 — Baked ink shows its true tone (post-v0.1.0)
-**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.45 · branch `ink-true`.
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.45 · branch `ink-true`.
 Opened on the user's word during the arc 46 walk: *"I understand that we are dithering the pen to
 get the tone to work … But I see that the panel is capable of showing the true tone without
 dithering. So, if the dithering is just so the stroke keeps with the nib, can we have it rebake
@@ -2559,7 +2559,7 @@ to solid grey means its white dots pass through black on the way; whether a part
 edge over dithered graphite reads clean; and whether a grey pen line's pen-up feels late.
 
 ### Phase 32 — Ink settles, not at pen-up (post-v0.1.0)
-**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.46 · branch `ink-true` (on Phase 31).
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.46 · branch `ink-true` (on Phase 31).
 The user's word after the Phase 31 walk: *"That looks okayish … Instead of on pen up, perhaps when
 the tool is changed, or when flipping pages, or anything other than drawing. Let's try that …
 anything other than drawing will rebake with the correct tone."*
@@ -2578,7 +2578,7 @@ anything other than drawing will rebake with the correct tone."*
   settle; the host would need a door for that, which nobody has asked for.
 
 ### Phase 33 — The host's settle door (post-v0.1.0)
-**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.47 · branch `ink-true`.
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.47 · branch `ink-true`.
 The user's walk of Phase 32: *"when I tap the pen tool to change shades, it doesn't immediately
 do the rebake. But once I select another shade, it does … if part of the pen stroke is under the
 palette overlay, it paints that area over the overlay with the overlay still showing … If the
@@ -2594,7 +2594,7 @@ of a bar floating over the page.
   door still post to the panel directly.
 
 ### Phase 34 — The pencil settles in tone too (post-v0.1.0)
-**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.48 · branch `ink-true`.
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.48 · branch `ink-true`.
 The user's word after the Phase 33 walk: *"That works. Let's try to do something similar for
 pencil. The grain looks good. But if it is just black being dithered, perhaps it will look more
 natural with real tones with the grain?"*
@@ -2614,7 +2614,7 @@ a rub is always shown in tone. The user's question: *"Does the eraser work with 
 want to be sure it isn't dithering if it doesn't need to."*
 
 ### Phase 35 — The pause settle (post-v0.1.0)
-**Status:** ✅ Built (2026-09-19) · **Publishes:** 0.1.50 · branch `ink-true`.
+**Status:** ✅ Complete + frozen (2026-09-19, the user's Nomad walks — "This looks amazing … Let's freeze this") · **Publishes:** 0.1.50 · branch `ink-true`.
 The user's word: *"I'd like to consider a timed rebake … a pause in drawing for like 2–3 seconds
 … while active drawing, nothing gets rebaked, but a pause can give the screen an opportunity to
 show the real raster without the tool change."*
