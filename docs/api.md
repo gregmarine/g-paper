@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.54**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.55**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -252,11 +252,13 @@ simply appears at pen-up.
 **While that panel is ours a mark is *shown* dithered until it settles** — a blue-noise
 dither of the same flatten while it is under the nib (so it lands at once) and still at
 pen-up; it settles into its true tone — a gel pen's line solid (0.1.45), a pencil's flecks
-each at their own alpha in the lead's tone, grain in grey (0.1.48) — **only when the host asks**
-through `settleDisplay()` (0.1.47), or when the page is reloaded (0.1.52). Nothing else settles
-it: not a tool or pen-property change, not a rub or an undo (0.1.46–0.1.49, withdrawn), and never
-a timer (0.1.50's 2.5 s pause, withdrawn) — every one of those landed a settle the hand had not
-asked for. Notesprout SN's sketch face binds the door to a one-finger swipe down. A loaded page is shown settled. This panel's greys arrive
+each at their own alpha in the lead's tone, grain in grey (0.1.48) — **never, since 0.1.55**
+(Phase 41, `RattaPaperView.DISPLAY_SETTLES` = false): the panel shows the dither always, pencil
+and pen alike, a loaded page included, and `settleDisplay()` is a no-op there. Between 0.1.47 and
+0.1.54 it settled when the host asked through `settleDisplay()` or at a page load, and before
+that at every non-drawing event and on a timer, each withdrawn in turn; the artist's last word,
+with both pictures side by side, was that the dither is the one this panel shows well and the
+true tone belongs to the export. This panel's greys arrive
 a beat late and its black arrives at once, so a dither is the one picture it can show
 truthfully under a moving nib; it is how Supernote's own Atelier draws, and it is why a pale
 lead there keeps its whole shape. **It is a display decision and goes no further**: the

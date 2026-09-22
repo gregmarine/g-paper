@@ -3102,6 +3102,23 @@ rub feel."*
   pales by the fraction asked; a bare page is a no-op; strength scales and feather softens; a
   transparent neighbour lends no colour; the clipped box mean at an edge.
 
+### Phase 41 — The Supernote panel is always dithered (post-v0.1.0)
+**Status:** 🔧 Built 2026-09-22 · **Publishes:** 0.1.55 · branch `always-dither` (off `smudge`).
+The user, with the dithered and the settled page side by side on the Mac and on the glass: *"the
+dither looks great on the device, and the true tone looks great on the Mac. But the dither looks
+awful on Mac and the true tone doesn't quite look right on the device … turn off the settled
+triggers and just leave the device displaying the dithered version for all of it … pencil and
+pen. On device always dithered. On export, always true tone."*
+- `RattaPaperView.DISPLAY_SETTLES` = **false**: every display flatten (`toneAndPost`, the
+  rebuild's and the runs' `flattenDither`) passes `settled = false`, a loaded page is shown
+  dithered, a bake's runs are no longer kept in `pendingRuns`, `settleDisplay()` is a no-op.
+  Phases 31–34's tone display stays in the code behind the one flag.
+- Nothing else moves: the page images, the covers and `renderToBitmap` keep the true greys
+  (Phase 28's decision 7), so an export is the settled picture and the glass is the dither.
+- Existing sketches: shown dithered from their next load; their stored pixels are untouched.
+- Notesprout SN's sketch face drops its swipe-down `settleDisplay()` binding (the door is a no-op
+  on this engine; the gesture goes back to unassigned there).
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
