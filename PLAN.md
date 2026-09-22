@@ -2970,6 +2970,78 @@ with.
 
 ---
 
+### Phase 37 — The settle is asked for, not timed (post-v0.1.0)
+**Status:** 🔧 Built 2026-09-21, awaiting the user's Nomad walk · **Publishes:** 0.1.52 (republished after the first walk) · branch `settle-gesture`.
+Opened by the user's word on NSE · Sketch: *"we set it to change from dithering to true tone after
+2.5 secs of idle drawing. But that has caused some undesired side effects. What might be better is a
+gesture to explicitly achieve the true tone bake."* — and, after the first walk: *"I see that it
+still does it on tool change too. Let's make this only happen with the swipe gesture, page flip, or
+closing the sketch. No longer on tool change."*
+- **Phase 35 is withdrawn.** `SETTLE_IDLE_MS` / `SETTLE_RETRY_MS`, `settleOnPause`,
+  `armPauseSettle` / `disarmPauseSettle` and their call sites go; nothing settles on a timer.
+- **Phase 32's events are withdrawn too** (first-walk amendment): the `tool` / `penColor` /
+  `penWidth` / `penStyle` setters, `onRasterPixelsChanged` (a rub, an undo) and
+  `onRasterErasedBatch` (0.1.49) no longer settle. `markJustBaked` goes with them. A rub through a
+  waiting run posts as the dither around it and goes to tone with the rest at the host's ask.
+- **What settles now:** the host's `settleDisplay()` (0.1.47) and a page load (`onRasterPixelsChanged(null)`
+  clears the waiting runs and rebuilds the page settled). No API change.
+- **The host's gesture.** Notesprout SN's sketch face binds `PageGestures.onSwipeDown` — the
+  one-finger swipe down, unassigned on that surface — to `paper.settleDisplay()`; its chrome-open
+  calls to the door (0.1.47's reason was the setter settle painting over a panel, which no longer
+  exists) are removed. Closing the sketch needs nothing: the notebook shows the flattened rasters.
+- **Amends** Phases 32, 33 (the door's purpose), 34 (a rub no longer settles) and 35; Phases 31 and
+  34's display rule (`settled` = outside the waiting runs) stands.
+- **Second walk — one post** (*"instead of just a rebake and a simple refresh, it seems to do a
+  multi-pass repaint section by section"*): the settle posted each waiting run to the panel by
+  itself — a panel write and a refresh per run, hundreds on a drawn page. Now the runs' union goes
+  in **one** write out of the just-rebuilt display bytes (`presentRectViaPanel`, the page present's
+  body for any rect). 0.1.52 republished again.
+
+### Phase 38 — The flank's grain is the point's, in grey — WITHDRAWN (post-v0.1.0)
+**Status:** ⏸ Built, walked twice and **reverted 2026-09-21** (commits 0c2d1fe · 342bdce · 744ef2f, reverted in 59e8f4d · 271f6fe · 5ae1fd6 — the code is in history) · **Publishes:** none kept; 0.1.52 stands · branch `settle-gesture`.
+The user's word: *"it still feels like it is clumping. It should be the same sort of grain as a
+normal pencil stroke, only wider. Right now, it looks like charcoal instead of pencil."* Asked
+"paler flecks at the point's density, or black flecks and a denser, darker flank?" → paler
+flecks. Then, after two walks: *"Let's drop this feature and make a note to come back to it
+later. It isn't working well and it's holding me back from moving forward with other stuff."*
+
+**What was built** (for whoever picks it up): `Grain.pale`, a byte per fleck, `null` on every
+full-ink grain (round lead bit-identical); the flank filled its tooth sites at the point's own
+odds for the pressure (`sites = cover + (cover/tone − cover)·spread`, `pale = cover/sites`, ink
+conserved), the barrel-end fall kept in the sites so the far edge feathered; `FLANK_LIGHTEN`
+0.84 → 0.70 as an alpha; `MAX_FLECKS` 1M; `StrokeRenderer.drawPencilFlecks` as one counting sort
+over (darkness, paleness) with one `drawPoints` per pair present; `FLANK_STATION_STRIDE` 2;
+live batches drawn in path-ordered chunks with tight boxes (`LIVE_CHUNK_FLECKS` 1 500). Rendered
+against the Manta probe CSV the grain was what was asked for: an even fine speckle, no clumps.
+
+**Why it was withdrawn: the live path could not afford it.** The device log (`live graphite:`
+lines) showed the *sparse* flank already spent ~85 % of a core on the main thread — ~3 µs a
+tooth **site** on the RK3566, 125 sites per px of travel whether one in five or one in two
+catch — and six-fold flecks tipped it: events coalesced (24 for a 6.6 s stroke instead of
+~2 500), each batch's bounding box was mostly empty paper flattened and dithered whole, 237 ms
+an event on the Manta and a 15 s ANR that lost the stroke; 787 ms on the Nomad. The stride and
+the chunking halved it on the JVM and were never confirmed on the glass.
+
+**To come back to it:** the grain is right; the cost is the problem, and it is the *site*
+cost, not the fleck cost — so the levers are (1) the per-site price (two octaves of value
+noise per site; a tooth field sampled once per cell and reused, or a precomputed tile), (2) the
+sweep on a worker thread with the main thread only compositing and posting, (3) fewer sites
+per px on the flank than the point's lattice, with the grain's look re-checked on the probe
+renders. The Phase 37 swipe-down settle is unaffected and stays.
+
+### Phase 39 — The Supernote pencil is upright again: the flank off (post-v0.1.0)
+**Status:** 🔧 Built 2026-09-21 · **Publishes:** 0.1.53 · branch `settle-gesture`.
+The user, after Phase 38 was withdrawn: *"What I meant was that I want to remove the side pencil
+shading completely. Just normal pencil regardless of tilt."*
+- `RattaPaperView.bakeTilt` returns `0` for `PENCIL` always (not only under the needle) and
+  `pencilLead` is `Lead.ROUND`: the digitizer's lean is discarded for the pencil, so a leaned pen
+  lays the upright mark — no flank, and no round-lead tilt bloom either. `rasterDirtyWidth`
+  follows (reach = the lead's own).
+- Nothing removed from `GraphiteGrain`: `Lead.FLANK`, `StrokePoint.azimuth`, the capture seams
+  and the harness stay as an opt-in no engine uses, so arc 47 can be turned back on with two
+  lines if the day comes (and Phase 38's grain, from history, with it).
+- Phase 28 decision 5 stands again, this time by decision rather than by a units bug.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

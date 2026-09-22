@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.50**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.53**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -251,11 +251,11 @@ simply appears at pen-up.
 **While that panel is ours a mark is *shown* dithered until it settles** — a blue-noise
 dither of the same flatten while it is under the nib (so it lands at once) and still at
 pen-up; it settles into its true tone — a gel pen's line solid (0.1.45), a pencil's flecks
-each at their own alpha in the lead's tone, grain in grey (0.1.48) — at the next thing that
-is not a mark (0.1.46): a tool or pen-property change, a page load, an undo, a rub, **a pause
-of 2.5 s with no new contact** (0.1.50) — or the host's own `settleDisplay()` (0.1.47), which a host calls **before** opening chrome over the
-page, since the engine cannot see chrome and a settle painted onto the panel after a bar
-opened would paint over it. A loaded page is shown settled. This panel's greys arrive
+each at their own alpha in the lead's tone, grain in grey (0.1.48) — **only when the host asks**
+through `settleDisplay()` (0.1.47), or when the page is reloaded (0.1.52). Nothing else settles
+it: not a tool or pen-property change, not a rub or an undo (0.1.46–0.1.49, withdrawn), and never
+a timer (0.1.50's 2.5 s pause, withdrawn) — every one of those landed a settle the hand had not
+asked for. Notesprout SN's sketch face binds the door to a one-finger swipe down. A loaded page is shown settled. This panel's greys arrive
 a beat late and its black arrives at once, so a dither is the one picture it can show
 truthfully under a moving nib; it is how Supernote's own Atelier draws, and it is why a pale
 lead there keeps its whole shape. **It is a display decision and goes no further**: the
@@ -351,7 +351,7 @@ verified on five BOOX devices; the Ratta 0…31 pen-code sweep on Nomad + Manta)
 | `PEN` | uniform width | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
 | `FOUNTAIN` | pressure/velocity width | `STROKE_STYLE_FOUNTAIN` (1) | `INK` (16) |
 | `MARKER` | uniform, semi-transparent | `STROKE_STYLE_MARKER` (2) | `NEEDLE` (10) |
-| `PENCIL` | graphite grain on tooth; pressure → darkness (a lean widens the mark where an engine reports one — Supernote's flank, 0.1.51; BOOX reports none) | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
+| `PENCIL` | graphite grain on tooth; pressure → darkness; **upright on every engine** (Supernote's lean is discarded for the pencil since 0.1.53 — the flank of 0.1.51 is an opt-in no engine uses; BOOX reports no tilt) | `STROKE_STYLE_PENCIL` (0) | `NEEDLE` (10) |
 | `BRUSH` | broad, pressure-modulated | `STROKE_STYLE_NEO_BRUSH` (3) | `INK` (16) |
 | `CALLIGRAPHY` | chisel nib, direction-dependent | `STROKE_STYLE_SQUARE_PEN` (7) | code 15 (14 fallback) |
 | `DASH` | uniform, dashed | `STROKE_STYLE_DASH` (5) | code 4 (dash stream) |
@@ -408,7 +408,11 @@ apparent width comes out roughly `width + 1 px`, the bleed of one fleck — exce
 never wider than the lead that lays it** (0.1.24), so a hairline lead bakes as the hairline it
 previewed as rather than at twice its width.
 
-**The flank (0.1.51, `GraphiteGrain.Lead`).** There are two claims about what a leaned lead
+**The flank (0.1.51, `GraphiteGrain.Lead`) — an opt-in, and since 0.1.53 no engine opts in.** The
+Supernote pencil went back to the round lead, upright, on the user's word ("just normal pencil
+regardless of tilt"); what follows describes the model as it still exists in `GraphiteGrain`.
+
+**The flank, as built (0.1.51).** There are two claims about what a leaned lead
 does, and an engine picks one. `Lead.ROUND` is the default and is every caller before
 0.1.51 — the contact is a **disc** whose radius grows on the curve above. `Lead.FLANK` is
 Supernote's: a pencil laid over does not grow a bigger point, it lies *down*, so the contact
