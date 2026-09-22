@@ -251,13 +251,11 @@ simply appears at pen-up.
 **While that panel is ours a mark is *shown* dithered until it settles** — a blue-noise
 dither of the same flatten while it is under the nib (so it lands at once) and still at
 pen-up; it settles into its true tone — a gel pen's line solid (0.1.45), a pencil's flecks
-each at their own alpha in the lead's tone, grain in grey (0.1.48) — at the next thing that
-is not a mark (0.1.46): a tool or pen-property change, a page load, an undo, a rub — or the
-host's own `settleDisplay()` (0.1.47), which a host calls **before** opening chrome over the
-page, since the engine cannot see chrome and a settle painted onto the panel after a bar
-opened would paint over it, and which a host may also bind to a gesture of its own (Notesprout
-SN's sketch face: a one-finger swipe down). **Never on a timer**: 0.1.50's 2.5 s pause settle
-was withdrawn in 0.1.52 — a settle the hand did not ask for landed where it was about to draw. A loaded page is shown settled. This panel's greys arrive
+each at their own alpha in the lead's tone, grain in grey (0.1.48) — **only when the host asks**
+through `settleDisplay()` (0.1.47), or when the page is reloaded (0.1.52). Nothing else settles
+it: not a tool or pen-property change, not a rub or an undo (0.1.46–0.1.49, withdrawn), and never
+a timer (0.1.50's 2.5 s pause, withdrawn) — every one of those landed a settle the hand had not
+asked for. Notesprout SN's sketch face binds the door to a one-finger swipe down. A loaded page is shown settled. This panel's greys arrive
 a beat late and its black arrives at once, so a dither is the one picture it can show
 truthfully under a moving nib; it is how Supernote's own Atelier draws, and it is why a pale
 lead there keeps its whole shape. **It is a display decision and goes no further**: the

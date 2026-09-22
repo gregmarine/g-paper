@@ -316,7 +316,6 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             // Every tool change is a handoff boundary: bake + clear FIRST, then push
             // the new tool state.
             if (changed && firmware) firmwareToolBoundary()
-            settleInkTone(panel = false)
         }
 
     override var penColor: Int
@@ -324,7 +323,6 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         set(value) {
             super.penColor = value
             rearmPenIfLive()
-            settleInkTone(panel = false)
         }
 
     override var penWidth: Float
@@ -332,7 +330,6 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         set(value) {
             super.penWidth = value
             rearmPenIfLive()
-            settleInkTone(panel = false)
         }
 
     override var penStyle: StrokeStyle
@@ -340,7 +337,6 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         set(value) {
             super.penStyle = value
             rearmPenIfLive()
-            settleInkTone(panel = false)
         }
 
     override var pageMode: PageMode
@@ -1436,13 +1432,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      */
     override fun onRasterPixelsChanged(rect: Rect?) {
         if (!ditherDisplayed) return
-        // A change that is not the pen's own bake is "anything other than drawing": the
-        // ink waiting in dots settles into its tone first (Phase 32).
-        val baked = markJustBaked
-        markJustBaked = false
-        if (!baked) {
-            if (rect == null) pendingRuns.clear() else settleInkTone()
-        }
+        // A page load has nothing waiting: the page is rebuilt settled (Phase 32). Any other
+        // change that is not the pen's own bake — a rub, an undo — leaves what is waiting
+        // waiting (Phase 37): only the host's ask settles now.
+        if (rect == null) pendingRuns.clear()
         if (rect == null) {
             if (rasterFor(RasterLayer.GRAPHITE) == null && rasterFor(RasterLayer.INK) == null) {
                 ditherCoalescer.onPageGone()
@@ -1476,9 +1469,6 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      */
     override fun onRasterPixelsChanged(rects: List<Rect>) {
         if (!ditherDisplayed || rects.isEmpty()) return
-        val baked = markJustBaked
-        markJustBaked = false
-        if (!baked) settleInkTone()
         if (ditherCoalescer.onRect() == DitherCoalescer.Action.REBUILD_RECT) {
             regenDitherRuns(rects)
         }
@@ -1487,22 +1477,19 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     // ── Marks waiting to settle (Phase 32; the pencil too since Phase 34) ───────
     //
     // A mark is baked at pen-up but stays on the glass as the dither it was drawn as; it
-    // goes to its true tone at the next thing that is not a mark. The user's word: *"Instead
-    // of on pen up, perhaps when the tool is changed, or when flipping pages, or anything
-    // other than drawing … anything other than drawing will rebake with the correct tone."*
-    // — and for the pencil, *"perhaps it will look more natural with real tones with the
-    // grain?"* The runs waiting are kept here; the display rule dithers inside them and
-    // tones outside them ([toneAndPost]'s and [flattenDither]'s `settled`).
+    // goes to its true tone when the host asks ([settleDisplay]) or when the page is
+    // reloaded — and at nothing else (Phase 37, 2026-09-21: *"only … the swipe gesture,
+    // page flip, or closing the sketch. No longer on tool change."*). Phases 32–35 settled
+    // at every non-drawing event the engine saw — a tool or pen-property change, a rub, an
+    // undo, a 2.5 s pause — and each of those landed a settle the hand had not asked for.
+    // The runs waiting are kept here; the display rule dithers inside them and tones
+    // outside them ([toneAndPost]'s and [flattenDither]'s `settled`).
 
-    /** The host's door (0.1.47): settle before chrome opens over the page. */
+    /** The host's door (0.1.47) — since Phase 37 the **only** settle besides a page load. */
     override fun settleDisplay() = settleInkTone(panel = true)
 
     /** The runs baked since the last settle, either layer — in page coordinates. */
     private val pendingRuns = ArrayList<Rect>()
-
-    /** Set by the bake for the announce that follows it, so that one change is not taken
-     *  for "something other than drawing". */
-    private var markJustBaked = false
 
     // No settle on a timer (Phase 37, 0.1.52). Phase 35's pause settle — 2.5 s with no new
     // contact — is withdrawn on the user's word: a settle the hand did not ask for landed
@@ -1970,14 +1957,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         val target = rasterForWrite(layer) ?: return false
         for (r in dirty) compositeLiveInto(target, mask, r, color)
         // The mark stays on the glass as the dither it was drawn as (Phase 32; the pencil
-        // too since Phase 34): its runs wait here, and the next thing that is not a mark
-        // settles them in tone. The announce that follows this bake must not count as
-        // that thing.
+        // too since Phase 34): its runs wait here until the host asks for the settle or the
+        // page is reloaded (Phase 37).
         for (r in dirty) {
             val run = Rect(r)
             if (run.intersect(0, 0, liveAlphaW, liveAlphaH)) pendingRuns.add(run)
         }
-        markJustBaked = true
         return true
     }
 
@@ -2057,10 +2042,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      */
     override fun onRasterErasedBatch(rect: Rect) {
         if (!directRaster) return
-        // A rub is not a mark: whatever was waiting settles first (window only — the hand
-        // is down), so the corridor this batch posts is always in tone, never the dither
-        // of a run the announce below would have settled a moment later (0.1.49).
-        settleInkTone(panel = false)
+        // A rub does not settle what is waiting (Phase 37, amending 0.1.49): a corridor
+        // through a waiting run posts as the dither around it, and goes to tone with the
+        // rest at the host's ask.
         toneAndPost(rect)
     }
 

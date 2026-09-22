@@ -2971,21 +2971,26 @@ with.
 ---
 
 ### Phase 37 — The settle is asked for, not timed (post-v0.1.0)
-**Status:** 🔧 Built 2026-09-21, awaiting the user's Nomad walk · **Publishes:** 0.1.52 · branch `settle-gesture`.
+**Status:** 🔧 Built 2026-09-21, awaiting the user's Nomad walk · **Publishes:** 0.1.52 (republished after the first walk) · branch `settle-gesture`.
 Opened by the user's word on NSE · Sketch: *"we set it to change from dithering to true tone after
 2.5 secs of idle drawing. But that has caused some undesired side effects. What might be better is a
-gesture to explicitly achieve the true tone bake."*
+gesture to explicitly achieve the true tone bake."* — and, after the first walk: *"I see that it
+still does it on tool change too. Let's make this only happen with the swipe gesture, page flip, or
+closing the sketch. No longer on tool change."*
 - **Phase 35 is withdrawn.** `SETTLE_IDLE_MS` / `SETTLE_RETRY_MS`, `settleOnPause`,
-  `armPauseSettle` / `disarmPauseSettle` and their five call sites go; nothing in the engine settles
-  on a timer any more. A settle a hand did not ask for could land where the hand was about to draw.
-- **What stays** is everything Phases 31–34 decided: a mark is dithered under the nib and at pen-up,
-  and settles in tone at the next non-drawing event the engine sees (tool / pen-property setters,
-  a rub, an undo, a page load) or at the host's `settleDisplay()` (0.1.47). No API change.
+  `armPauseSettle` / `disarmPauseSettle` and their call sites go; nothing settles on a timer.
+- **Phase 32's events are withdrawn too** (first-walk amendment): the `tool` / `penColor` /
+  `penWidth` / `penStyle` setters, `onRasterPixelsChanged` (a rub, an undo) and
+  `onRasterErasedBatch` (0.1.49) no longer settle. `markJustBaked` goes with them. A rub through a
+  waiting run posts as the dither around it and goes to tone with the rest at the host's ask.
+- **What settles now:** the host's `settleDisplay()` (0.1.47) and a page load (`onRasterPixelsChanged(null)`
+  clears the waiting runs and rebuilds the page settled). No API change.
 - **The host's gesture.** Notesprout SN's sketch face binds `PageGestures.onSwipeDown` — the
-  one-finger swipe down, unassigned on that surface (the sketch has no Contents) — to
-  `paper.settleDisplay()`. A gesture is a finger contact, never a pen, so the settle can post to
-  the panel straight away; the swipe is pen-gated by the detector like every finger gesture there.
-- **Amends** Phase 35 only; `docs/api.md` § the Ratta panel says "never on a timer".
+  one-finger swipe down, unassigned on that surface — to `paper.settleDisplay()`; its chrome-open
+  calls to the door (0.1.47's reason was the setter settle painting over a panel, which no longer
+  exists) are removed. Closing the sketch needs nothing: the notebook shows the flattened rasters.
+- **Amends** Phases 32, 33 (the door's purpose), 34 (a rub no longer settles) and 35; Phases 31 and
+  34's display rule (`settled` = outside the waiting runs) stands.
 
 ## Standing Open Questions (ask as they become relevant)
 
