@@ -1655,8 +1655,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         from: Int,
         ink: PencilInk,
         width: Float,
+        to: Int = grain.count,
     ) {
-        StrokeRenderer.drawPencilFlecks(canvas, grain, from, ink, width, scratchPaint)
+        StrokeRenderer.drawPencilFlecks(canvas, grain, from, ink, width, scratchPaint, to)
     }
 
     /**
