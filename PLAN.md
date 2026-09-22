@@ -3043,7 +3043,7 @@ shading completely. Just normal pencil regardless of tilt."*
 - Phase 28 decision 5 stands again, this time by decision rather than by a units bug.
 
 ### Phase 40 — The finger smudge (post-v0.1.0)
-**Status:** 🔧 Built 2026-09-22, probed end-to-end on the Nomad (a debug broadcast in SN's sketch face synthesises the rub), per-pass rework the same day; the user's walk pending · **Publishes:** 0.1.54 · branch `smudge` (off `settle-gesture`).
+**Status:** ✅ COMPLETE + FROZEN 2026-09-22 on the user's four Nomad hand walks (Notesprout SN arc 48 "Smudge"); unmerged, merge on the user's word · **Publishes:** 0.1.54 · branch `smudge` (off `settle-gesture`).
 The user, on the Nomad, a pencil hatch that reads as separate lines: *"a smudge tool for sketches
 … only smudge the pencil content … blend the pencil lines into more like a shading look when
 smudged. It isn't to cause clumping. As the fleck is redistributed, it's possible that the tone
@@ -3103,7 +3103,7 @@ rub feel."*
   transparent neighbour lends no colour; the clipped box mean at an edge.
 
 ### Phase 41 — The Supernote panel is always dithered (post-v0.1.0)
-**Status:** 🔧 Built 2026-09-22 · **Publishes:** 0.1.55 · branch `always-dither` (off `smudge`).
+**Status:** ✅ COMPLETE + FROZEN 2026-09-22 on the user's Nomad walk (the glass dithered, the export in tone, side by side in Preview); unmerged, merge on the user's word · **Publishes:** 0.1.55 · branch `always-dither` (off `smudge`).
 The user, with the dithered and the settled page side by side on the Mac and on the glass: *"the
 dither looks great on the device, and the true tone looks great on the Mac. But the dither looks
 awful on Mac and the true tone doesn't quite look right on the device … turn off the settled
