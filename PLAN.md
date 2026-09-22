@@ -2997,6 +2997,38 @@ closing the sketch. No longer on tool change."*
   in **one** write out of the just-rebuilt display bytes (`presentRectViaPanel`, the page present's
   body for any rect). 0.1.52 republished again.
 
+### Phase 38 — The flank's grain is the point's, in grey — WITHDRAWN (post-v0.1.0)
+**Status:** ⏸ Built, walked twice and **reverted 2026-09-21** (commits 0c2d1fe · 342bdce · 744ef2f, reverted in 59e8f4d · 271f6fe · 5ae1fd6 — the code is in history) · **Publishes:** none kept; 0.1.52 stands · branch `settle-gesture`.
+The user's word: *"it still feels like it is clumping. It should be the same sort of grain as a
+normal pencil stroke, only wider. Right now, it looks like charcoal instead of pencil."* Asked
+"paler flecks at the point's density, or black flecks and a denser, darker flank?" → paler
+flecks. Then, after two walks: *"Let's drop this feature and make a note to come back to it
+later. It isn't working well and it's holding me back from moving forward with other stuff."*
+
+**What was built** (for whoever picks it up): `Grain.pale`, a byte per fleck, `null` on every
+full-ink grain (round lead bit-identical); the flank filled its tooth sites at the point's own
+odds for the pressure (`sites = cover + (cover/tone − cover)·spread`, `pale = cover/sites`, ink
+conserved), the barrel-end fall kept in the sites so the far edge feathered; `FLANK_LIGHTEN`
+0.84 → 0.70 as an alpha; `MAX_FLECKS` 1M; `StrokeRenderer.drawPencilFlecks` as one counting sort
+over (darkness, paleness) with one `drawPoints` per pair present; `FLANK_STATION_STRIDE` 2;
+live batches drawn in path-ordered chunks with tight boxes (`LIVE_CHUNK_FLECKS` 1 500). Rendered
+against the Manta probe CSV the grain was what was asked for: an even fine speckle, no clumps.
+
+**Why it was withdrawn: the live path could not afford it.** The device log (`live graphite:`
+lines) showed the *sparse* flank already spent ~85 % of a core on the main thread — ~3 µs a
+tooth **site** on the RK3566, 125 sites per px of travel whether one in five or one in two
+catch — and six-fold flecks tipped it: events coalesced (24 for a 6.6 s stroke instead of
+~2 500), each batch's bounding box was mostly empty paper flattened and dithered whole, 237 ms
+an event on the Manta and a 15 s ANR that lost the stroke; 787 ms on the Nomad. The stride and
+the chunking halved it on the JVM and were never confirmed on the glass.
+
+**To come back to it:** the grain is right; the cost is the problem, and it is the *site*
+cost, not the fleck cost — so the levers are (1) the per-site price (two octaves of value
+noise per site; a tooth field sampled once per cell and reused, or a precomputed tile), (2) the
+sweep on a worker thread with the main thread only compositing and posting, (3) fewer sites
+per px on the flank than the point's lattice, with the grain's look re-checked on the probe
+renders. The Phase 37 swipe-down settle is unaffected and stays.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
