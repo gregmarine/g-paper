@@ -3070,7 +3070,14 @@ rub feel."*
   (`SMUDGE_THIN_PX`, `SMUDGE_CHUNK_POINTS`) and logs any batch over 30 ms — the first build tested
   every pixel of the rect against every segment and the user's real finger hung the Nomad 12 s on
   one event (an ANR that closed the face). Finger-dense probe after: 3 600 samples in 5.3 s of
-  main-thread time (~1.5 ms a sample), one batch over the line. The
+  main-thread time (~1.5 ms a sample), one batch over the line. **The second walk** — *"too light
+  … closer to the original"* → `gamma` 3; *"it should be able to smudge out past the boundary …
+  fade … just enough to dirty the paper under it"* → **the finger's load** (`RasterSmudge.Load`,
+  `carry` 40 px, `deposit` 0.5): the darkest local tone under the finger's core is picked up,
+  decays by `e^(−travel / carry)`, is topped up wherever the finger crosses something darker, and
+  under the finger a pixel is pulled at least to `deposit` of it, in the load's colour where the
+  pixel has none; `carry` 0 lays nothing. The corridor's *average* was tried first and laid a
+  trail too faint to see — watered down by the paper beside the mark. The
   caller reads a rect padded by `spread` so the mean at the corridor's edge sees true neighbours,
   and writes back the corridor's rect only; graphite the blur pushes past the corridor is the
   other honest paling (a hatch smudged at its border pales there, as on paper).
