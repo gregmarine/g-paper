@@ -3029,6 +3029,19 @@ sweep on a worker thread with the main thread only compositing and posting, (3) 
 per px on the flank than the point's lattice, with the grain's look re-checked on the probe
 renders. The Phase 37 swipe-down settle is unaffected and stays.
 
+### Phase 39 — The Supernote pencil is upright again: the flank off (post-v0.1.0)
+**Status:** 🔧 Built 2026-09-21 · **Publishes:** 0.1.53 · branch `settle-gesture`.
+The user, after Phase 38 was withdrawn: *"What I meant was that I want to remove the side pencil
+shading completely. Just normal pencil regardless of tilt."*
+- `RattaPaperView.bakeTilt` returns `0` for `PENCIL` always (not only under the needle) and
+  `pencilLead` is `Lead.ROUND`: the digitizer's lean is discarded for the pencil, so a leaned pen
+  lays the upright mark — no flank, and no round-lead tilt bloom either. `rasterDirtyWidth`
+  follows (reach = the lead's own).
+- Nothing removed from `GraphiteGrain`: `Lead.FLANK`, `StrokePoint.azimuth`, the capture seams
+  and the harness stay as an opt-in no engine uses, so arc 47 can be turned back on with two
+  lines if the day comes (and Phase 38's grain, from history, with it).
+- Phase 28 decision 5 stands again, this time by decision rather than by a units bug.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

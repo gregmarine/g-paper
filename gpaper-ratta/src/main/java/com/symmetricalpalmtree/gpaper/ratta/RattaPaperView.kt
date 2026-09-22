@@ -703,32 +703,25 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         else pressure
 
     /**
-     * `PENCIL` bakes upright **while the needle previews it**: the firmware's live line
-     * cannot widen with lean, so a bake that did would be up to ~11× the line that was
-     * previewed (0.1.35, found on the Manta).
+     * `PENCIL` bakes **upright, always** on this device (Phase 39, 2026-09-21) — the user's
+     * word: *"remove the side pencil shading completely. Just normal pencil regardless of
+     * tilt."* The lean the digitizer reports is thrown away for the pencil, so a leaned pen
+     * lays exactly the mark an upright one does: no flank, and none of the round lead's own
+     * tilt bloom either.
      *
-     * **Phase 36 relaxes it on the direct panel path**, for exactly the reason [bakePressure]
-     * was relaxed at 0.1.41: with the panel open the preview is [GraphiteGrain]'s own flecks,
-     * live and baked from the same [GraphiteGrain.Sweep], so there is no longer anything the
-     * preview cannot show. Phase 28's decision 5 — *"the Supernote pencil stays upright"* —
-     * was made against a bake that could widen ~11× at an ordinary **writing** grip, and the
-     * measurement that made it (a raw `AXIS_TILT` in degrees read as radians) was wrong. The
-     * user's amendment stands in its place: upright for every ordinary grip, and the flank
-     * only past a side threshold the hand can only reach deliberately
-     * ([GraphiteGrain.Lead.FLANK]).
+     * History, because the decision has moved three times and the file should say so once:
+     * 0.1.35 zeroed it while the firmware needle previewed (a bake that widened ~11× under a
+     * line that could not); Phase 28 decision 5 wrote *"the Supernote pencil stays upright"*;
+     * Phase 36 relaxed it on the direct panel path for the flank ([GraphiteGrain.Lead.FLANK],
+     * the side-of-the-lead shading of arc 47); Phase 38 tried to give that flank the point's
+     * grain and could not afford it live; Phase 39 takes the flank out altogether. The flank
+     * stays in [GraphiteGrain] as an opt-in no engine uses.
      */
     override fun bakeTilt(style: StrokeStyle, tilt: Float): Float =
-        if (style == StrokeStyle.PENCIL && firmware && !panel.isOpen) 0f else tilt
+        if (style == StrokeStyle.PENCIL) 0f else tilt
 
-    /**
-     * The lead this engine's pencil draws with: the flank, always, on this device.
-     *
-     * It is safe to leave armed because below [GraphiteGrain.flankBloom]'s threshold the
-     * flank **is** the round lead's upright mark, fleck for fleck — so a needle-previewed
-     * page, whose tilt [bakeTilt] zeroes, gets precisely the mark it got before, and the
-     * question "which model is this page drawn with" never has two answers.
-     */
-    private val pencilLead: GraphiteGrain.Lead get() = GraphiteGrain.Lead.FLANK
+    /** The lead this engine's pencil draws with: the round lead, upright — see [bakeTilt]. */
+    private val pencilLead: GraphiteGrain.Lead get() = GraphiteGrain.Lead.ROUND
 
     /**
      * A leaned pencil's mark reaches far past its own width, so its dirty region must too —
