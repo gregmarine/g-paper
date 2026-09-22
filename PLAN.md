@@ -3027,6 +3027,11 @@ denser, darker flank?" — **paler flecks at the point's density.**
   passes run to 9 000 px; 400 000 cut the last third of `flat-1` off. 13 B/fleck, transient.
 - The flank test measures grey by ink (Σ pale) and asserts the band's site density is the
   point's (> 0.7×). Core 292 green.
+- **First walk (2026-09-21): "a huge lag in drawing … on the Manta, I think it crashed" — an
+  ANR** (input dispatch timed out 15 s, 57 % user CPU in the sketch process). Cause: the first
+  `drawPencilFlecks` scanned the batch once per (darkness, paleness) pair — 1 536 scans over a
+  pen-up batch of hundreds of thousands of flecks, on the main thread. Now one counting sort
+  over the batch and one `drawPoints` per pair present. 0.1.53 republished.
 
 ## Standing Open Questions (ask as they become relevant)
 

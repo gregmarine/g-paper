@@ -144,40 +144,57 @@ internal object StrokeRenderer {
         // Opaque flecks are also aliased: an anti-aliased edge is a ring of light greys, and
         // on the panel that ring trails the nib exactly as a grey fleck did.
         paint.isAntiAlias = !opaque
-        val packed = FloatArray((grain.count - from) * 2)
+        val n = grain.count - from
         val pale = grain.pale
-        // One pass per (darkness, paleness): a flank's flecks carry their tone in their
-        // alpha (Phase 38), and a full-ink grain has one paleness, so this is the old loop.
-        val paleSteps = if (pale == null) 1 else GraphiteGrain.PALE_STEPS + 1
-        for (level in 0 until GraphiteGrain.LEVELS) {
-            for (step in 0 until paleSteps) {
-                var n = 0
-                for (i in from until grain.count) {
-                    if (grain.level[i] != level) continue
-                    if (pale != null && (pale[i].toInt() and 0xFF) != step) continue
-                    packed[n++] = grain.xy[i * 2]
-                    packed[n++] = grain.xy[i * 2 + 1]
-                }
-                if (n == 0) continue
-                // Darker flecks are bigger as well as darker — the pass per darkness is already
-                // grouped, so this costs nothing and is what stops mid-tones chaining into bristle.
-                // Capped at the lead's width, so a hairline lead bakes as the hairline it previewed as.
-                paint.strokeWidth = GraphiteGrain.fleckPx(level, width)
-                // Opaque flecks (Phase 28, Supernote): darkness from density and size alone.
-                // A 16-grey e-ink panel reaches black on its first frame and a grey only by
-                // passing through black, so a grey fleck trails the nib while a black one lands —
-                // tone must come from how many flecks catch, never from what shade each is. On
-                // that engine the shade the artist picked is [PencilInk.density]; here every
-                // fleck is the one ink. **A pale fleck is the exception** (Phase 38): the flank
-                // carries its tone in its flecks on every engine, and shows on the panel as the
-                // dither it always did until the host settles it into tone.
-                val paleFactor = if (pale == null) 1f else step / GraphiteGrain.PALE_STEPS.toFloat()
-                val factor = (if (opaque) 1f else GraphiteGrain.levelAlpha(level)) * paleFactor
-                paint.color = if (factor >= 1f) color else withAlphaFactor(color, factor)
-                canvas.drawPoints(packed, 0, n, paint)
-            }
+        // One pass per (darkness, paleness) actually present, found by **one** counting sort
+        // over the flecks — never a scan per pair. A flank's flecks carry their tone in their
+        // alpha (Phase 38) and a batch may hold hundreds of thousands of them at pen-up; a
+        // scan per pair was 1 536 passes over the batch and a 15 s ANR on the Manta.
+        val keys = IntArray(n)
+        val counts = IntArray(KEY_COUNT + 1)
+        for (i in 0 until n) {
+            val j = from + i
+            val paleStep = if (pale == null) GraphiteGrain.PALE_STEPS else pale[j].toInt() and 0xFF
+            val key = grain.level[j] * (GraphiteGrain.PALE_STEPS + 1) + paleStep
+            keys[i] = key
+            counts[key + 1]++
+        }
+        for (k in 1..KEY_COUNT) counts[k] += counts[k - 1]
+        val packed = FloatArray(n * 2)
+        val next = counts.copyOf()
+        for (i in 0 until n) {
+            val j = from + i
+            val slot = next[keys[i]]++
+            packed[slot * 2] = grain.xy[j * 2]
+            packed[slot * 2 + 1] = grain.xy[j * 2 + 1]
+        }
+        for (key in 0 until KEY_COUNT) {
+            val lo = counts[key]
+            val hi = counts[key + 1]
+            if (hi == lo) continue
+            val level = key / (GraphiteGrain.PALE_STEPS + 1)
+            val paleStep = key % (GraphiteGrain.PALE_STEPS + 1)
+            // Darker flecks are bigger as well as darker — the pass per darkness is already
+            // grouped, so this costs nothing and is what stops mid-tones chaining into bristle.
+            // Capped at the lead's width, so a hairline lead bakes as the hairline it previewed as.
+            paint.strokeWidth = GraphiteGrain.fleckPx(level, width)
+            // Opaque flecks (Phase 28, Supernote): darkness from density and size alone.
+            // A 16-grey e-ink panel reaches black on its first frame and a grey only by
+            // passing through black, so a grey fleck trails the nib while a black one lands —
+            // tone must come from how many flecks catch, never from what shade each is. On
+            // that engine the shade the artist picked is [PencilInk.density]; here every
+            // fleck is the one ink. **A pale fleck is the exception** (Phase 38): the flank
+            // carries its tone in its flecks on every engine, and shows on the panel as the
+            // dither it always did until the host settles it into tone.
+            val paleFactor = paleStep / GraphiteGrain.PALE_STEPS.toFloat()
+            val factor = (if (opaque) 1f else GraphiteGrain.levelAlpha(level)) * paleFactor
+            paint.color = if (factor >= 1f) color else withAlphaFactor(color, factor)
+            canvas.drawPoints(packed, lo * 2, (hi - lo) * 2, paint)
         }
     }
+
+    /** Every (darkness, paleness) pair a fleck can carry — the counting sort's key space. */
+    private const val KEY_COUNT = GraphiteGrain.LEVELS * (GraphiteGrain.PALE_STEPS + 1)
 
     /** Baseline uniform-width round-cap polyline; single point → round dot. */
     private fun drawPen(canvas: Canvas, points: List<StrokePoint>, paint: Paint) {
