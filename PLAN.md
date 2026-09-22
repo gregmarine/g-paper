@@ -2970,6 +2970,23 @@ with.
 
 ---
 
+### Phase 37 — The settle is asked for, not timed (post-v0.1.0)
+**Status:** 🔧 Built 2026-09-21, awaiting the user's Nomad walk · **Publishes:** 0.1.52 · branch `settle-gesture`.
+Opened by the user's word on NSE · Sketch: *"we set it to change from dithering to true tone after
+2.5 secs of idle drawing. But that has caused some undesired side effects. What might be better is a
+gesture to explicitly achieve the true tone bake."*
+- **Phase 35 is withdrawn.** `SETTLE_IDLE_MS` / `SETTLE_RETRY_MS`, `settleOnPause`,
+  `armPauseSettle` / `disarmPauseSettle` and their five call sites go; nothing in the engine settles
+  on a timer any more. A settle a hand did not ask for could land where the hand was about to draw.
+- **What stays** is everything Phases 31–34 decided: a mark is dithered under the nib and at pen-up,
+  and settles in tone at the next non-drawing event the engine sees (tool / pen-property setters,
+  a rub, an undo, a page load) or at the host's `settleDisplay()` (0.1.47). No API change.
+- **The host's gesture.** Notesprout SN's sketch face binds `PageGestures.onSwipeDown` — the
+  one-finger swipe down, unassigned on that surface (the sketch has no Contents) — to
+  `paper.settleDisplay()`. A gesture is a finger contact, never a pen, so the settle can post to
+  the panel straight away; the swipe is pen-gated by the detector like every finger gesture there.
+- **Amends** Phase 35 only; `docs/api.md` § the Ratta panel says "never on a timer".
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
