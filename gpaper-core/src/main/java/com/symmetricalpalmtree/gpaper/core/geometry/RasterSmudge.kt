@@ -246,7 +246,7 @@ object RasterSmudge {
                 }
             }
         }
-        val laid = load.alpha * smudging.deposit
+        val laid = if (smudging.carry > 0f) load.alpha * smudging.deposit else 0f
 
         var changed = false
         for (y in max(innerTop, top) until rowEnd) {
