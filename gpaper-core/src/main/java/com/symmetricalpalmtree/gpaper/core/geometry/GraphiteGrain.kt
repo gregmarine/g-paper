@@ -2,8 +2,8 @@ package com.symmetricalpalmtree.gpaper.core.geometry
 
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import kotlin.math.abs
-import kotlin.math.atan2
 import kotlin.math.ceil
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.floor
@@ -536,8 +536,26 @@ object GraphiteGrain {
      * compresses the flank's pressure range again — hard over light, 10.2× → 4.9× — which is
      * the same trade in the same direction as the first walk's and lands on the same side of
      * decision 3. **It is the knob**, and it is now a knob with a real measurement under it.
+     *
+     * **Phase 38 (2026-09-21) changes what the number does, and re-fits it 0.84 → 0.70.** It
+     * no longer thins the flecks out; it **pales** them. The hand's word after living with the
+     * sparse band: *"it still feels like it is clumping. It should be the same sort of grain as
+     * a normal pencil stroke, only wider. Right now, it looks like charcoal."* A band that
+     * makes its grey by leaving four sites in five bare is a sparse field of black dots, and a
+     * sparse random field clumps wherever a few land together — that is charcoal, and no tooth
+     * or fan tuning reaches it, because every one of those shaped the sparse field rather than
+     * its sparseness. So the flank now fills its sites at the **point's own density at this
+     * pressure** and carries the lightening in each fleck's tone ([Grain.pale]): the point's
+     * grain, spread wide, in grey. Ink is conserved site for site (`sites × pale = cover`), so
+     * the figure still means "how much lighter than the point", only now as an alpha. Refitted
+     * against the same recorded Manta passes rendered both ways: at 0.84 the pale band read
+     * fainter than the black dots it replaced (a pale speck is not seen the way a black one
+     * is); 0.70 puts a single pass at fill 0.27 (was 0.16 in dots) and a scribbled pass at
+     * 0.46 (was 0.31) — the walk's knob, as ever. Phase 28's reason for laying tone as dot
+     * count — a panel that can only paint black under the nib — is met by the display: the
+     * live picture dithers, the settled one shows the fleck's tone (0.1.48).
      */
-    private const val FLANK_LIGHTEN = 0.84f
+    private const val FLANK_LIGHTEN = 0.70f
 
     /**
      * How much of its coverage the strip has given up by the barrel end.
@@ -740,8 +758,12 @@ object GraphiteGrain {
      * Upper bound on flecks for one stroke. A mark long enough or broad enough to pass this
      * has already stopped being legible as grain, and the cap is here so a host that hands us
      * an absurd width or a path with a million points degrades instead of stalling the frame.
+     *
+     * Raised 400 000 → 1 000 000 at Phase 38: a flank filled at the tip's density lays some
+     * 45 flecks per px of a shading pass, and the hand's own recorded passes run to 9 000 px —
+     * 400 000 cut the last third of one off. Thirteen bytes a fleck, transient, per stroke.
      */
-    private const val MAX_FLECKS = 400_000
+    private const val MAX_FLECKS = 1_000_000
 
     /**
      * One stroke's worth of graphite: [count] flecks, their centres interleaved in [xy]
@@ -750,7 +772,25 @@ object GraphiteGrain {
      * re-renders every stroke on the sheet and per-fleck allocation is how that becomes
      * visible.
      */
-    class Grain(val xy: FloatArray, val level: IntArray, val count: Int)
+    /**
+     * The flecks of one mark: interleaved page coordinates, a darkness index each, and —
+     * since Phase 38 — an optional **paleness** each, `1`..[PALE_STEPS] with [PALE_STEPS]
+     * the full ink. `null` means every fleck is full, which is every round-lead mark and
+     * every flank below its threshold: those grains are bit for bit what they were before
+     * paleness existed. A renderer multiplies a fleck's alpha by `pale / PALE_STEPS` —
+     * see [paleOf].
+     */
+    class Grain(val xy: FloatArray, val level: IntArray, val count: Int, val pale: ByteArray? = null) {
+        /** Fleck [i]'s alpha multiplier for its paleness, `1` when the grain carries none. */
+        fun paleOf(i: Int): Float = pale?.let { (it[i].toInt() and 0xFF) / PALE_STEPS.toFloat() } ?: 1f
+    }
+
+    /**
+     * How many steps of paleness a fleck may carry — a byte's worth. Quantised so a renderer
+     * can lay one pass per (darkness, paleness) pair with `drawPoints`; a mark's flecks share
+     * a narrow range of paleness, so the passes actually laid are few.
+     */
+    const val PALE_STEPS: Int = 255
 
     private val EMPTY = Grain(FloatArray(0), IntArray(0), 0)
 
@@ -1765,6 +1805,16 @@ object GraphiteGrain {
                 coverage(press, u) * fall * skate(arc, site, seed, skateDepth) * lean *
                     density * rows
             if (cover <= 0f) continue
+            // The flank fills its sites at the **tip's** density at this pressure and carries
+            // its lightening — the paling, the barrel-end fall, the skate's streaks — in the
+            // flecks' own tone instead of in how many of them there are (Phase 38): the point's
+            // grain, spread wide, in grey. Ink is conserved (sites × pale = [cover]); exactly
+            // [cover] and full ink at spread 0, so the round lead's bits hold.
+            // The barrel-end fall stays in the **sites**: it is what feathers the band's far
+            // edge, and a fall carried in tone alone left a wall of pale flecks there.
+            val tone = skate(arc, site, seed, skateDepth) * lean
+            val sites = if (tone < 1f) cover + (cover / tone - cover) * spread else cover
+            val pale = if (sites > cover) cover / sites else 1f
             val alongJitter = (unit(hash(seed, station, lane)) - 0.5f) *
                 (JITTER * TOOTH_PITCH_PX + 2f * LEVER_JITTER * abs(site))
             val acrossJitter =
@@ -1773,13 +1823,18 @@ object GraphiteGrain {
             val x = cx + tx * alongJitter + nx * across
             val y = cy + ty * alongJitter + ny * across
             if (!catches(
-                    cover, x, y, hash(seed, station, lane xor 0x2af1),
+                    sites, x, y, hash(seed, station, lane xor 0x2af1),
                     toothWeight, toothFine, toothCoarse, grit.toothDepth, spread,
                 )
             ) continue
-            out.add(x, y, levelOf(press, hash(seed, station, lane xor 0x11d7)))
+            out.add(x, y, levelOf(press, hash(seed, station, lane xor 0x11d7)), paleStep(pale))
         }
     }
+
+    /** [pale] `0`..`1` as a stored step, `PALE_STEPS` for full ink, never below `1` so a
+     *  fleck that caught is a fleck that shows. */
+    private fun paleStep(pale: Float): Int =
+        if (pale >= 1f) PALE_STEPS else (pale.coerceIn(0f, 1f) * PALE_STEPS).roundToInt().coerceAtLeast(1)
 
     /**
      * A tap: the lead touched down and lifted. A round lead leaves the disc of grit
@@ -1896,16 +1951,19 @@ object GraphiteGrain {
                 val cover = coverage(press, over / base) * (1f - FLANK_TAIL_BARE * along) *
                     lean * density
                 if (cover <= 0f) continue
+                val tone = lean
+                val sites = if (tone < 1f) cover + (cover / tone - cover) * spread else cover
+                val pale = if (sites > cover) cover / sites else 1f
                 val jx = (unit(hash(seed, row, lane)) - 0.5f) * JITTER * TOOTH_PITCH_PX
                 val jy = (unit(hash(seed, row, lane xor 0x5bf0)) - 0.5f) * JITTER * TOOTH_PITCH_PX
                 val x = p.x + ax * s - ay * v + jx
                 val y = p.y + ay * s + ax * v + jy
                 if (!catches(
-                        cover, x, y, hash(seed, row, lane xor 0x2af1),
+                        sites, x, y, hash(seed, row, lane xor 0x2af1),
                         toothWeight, toothFine, toothCoarse, grit.toothDepth, spread,
                     )
                 ) continue
-                out.add(x, y, levelOf(press, hash(seed, row, lane xor 0x11d7)))
+                out.add(x, y, levelOf(press, hash(seed, row, lane xor 0x11d7)), paleStep(pale))
                 if (out.total >= MAX_FLECKS) return out.grain()
             }
         }
@@ -2055,6 +2113,9 @@ object GraphiteGrain {
     private class Sink {
         var xy = FloatArray(512)
         var level = IntArray(256)
+        /** Allocated on the first fleck that is not full ink; null keeps a full-ink grain's
+         *  shape exactly what it was. */
+        var pale: ByteArray? = null
         var count = 0
 
         /**
@@ -2066,17 +2127,22 @@ object GraphiteGrain {
 
         val total: Int get() = carried + count
 
-        fun add(x: Float, y: Float, lvl: Int) {
+        fun add(x: Float, y: Float, lvl: Int, paleStep: Int = PALE_STEPS) {
             if (count * 2 + 2 > xy.size) {
                 xy = xy.copyOf(xy.size * 2)
                 level = level.copyOf(level.size * 2)
+                pale = pale?.copyOf(level.size)
             }
             xy[count * 2] = x
             xy[count * 2 + 1] = y
             level[count] = lvl
+            if (paleStep < PALE_STEPS && pale == null) {
+                pale = ByteArray(level.size).also { java.util.Arrays.fill(it, 0, count, PALE_STEPS.toByte()) }
+            }
+            pale?.let { it[count] = paleStep.toByte() }
             count++
         }
 
-        fun grain(): Grain = Grain(xy, level, count)
+        fun grain(): Grain = Grain(xy, level, count, pale)
     }
 }

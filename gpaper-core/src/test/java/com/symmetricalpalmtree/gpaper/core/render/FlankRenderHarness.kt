@@ -199,7 +199,7 @@ class FlankRenderHarness {
             val alpha = GraphiteGrain.levelAlpha(level)
             for (i in 0 until grain.count) {
                 if (grain.level[i] != level) continue
-                sheet.disc(grain.xy[i * 2], grain.xy[i * 2 + 1], d, GREY, GREY, GREY, alpha)
+                sheet.disc(grain.xy[i * 2], grain.xy[i * 2 + 1], d, GREY, GREY, GREY, alpha * grain.paleOf(i))
             }
         }
     }
@@ -368,6 +368,7 @@ class FlankRenderHarness {
             org.junit.Assert.assertEquals(upright.xy[i * 2], writing.xy[i * 2], 0f)
             org.junit.Assert.assertEquals(upright.xy[i * 2 + 1], writing.xy[i * 2 + 1], 0f)
             org.junit.Assert.assertEquals(upright.level[i], writing.level[i])
+            org.junit.Assert.assertEquals(upright.paleOf(i), writing.paleOf(i), 0f)
         }
 
         // The first walk's finding, pinned: *"the dabs/flecks seem too blotchy … like each
@@ -1086,11 +1087,13 @@ class FlankRenderHarness {
         val xs = ArrayList<Float>()
         val ys = ArrayList<Float>()
         val ls = ArrayList<Int>()
+        val ps = ArrayList<Float>()
         fun take(g: GraphiteGrain.Grain) {
             for (i in 0 until g.count) {
                 xs.add(g.xy[i * 2])
                 ys.add(g.xy[i * 2 + 1])
                 ls.add(g.level[i])
+                ps.add(g.paleOf(i))
             }
         }
         var at = 1
@@ -1110,6 +1113,7 @@ class FlankRenderHarness {
             org.junit.Assert.assertEquals(whole.xy[i * 2], xs[i], 0f)
             org.junit.Assert.assertEquals(whole.xy[i * 2 + 1], ys[i], 0f)
             org.junit.Assert.assertEquals(whole.level[i], ls[i])
+            org.junit.Assert.assertEquals(whole.paleOf(i), ps[i], 0f)
         }
     }
 

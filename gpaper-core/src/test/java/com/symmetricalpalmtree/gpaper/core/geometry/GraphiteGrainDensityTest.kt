@@ -79,6 +79,7 @@ class GraphiteGrainDensityTest {
             assertEquals("$what: x[$i]", a.xy[i * 2], b.xy[i * 2], 0f)
             assertEquals("$what: y[$i]", a.xy[i * 2 + 1], b.xy[i * 2 + 1], 0f)
             assertEquals("$what: level[$i]", a.level[i], b.level[i])
+            assertEquals("$what: pale[$i]", a.paleOf(i), b.paleOf(i), 0f)
         }
     }
 

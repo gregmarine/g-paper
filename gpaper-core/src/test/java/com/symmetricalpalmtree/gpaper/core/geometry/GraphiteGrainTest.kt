@@ -31,6 +31,7 @@ class GraphiteGrainTest {
             assertEquals("x[$i]", a.xy[i * 2], b.xy[i * 2], 0f)
             assertEquals("y[$i]", a.xy[i * 2 + 1], b.xy[i * 2 + 1], 0f)
             assertEquals("level[$i]", a.level[i], b.level[i])
+            assertEquals("pale[$i]", a.paleOf(i), b.paleOf(i), 0f)
         }
     }
 
@@ -670,7 +671,7 @@ class GraphiteGrainTest {
         val g = GraphiteGrain.of(huge, 60f, 5)
         // Bounded well below anything that would stall a frame, and never zero — the cap must
         // degrade a monstrous stroke, not erase it.
-        assertTrue("capped, got ${g.count}", g.count in 1..420_000)
+        assertTrue("capped, got ${g.count}", g.count in 1..1_050_000)
         assertNotEquals(0, g.count)
     }
 }

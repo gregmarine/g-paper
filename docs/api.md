@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.52**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.53**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -407,6 +407,15 @@ is a pencil held upright, a fixed-width mark, and that is the pencil this style 
 apparent width comes out roughly `width + 1 px`, the bleed of one fleck — except that **a fleck is
 never wider than the lead that lays it** (0.1.24), so a hairline lead bakes as the hairline it
 previewed as rather than at twice its width.
+
+**The flank's grain is the point's, spread wide, in grey (0.1.53, `Grain.pale`).** A flank
+fills its tooth sites at the point's own density for the pressure and carries its lightening in
+each fleck's **paleness** — `Grain.pale`, a byte per fleck, `null` on every full-ink grain —
+rather than by leaving sites bare: a sparse field of black dots clumps by chance and reads as
+charcoal. Renderers multiply a fleck's alpha by `Grain.paleOf(i)`; `StrokeRenderer.drawPencilFlecks`
+does, on every engine. On the Supernote panel a pale fleck previews as the dither it always did and
+settles into its tone. `MAX_FLECKS` is 1 000 000 (was 400 000): a filled band on a 9 000 px shading
+pass needs it.
 
 **The flank (0.1.51, `GraphiteGrain.Lead`).** There are two claims about what a leaned lead
 does, and an engine picks one. `Lead.ROUND` is the default and is every caller before
