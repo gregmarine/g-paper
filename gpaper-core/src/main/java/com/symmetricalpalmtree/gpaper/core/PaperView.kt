@@ -6,6 +6,7 @@ import android.view.View
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
 import com.symmetricalpalmtree.gpaper.core.model.OrientedBox
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
+import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
 
@@ -100,6 +101,43 @@ interface PaperView {
      * where the eraser takes whole marks. See [RasterRubbing] for the defaults.
      */
     var rasterRubbing: RasterRubbing
+
+    /**
+     * Reach of the finger smudge on a raster page (0.1.54), in px around each sample of
+     * the sweep — a fingertip, not a nib. See [rasterSmudging] and [smudgeAlong].
+     */
+    var smudgeRadius: Float
+
+    /**
+     * How a finger smudges graphite on a raster page (0.1.54): the pull toward the
+     * neighbourhood mean per batch, the neighbourhood's spread, the feathered edge, and
+     * the little that is carried off. Ignored in stroke mode. See [RasterSmudging].
+     */
+    var rasterSmudging: RasterSmudging
+
+    /**
+     * Begin a finger smudge on a raster page (0.1.54). The host owns the gesture — a
+     * finger is never a tool, and this engine's touch handling never starts one — and
+     * feeds the finger's samples through [smudgeAlong] until [endSmudge]. Within
+     * [smudgeRadius] of the sweep the **graphite** image's pixels are pulled toward the
+     * mean of their neighbourhood ([RasterSmudging]) so separate pencil lines run together
+     * into a tone; the ink image is never read, never allocated and never announced —
+     * the rubber's rule, held by the same construction. Each batch fires
+     * `onRasterWillChange(GRAPHITE, rect)` → blend → `onRasterChanged(GRAPHITE, rect)` like a
+     * rub, and [endSmudge] fires `onPenLifted` so a host that closes an undo entry per
+     * contact closes this one too. A no-op in stroke mode and on a page with no graphite.
+     */
+    fun beginSmudge()
+
+    /**
+     * One batch of the smudge's samples, in view coordinates — every sample since the last
+     * call, in order; the previous batch's last sample is chained on so the sweep stays a
+     * connected polyline. Nothing happens before [beginSmudge] or after [endSmudge].
+     */
+    fun smudgeAlong(points: List<StrokePoint>)
+
+    /** The finger left the glass: present the last of the smudge and close the contact. */
+    fun endSmudge()
 
     // ── Pen-gesture recognizers (opt-in, default off) ────────────────────────
 
