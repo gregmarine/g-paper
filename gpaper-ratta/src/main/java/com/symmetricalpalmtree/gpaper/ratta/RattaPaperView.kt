@@ -72,6 +72,21 @@ import kotlin.math.hypot
 internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
     private companion object {
+        /**
+         * Whether the Supernote panel ever shows a mark in its true tone (Phase 41, 0.1.55:
+         * **no**). The dither is the one picture this panel shows well: the artist, with the
+         * dithered page and the settled page side by side on the Mac and on the glass — *"the
+         * dither looks great on the device, and the true tone looks great on the Mac. But the
+         * dither looks awful on Mac and the true tone doesn't quite look right on the
+         * device"* — asked for the device always dithered, pencil and pen alike, and the
+         * export always true tone. So every display flatten dithers, a loaded page is shown
+         * dithered, the runs a bake leaves are not kept, and [settleDisplay] is a no-op; the
+         * page images, the covers and `renderToBitmap` keep the true greys, exactly as
+         * before (Phase 28's decision 7 stands). Phases 31–34's tone display stays in the code
+         * behind this one flag; flipping it back restores every settle of Phase 37.
+         */
+        const val DISPLAY_SETTLES = false
+
         const val TAG = "GPaperRatta"
 
         /** Floor for the firmware eraser EMR size (`radius * 50`, min 400 — PoC-validated). */
@@ -1180,7 +1195,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * grey's own level ([LEVEL_OF_COVERAGE], [RattaPanelTone]'s table back on this path for
      * exactly that); the window's own frame agrees.
      */
-    private fun toneAndPost(rect: Rect, settled: Boolean = !overlapsPending(rect)) {
+    private fun toneAndPost(rect: Rect, settled: Boolean = DISPLAY_SETTLES && !overlapsPending(rect)) {
         val w = rect.width()
         val h = rect.height()
         val n = w * h
@@ -1478,8 +1493,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     // The runs waiting are kept here; the display rule dithers inside them and tones
     // outside them ([toneAndPost]'s and [flattenDither]'s `settled`).
 
-    /** The host's door (0.1.47) — since Phase 37 the **only** settle besides a page load. */
-    override fun settleDisplay() = settleInkTone(panel = true)
+    /** The host's door (0.1.47) — since Phase 37 the **only** settle besides a page load; since
+     *  Phase 41 a no-op, because nothing on this panel settles any more ([DISPLAY_SETTLES]). */
+    override fun settleDisplay() { if (DISPLAY_SETTLES) settleInkTone(panel = true) }
 
     /** The runs baked since the last settle, either layer — in page coordinates. */
     private val pendingRuns = ArrayList<Rect>()
@@ -1647,7 +1663,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         val wholeCopy = DitherCost.preferWholeCopy(
             area.width(), area.height(), bitmap.width, bitmap.height, DITHER_WHOLE_COPY_FRACTION,
         )
-        flattenDither(area, out, stride, settled = !overlapsPending(area))
+        flattenDither(area, out, stride, settled = DISPLAY_SETTLES && !overlapsPending(area))
         if (wholeCopy) landWholeDither(bitmap) else landDitherRect(bitmap, area, out, stride)
         val ms = (System.nanoTime() - t0) / 1_000_000
         if (whole) {
@@ -1688,7 +1704,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             union = union?.apply { union(area) } ?: Rect(area)
         }
         val span = union ?: return
-        for (area in areas) flattenDither(area, out, stride, settled = !overlapsPending(area))
+        for (area in areas) flattenDither(area, out, stride, settled = DISPLAY_SETTLES && !overlapsPending(area))
         val wholeCopy = DitherCost.preferWholeCopyForRuns(
             areas.size, span.width(), span.height(), bitmap.width, bitmap.height,
             DITHER_WHOLE_COPY_FRACTION, DITHER_MAX_SETPIXELS_RECTS,
@@ -1714,7 +1730,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * own four. Nothing reaches the bitmap here; the array is the truth and the landing is
      * a separate decision.
      */
-    private fun flattenDither(area: Rect, out: ByteArray, stride: Int, settled: Boolean = true) {
+    private fun flattenDither(area: Rect, out: ByteArray, stride: Int, settled: Boolean = DISPLAY_SETTLES) {
         val w = area.width()
         val bandH = (DITHER_BAND_PX / w).coerceIn(1, area.height())
         ensureBandScratch(w * bandH)
@@ -1971,7 +1987,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // page is reloaded (Phase 37).
         for (r in dirty) {
             val run = Rect(r)
-            if (run.intersect(0, 0, liveAlphaW, liveAlphaH)) pendingRuns.add(run)
+            if (DISPLAY_SETTLES && run.intersect(0, 0, liveAlphaW, liveAlphaH)) pendingRuns.add(run)
         }
         return true
     }
