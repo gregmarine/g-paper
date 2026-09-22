@@ -723,24 +723,6 @@ object GraphiteGrain {
     private const val FAN_SPLIT_MAX = 8f
 
     /**
-     * How many tooth pitches apart a **flank's** cross-sections stand along the path — the
-     * round lead's stay at one (Phase 38, the second walk).
-     *
-     * A filled band is a hundred lanes wide, and at one station per 0.8 px of travel that is
-     * 125 sites tested per px, every one a hash and two octaves of noise: on the Manta the
-     * live flank spent some 3 µs a site and the old sparse band was already at 85 % of a core
-     * before Phase 38 laid six times its flecks — the input queue backed up, batches coalesced,
-     * their rects swelled, and the settle of each grew with the rect. Striding the stations
-     * halves the sites and the flecks alike. The ink stays: a station that swept two rows of
-     * paper deposits at the same odds and its flecks carry twice the tone (the paleness is
-     * the honest place for it; the sites' odds are the point's, which is the grain). Along
-     * the path the far lanes are already jittered by several px ([LEVER_JITTER]), so a 1.6 px
-     * stride is not a visible spacing. The fan still splits a turning stride down to
-     * [TOOTH_PITCH_PX] / [FAN_SPLIT_MAX], from this base.
-     */
-    private const val FLANK_STATION_STRIDE = 2f
-
-    /**
      * The far end of that blend, gathered into one value so a render harness can sweep all
      * five numbers without a mutable global anywhere in the tree (the Phase 21 rule: a
      * measurement door is temporary by construction, and this one never opens onto production
@@ -1703,12 +1685,11 @@ object GraphiteGrain {
                 nextAt += pitch
                 // And how far the *next* cross-section is: close enough that the fastest
                 // lane of this comb cannot skip a row of tooth — see [FAN_SPLIT_MAX].
-                val basePitch = if (toBarrel != 0f) TOOTH_PITCH_PX * FLANK_STATION_STRIDE else TOOTH_PITCH_PX
                 pitch = if (fan != 0f) {
-                    (basePitch / (1f + abs(fan) * (abs(toBarrel) + half)))
+                    (TOOTH_PITCH_PX / (1f + abs(fan) * (abs(toBarrel) + half)))
                         .coerceAtLeast(TOOTH_PITCH_PX / FAN_SPLIT_MAX)
                 } else {
-                    basePitch
+                    TOOTH_PITCH_PX
                 }
                 if (out.total >= MAX_FLECKS) {
                     full = true
@@ -1819,25 +1800,21 @@ object GraphiteGrain {
             // passes of a lead over one piece of paper is a darker piece of paper, which is
             // what a shading turnaround looks like. Exactly `1` for a straight mark and for
             // every round lead, which is what keeps those bit for bit what they were.
-            // Rows of paper this lane swept since the last station: under one on the inside
-            // of a turn (the fan), over one on a flank's stride ([FLANK_STATION_STRIDE]) —
-            // exactly one for every round lead and every straight station.
-            val swept = abs(advance * (1f - site * fan)) / TOOTH_PITCH_PX
-            val rows = swept.coerceIn(0f, 1f)
+            val rows = (abs(advance * (1f - site * fan)) / TOOTH_PITCH_PX).coerceIn(0f, 1f)
             val cover =
                 coverage(press, u) * fall * skate(arc, site, seed, skateDepth) * lean *
                     density * rows
             if (cover <= 0f) continue
             // The flank fills its sites at the **tip's** density at this pressure and carries
-            // its lightening — the paling, the skate's streaks — in the flecks' own tone
-            // instead of in how many of them there are (Phase 38): the point's grain, spread
-            // wide, in grey. Ink is conserved (sites × pale = [cover] × the rows swept);
-            // exactly [cover] and full ink at spread 0, so the round lead's bits hold.
+            // its lightening — the paling, the barrel-end fall, the skate's streaks — in the
+            // flecks' own tone instead of in how many of them there are (Phase 38): the point's
+            // grain, spread wide, in grey. Ink is conserved (sites × pale = [cover]); exactly
+            // [cover] and full ink at spread 0, so the round lead's bits hold.
             // The barrel-end fall stays in the **sites**: it is what feathers the band's far
             // edge, and a fall carried in tone alone left a wall of pale flecks there.
             val tone = skate(arc, site, seed, skateDepth) * lean
             val sites = if (tone < 1f) cover + (cover / tone - cover) * spread else cover
-            val pale = if (sites > cover) (cover / sites * max(swept, 1f)).coerceAtMost(1f) else 1f
+            val pale = if (sites > cover) cover / sites else 1f
             val alongJitter = (unit(hash(seed, station, lane)) - 0.5f) *
                 (JITTER * TOOTH_PITCH_PX + 2f * LEVER_JITTER * abs(site))
             val acrossJitter =

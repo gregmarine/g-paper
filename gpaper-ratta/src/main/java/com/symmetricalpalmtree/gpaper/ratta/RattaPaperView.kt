@@ -174,10 +174,6 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
          *  bitmap is drawn in black, so a byte is how black that pixel is). A dithered pixel
          *  is one of these two; a baked-ink pixel is its true tone between them (Phase 31). */
         const val DITHER_ON: Byte = -1 // 0xFF
-
-        /** Flecks per live chunk — a few px of a filled flank's travel, see the chunk loop in
-         *  [onLiveStrokeExtended]. */
-        const val LIVE_CHUNK_FLECKS = 1500
         const val DITHER_OFF: Byte = 0
 
         /** The panel level for a display byte: coverage `c` is grey `255 − c` through the
@@ -1011,36 +1007,21 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             timeGrain += System.nanoTime() - t0
             return
         }
+        val rect = newFleckBounds(grain, 0) ?: run { laidFlecks = sweep.count; return }
         val t1 = System.nanoTime()
         timeGrain += t1 - t0
+        val scratch = ensureBatch(rect.width(), rect.height()) ?: return
+        val canvas = batchCanvas ?: return
+        val save = canvas.save()
+        canvas.clipRect(0, 0, rect.width(), rect.height())
+        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
+        drawPencilGrain(canvas, grain, 0, contactInk, penWidth)
+        canvas.restoreToCount(save)
         laidFlecks = sweep.count
-        // **In chunks, along the path** (Phase 38's second walk). A batch is one input
-        // event's worth of flecks, and once the main thread falls behind the HAL an event
-        // carries a hundred samples: its flecks' one bounding box is then mostly empty
-        // paper, and flattening, dithering and posting every pixel of it is what turned a
-        // slow event into a slower one (787 ms on a Nomad). The sweep lays flecks in path
-        // order, so a run of them is a short stretch of the mark with a tight box; each
-        // stretch is drawn, merged and shown by itself, and the work stays proportional to
-        // the mark rather than to the box around it.
-        var from = 0
-        while (from < grain.count) {
-            val to = minOf(from + LIVE_CHUNK_FLECKS, grain.count)
-            val rect = newFleckBounds(grain, from, to)
-            if (rect != null) {
-                val scratch = ensureBatch(rect.width(), rect.height()) ?: return
-                val canvas = batchCanvas ?: return
-                val save = canvas.save()
-                canvas.clipRect(0, 0, rect.width(), rect.height())
-                canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-                canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-                drawPencilGrain(canvas, grain, from, contactInk, penWidth, to)
-                canvas.restoreToCount(save)
-                mergeBatchIntoLive(scratch, rect, mask)
-                liveRect.union(rect)
-                toneAndPost(rect)
-            }
-            from = to
-        }
+        mergeBatchIntoLive(scratch, rect, mask)
+        liveRect.union(rect)
+        toneAndPost(rect)
         val dt = System.nanoTime() - t1
         timeTone += dt
         if (dt > maxTone) maxTone = dt
@@ -1137,12 +1118,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
     /** The view-space rect the flecks `[from, count)` cover, padded for the fleck size and
      *  clipped to the view; null when none of it is on screen. */
-    private fun newFleckBounds(grain: GraphiteGrain.Grain, from: Int, to: Int = grain.count): Rect? {
+    private fun newFleckBounds(grain: GraphiteGrain.Grain, from: Int): Rect? {
         var minX = Float.MAX_VALUE
         var minY = Float.MAX_VALUE
         var maxX = -Float.MAX_VALUE
         var maxY = -Float.MAX_VALUE
-        for (i in from until to) {
+        for (i in from until grain.count) {
             val x = grain.xy[i * 2]
             val y = grain.xy[i * 2 + 1]
             if (x < minX) minX = x

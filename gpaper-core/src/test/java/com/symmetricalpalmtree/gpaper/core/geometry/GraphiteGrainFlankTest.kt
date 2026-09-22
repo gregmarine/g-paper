@@ -190,16 +190,14 @@ class GraphiteGrainFlankTest {
             ink(flankHard) > 1.8f * ink(uprightHard),
         )
         // And the Phase 38 claim itself: the band is **filled**, not sparse — its flecks per
-        // unit of paper are the pressed point's at half the stations (FLANK_STATION_STRIDE 2,
-        // the second walk), with the grey in their paleness. The old band filled one site in
-        // five of the point's; this is a bound well above that and below the point's.
+        // unit of paper are the pressed point's, near enough, with the grey in their paleness.
         val (lo, hi) = band(flankHard)
         val (ulo, uhi) = band(uprightHard)
         val flankSites = flankHard.count / ((hi - lo + 1f) * 300f)
         val uprightSites = uprightHard.count / ((uhi - ulo + 1f) * 300f)
         assertTrue(
             "a flank's sites should be filled as densely as the point's (flank $flankSites, point $uprightSites)",
-            flankSites > 0.35f * uprightSites,
+            flankSites > 0.7f * uprightSites,
         )
     }
 

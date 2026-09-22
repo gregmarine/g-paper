@@ -135,9 +135,8 @@ internal object StrokeRenderer {
         ink: PencilInk,
         width: Float,
         paint: Paint,
-        to: Int = grain.count,
     ) {
-        if (from >= to) return
+        if (from >= grain.count) return
         val color = ink.color
         val opaque = ink.opaque
         resetPaint(paint, color, width)
@@ -145,7 +144,7 @@ internal object StrokeRenderer {
         // Opaque flecks are also aliased: an anti-aliased edge is a ring of light greys, and
         // on the panel that ring trails the nib exactly as a grey fleck did.
         paint.isAntiAlias = !opaque
-        val n = to - from
+        val n = grain.count - from
         val pale = grain.pale
         // One pass per (darkness, paleness) actually present, found by **one** counting sort
         // over the flecks — never a scan per pair. A flank's flecks carry their tone in their

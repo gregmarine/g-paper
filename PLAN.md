@@ -3032,21 +3032,6 @@ denser, darker flank?" — **paler flecks at the point's density.**
   `drawPencilFlecks` scanned the batch once per (darkness, paleness) pair — 1 536 scans over a
   pen-up batch of hundreds of thousands of flecks, on the main thread. Now one counting sort
   over the batch and one `drawPoints` per pair present. 0.1.53 republished.
-- **Second walk — "still very laggy. Is it doing the dithering thing while drawing?"** Yes, as it
-  always did, per batch rect; the device log (`live graphite:` lines) says why it now hurt.
-  *Before* Phase 38 the sparse flank already spent ~85 % of a core live (Manta: 2 534 events,
-  grain 3 717 ms + tone 1 840 ms over a 6.7 s stroke — ~3 µs a **site**, and the flank tests 125
-  sites per px whether one in five or one in two catches). Phase 38's six-fold flecks tipped it
-  over: the input queue backed up, 24 coalesced events carried the whole stroke, each with a
-  300 px bounding box mostly empty, flattened and dithered whole — 237 ms/event on the Manta,
-  787 ms on the Nomad. Two fixes: **`FLANK_STATION_STRIDE` 2** — a flank's stations stand two
-  pitches apart along the path (half the sites, half the flecks; ink kept by doubling the
-  paleness, the far lanes' along-jitter already exceeding the stride) — JVM cost test 21 → 11 ms
-  per 2 000 events, 111k → 56k flecks; and **chunked live batches** (`LIVE_CHUNK_FLECKS` 1 500)
-  — a batch is drawn, merged and posted in path-ordered runs with tight boxes, so a coalesced
-  event costs its mark, not its bounding box. Rendered against the probe CSV: grain unchanged,
-  a touch more visible speckle. 0.1.53 republished. If the walk still lags, the next lever is
-  the per-site cost itself (the two octaves of noise per site) or a worker thread for the sweep.
 
 ## Standing Open Questions (ask as they become relevant)
 
