@@ -2997,37 +2997,6 @@ closing the sketch. No longer on tool change."*
   in **one** write out of the just-rebuilt display bytes (`presentRectViaPanel`, the page present's
   body for any rect). 0.1.52 republished again.
 
-### Phase 38 — The flank's grain is the point's, in grey (post-v0.1.0)
-**Status:** 🔧 Built 2026-09-21, awaiting the user's Nomad + Manta walk · **Publishes:** 0.1.53 · branch `settle-gesture` (on top of Phase 37).
-The user's word, after living with Phase 36's band: *"it still feels like it is clumping. It
-should be the same sort of grain as a normal pencil stroke, only wider. Right now, it looks like
-charcoal instead of pencil."* Asked "paler flecks at the point's density, or black flecks and a
-denser, darker flank?" — **paler flecks at the point's density.**
-- **Diagnosis.** The point fills ~96 % of its sites; the flank made its grey by filling one site
-  in five with the same black flecks. A sparse random field of black dots clumps by chance —
-  that is charcoal — and every Phase 36 knob (tooth weight, depth, the fan, lighten) shaped the
-  sparse field rather than its sparseness.
-- **`Grain.pale`** — a byte per fleck (`PALE_STEPS` 255 = full), `null` on every full-ink grain,
-  so round-lead grains and every flank below its threshold are bit for bit what they were.
-  `Grain.paleOf(i)`; `Sink.add(…, paleStep)` allocates the array on the first pale fleck.
-- **The rule** (`deposit`, `tapStrip`): `tone = skate × lean` (the strip's lightening);
-  `sites = cover + (cover / tone − cover) × spread`; `pale = cover / sites`. Ink is conserved
-  site for site; at spread 0 it is exactly the old `cover` at full ink. **The barrel-end fall
-  stays in the sites** — carried in tone alone it left a wall of pale flecks at the far edge
-  (first render); by density it feathers as it did.
-- **Renderers.** `StrokeRenderer.drawPencilFlecks` lays one pass per (darkness, paleness),
-  alpha × `pale/255` on opaque and graded inks alike — the Supernote bake and live path go
-  through it, so the mask carries pale alpha, dithers live, settles in tone (0.1.48). Phase 28's
-  "tone as dot count, never as shade" is amended for the flank: the display model it protected
-  no longer needs it. The harnesses' `draw` and every grain comparator read `paleOf`.
-- **`FLANK_LIGHTEN` 0.84 → 0.70**, now an alpha: rendered both ways from the Manta probe CSV
-  (`FlankRenderHarness`), a pale band at 0.84 read fainter than the dots it replaced; 0.70 puts
-  one pass at fill 0.27 (dots: 0.16), a scribbled pass at 0.46 (0.31). The walk's knob.
-- **`MAX_FLECKS` 400 000 → 1 000 000:** a filled band lays ~45 flecks/px and the hand's recorded
-  passes run to 9 000 px; 400 000 cut the last third of `flat-1` off. 13 B/fleck, transient.
-- The flank test measures grey by ink (Σ pale) and asserts the band's site density is the
-  point's (> 0.7×). Core 292 green.
-
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

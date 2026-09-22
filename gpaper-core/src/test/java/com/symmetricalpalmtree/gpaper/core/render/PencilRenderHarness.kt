@@ -133,7 +133,7 @@ class PencilRenderHarness {
             val alpha = GraphiteGrain.levelAlpha(level)
             for (i in 0 until grain.count) {
                 if (grain.level[i] != level) continue
-                sheet.disc(grain.xy[i * 2], grain.xy[i * 2 + 1], d, grey, grey, grey, alpha * grain.paleOf(i))
+                sheet.disc(grain.xy[i * 2], grain.xy[i * 2 + 1], d, grey, grey, grey, alpha)
             }
         }
     }

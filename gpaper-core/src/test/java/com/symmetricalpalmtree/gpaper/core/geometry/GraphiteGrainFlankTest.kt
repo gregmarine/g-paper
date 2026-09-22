@@ -54,7 +54,6 @@ class GraphiteGrainFlankTest {
             assertEquals("$what: x[$i]", a.xy[i * 2], b.xy[i * 2], 0f)
             assertEquals("$what: y[$i]", a.xy[i * 2 + 1], b.xy[i * 2 + 1], 0f)
             assertEquals("$what: level[$i]", a.level[i], b.level[i])
-            assertEquals("$what: pale[$i]", a.paleOf(i), b.paleOf(i), 0f)
         }
     }
 
@@ -153,17 +152,11 @@ class GraphiteGrainFlankTest {
 
     @Test
     fun `the flank pales as it widens, and stays grey however hard it is pressed`() {
-        // Ink per unit of paper, which is what "grey" means here. Since Phase 38 the flank
-        // fills its sites at the tip's density and carries the tone in each fleck's
-        // paleness, so a fleck counts for its ink and not for one.
-        fun ink(g: GraphiteGrain.Grain): Float {
-            var t = 0f
-            for (i in 0 until g.count) t += g.paleOf(i)
-            return t
-        }
+        // Coverage per unit of paper, which is what "grey" means here — a mark built out of
+        // black flecks is as dark as the fraction of the sheet they cover.
         fun perArea(g: GraphiteGrain.Grain): Float {
             val (lo, hi) = band(g)
-            return ink(g) / ((hi - lo + 1f) * 300f)
+            return g.count / ((hi - lo + 1f) * 300f)
         }
         val uprightHard = GraphiteGrain.of(mark(0f, 90f, pressure = 1f), lead, 5, lead = flank)
         val flankHard = GraphiteGrain.of(mark(60f, 90f, pressure = 1f), lead, 5, lead = flank)
@@ -187,17 +180,7 @@ class GraphiteGrainFlankTest {
         // to eat a light mark, and a light mark is what shading is.
         assertTrue(
             "a shading sweep should lay much more graphite in total than a hairline",
-            ink(flankHard) > 1.8f * ink(uprightHard),
-        )
-        // And the Phase 38 claim itself: the band is **filled**, not sparse — its flecks per
-        // unit of paper are the pressed point's, near enough, with the grey in their paleness.
-        val (lo, hi) = band(flankHard)
-        val (ulo, uhi) = band(uprightHard)
-        val flankSites = flankHard.count / ((hi - lo + 1f) * 300f)
-        val uprightSites = uprightHard.count / ((uhi - ulo + 1f) * 300f)
-        assertTrue(
-            "a flank's sites should be filled as densely as the point's (flank $flankSites, point $uprightSites)",
-            flankSites > 0.7f * uprightSites,
+            flankHard.count > 1.8f * uprightHard.count,
         )
     }
 
@@ -273,7 +256,7 @@ class GraphiteGrainFlankTest {
         // The cap is tested once a cross-section has landed, so a mark overshoots it by at
         // most one of them — and a flank's cross-section is the widest this file lays. Same
         // allowance the round lead's own cap test takes, for the same reason.
-        assertTrue("capped, got ${g.count}", g.count in 1..1_050_000)
+        assertTrue("capped, got ${g.count}", g.count in 1..420_000)
         // And an incremental sweep of the same stroke stops in the same place.
         val sweep = GraphiteGrain.begin(96f, 3, lead = flank)
         var laid = 0
