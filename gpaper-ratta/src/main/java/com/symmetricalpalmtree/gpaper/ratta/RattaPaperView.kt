@@ -2050,6 +2050,23 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * gesture finished. ([contactRubbing] decides the other half: which overlay machinery to
      * skip at the ends of the contact.)
      */
+    /**
+     * The finger smudge goes through the panel the way the rubber does (0.1.54): the blended
+     * corridor is re-flattened and written straight into the driver per batch, so the artist
+     * sees the hatch running together under the finger. A smudge does not settle what is
+     * waiting either. The screen offset is taken at [beginSmudge] — there is no stylus
+     * contact to take it at.
+     */
+    override fun onRasterSmudgedBatch(rect: Rect) {
+        if (!directRaster) return
+        toneAndPost(rect)
+    }
+
+    override fun beginSmudge() {
+        super.beginSmudge()
+        if (directRaster) getLocationOnScreen(contactScreenLoc)
+    }
+
     override fun onRasterErasedBatch(rect: Rect) {
         if (!directRaster) return
         // A rub does not settle what is waiting (Phase 37, amending 0.1.49): a corridor

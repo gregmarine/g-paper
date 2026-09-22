@@ -18,6 +18,7 @@ import android.view.View
 import com.symmetricalpalmtree.gpaper.core.PageMode
 import com.symmetricalpalmtree.gpaper.core.RasterLayer
 import com.symmetricalpalmtree.gpaper.core.RasterRubbing
+import com.symmetricalpalmtree.gpaper.core.RasterSmudging
 import com.symmetricalpalmtree.gpaper.core.PaperListener
 import com.symmetricalpalmtree.gpaper.core.RasterPatch
 import com.symmetricalpalmtree.gpaper.core.PaperView
@@ -34,6 +35,7 @@ import com.symmetricalpalmtree.gpaper.core.geometry.LassoHitTest
 import com.symmetricalpalmtree.gpaper.core.geometry.RasterDirty
 import com.symmetricalpalmtree.gpaper.core.geometry.RasterErase
 import com.symmetricalpalmtree.gpaper.core.geometry.RasterRub
+import com.symmetricalpalmtree.gpaper.core.geometry.RasterSmudge
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapEngine
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapGuide
 import com.symmetricalpalmtree.gpaper.core.geometry.TransformGeometry
@@ -130,6 +132,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
         /** Default eraser hit radius in px, mirrored from the reference engines. */
         const val DEFAULT_ERASER_RADIUS_PX = 15f
+
+        /** Default reach of the finger smudge in px (0.1.54) — about a fingertip at 300 ppi. */
+        const val DEFAULT_SMUDGE_RADIUS_PX = 32f
 
         /** Redraw at most this often while a lasso trail or drag-move sweeps. */
         const val LASSO_REFRESH_INTERVAL_MS = 60L
@@ -285,6 +290,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var rubPassRect: Rect? = null
     private var rubDirection: FloatArray? = null
     private var rubPixels = IntArray(0)
+
+    /**
+     * The finger smudge in progress (0.1.54): whether one is open, the last sample the
+     * next batch chains to, and the pixel buffer and blur scratch it reuses. See
+     * [smudgeAlong].
+     */
+    private var smudging = false
+    private var lastSmudgePoint: StrokePoint? = null
+    private var smudgePixels = IntArray(0)
+    private val smudgeScratch = RasterSmudge.Scratch()
 
     /** Content ids already reported to [PaperListener.onContentErased] this erase gesture —
      *  the host removes content asynchronously, so its hit target can outlive the report by
@@ -474,6 +489,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override var eraserRadius: Float = DEFAULT_ERASER_RADIUS_PX
     override var rasterRubbing: RasterRubbing = RasterRubbing()
+    override var smudgeRadius: Float = DEFAULT_SMUDGE_RADIUS_PX
+    override var rasterSmudging: RasterSmudging = RasterSmudging()
 
     override var pageMode: PageMode = PageMode.STROKE
         set(value) {
@@ -2056,6 +2073,76 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         rasterErasePending = rasterErasePending?.apply { union(dirty) } ?: Rect(dirty)
         throttledEraseRedraw()
     }
+
+    // ── The finger smudge (0.1.54) ───────────────────────────────────────────
+
+    override fun beginSmudge() {
+        endActiveTransform()
+        smudging = true
+        lastSmudgePoint = null
+        rasterErasePending = null
+    }
+
+    /**
+     * Blend one batch of a smudge into the graphite image — the rubber's sweep with the
+     * arithmetic swapped ([RasterSmudge] for [RasterRub]): the previous batch's last
+     * sample is chained on, the corridor's rect is announced before the pixels move and
+     * after, the engine seam hears the batch as it lands ([onRasterSmudgedBatch] for a
+     * panel the engine paints itself, then [onRasterPixelsChanged] for its second image),
+     * and the window redraw rides the eraser's cadence. The read is padded by the spread
+     * so the mean at the corridor's edge sees its true neighbours; the write and every
+     * announce are the corridor's own rect.
+     *
+     * **A smudge moves graphite and only graphite.** The ink image is never named here.
+     */
+    override fun smudgeAlong(points: List<StrokePoint>) {
+        if (!smudging || points.isEmpty()) return
+        val prev = lastSmudgePoint
+        val sweep = prev?.let { ArrayList<StrokePoint>(points.size + 1).apply { add(it); addAll(points) } } ?: points
+        lastSmudgePoint = points.last()
+        if (pageMode != PageMode.RASTER) return
+        val target = graphiteRaster ?: return
+        val dirty = RasterErase.batchRect(sweep, smudgeRadius, target.width, target.height)
+            ?.toRectOut() ?: return
+        val spread = rasterSmudging.spread
+        val read = Rect(dirty).apply {
+            inset(-spread, -spread)
+            if (!intersect(0, 0, target.width, target.height)) return
+        }
+        paperListener?.onRasterWillChange(RasterLayer.GRAPHITE, dirty)
+        val w = read.width()
+        val h = read.height()
+        if (smudgePixels.size < w * h) smudgePixels = IntArray(w * h)
+        target.getPixels(smudgePixels, 0, w, read.left, read.top, w, h)
+        val changed = RasterSmudge.smudgeBatch(
+            pixels = smudgePixels, left = read.left, top = read.top, width = w, height = h,
+            innerLeft = dirty.left, innerTop = dirty.top,
+            innerWidth = dirty.width(), innerHeight = dirty.height(),
+            sweep = sweep, radius = smudgeRadius, smudging = rasterSmudging, scratch = smudgeScratch,
+        )
+        if (changed) target.setPixels(smudgePixels, 0, w, read.left, read.top, w, h)
+        if (changed) onRasterSmudgedBatch(dirty)
+        paperListener?.onRasterChanged(RasterLayer.GRAPHITE, dirty)
+        if (changed) onRasterPixelsChanged(dirty)
+        rasterErasePending = rasterErasePending?.apply { union(dirty) } ?: Rect(dirty)
+        throttledEraseRedraw()
+    }
+
+    override fun endSmudge() {
+        if (!smudging) return
+        smudging = false
+        lastSmudgePoint = null
+        finalizeEraseRedraw()
+        paperListener?.onPenLifted()
+    }
+
+    /**
+     * One batch of a finger smudge has just landed in the graphite image over [rect] —
+     * [onRasterErasedBatch]'s twin, for the same engine and the same reason: a panel the
+     * engine paints itself shows the blend as it happens. A no-op here; it must not present
+     * anything itself.
+     */
+    protected open fun onRasterSmudgedBatch(rect: Rect) {}
 
     /** The pass mask for a page of this size, made fresh if the page changed shape. */
     private fun rubPassFor(width: Int, height: Int): ByteArray {

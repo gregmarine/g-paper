@@ -3042,6 +3042,45 @@ shading completely. Just normal pencil regardless of tilt."*
   lines if the day comes (and Phase 38's grain, from history, with it).
 - Phase 28 decision 5 stands again, this time by decision rather than by a units bug.
 
+### Phase 40 — The finger smudge (post-v0.1.0)
+**Status:** 🔧 Built 2026-09-22 · **Publishes:** 0.1.54 · branch `smudge` (off `settle-gesture`).
+The user, on the Nomad, a pencil hatch that reads as separate lines: *"a smudge tool for sketches
+… only smudge the pencil content … blend the pencil lines into more like a shading look when
+smudged. It isn't to cause clumping. As the fleck is redistributed, it's possible that the tone
+becomes a little lighter. Similar to the rub eraser. But this isn't removing … it's blending and
+redistributing. Rather than a tool that uses the stylus, … a single-finger gesture of a natural
+rub feel."*
+- **`RasterSmudge`** (pure, `geometry/`, JVM-tested): the rubber's sweep with the arithmetic
+  swapped. Under the finger every pixel is pulled toward the **mean of its neighbourhood** — a
+  separable box of `spread` px to either side on **premultiplied** channels (a transparent
+  neighbour lends emptiness, never colour) — by `strength × coverage` per batch; coverage is
+  `RasterRub.coverage` (the same feathered corridor). No pass mask: every batch pulls, because a
+  dwelling, wiggling finger *should* keep blending and a seam blended twice is not a bead the eye
+  finds. `loss` scales the alpha after the blend — the little a real smudge carries off. The
+  caller reads a rect padded by `spread` so the mean at the corridor's edge sees true neighbours,
+  and writes back the corridor's rect only; graphite the blur pushes past the corridor is the
+  other honest paling (a hatch smudged at its border pales there, as on paper).
+- **`RasterSmudging(strength 0.45, spread 6, feather 0.5, loss 0.04)`** and `smudgeRadius`
+  (32 px, a fingertip at 300 ppi) on `PaperView`; `beginSmudge()` / `smudgeAlong(points)` /
+  `endSmudge()` — **host-driven**: the engine's own touch handling starts nothing on a finger
+  (finger input is never a tool, unchanged). The sweep chains batches, announces
+  `onRasterWillChange(GRAPHITE, dirty)` → blend → `onRasterChanged(GRAPHITE, dirty)` like a rub,
+  hears itself on the engine seam (`onRasterSmudgedBatch` for a self-painting panel, then
+  `onRasterPixelsChanged` for its second image), rides the eraser's redraw cadence, and
+  `endSmudge` runs `finalizeEraseRedraw` + `onPenLifted` so a per-contact undo host closes the
+  entry with nothing new. **Graphite only** by construction: `graphiteRaster` is the one bitmap
+  the sweep names.
+- **Ratta:** `onRasterSmudgedBatch` → `toneAndPost(rect)` on a direct page (the rubber's
+  posting; a smudge settles nothing that is waiting, Phase 37's rule); `beginSmudge` takes the
+  screen offset, since there is no stylus contact to take it at.
+- **The gesture is the host's**: Notesprout SN's sketch face arms it on a one-finger
+  back-and-forth (a reversal of travel while the finger has stayed near where it landed, so a
+  swipe never arms it and it never fires a swipe), pen-gated like every finger gesture there.
+- Tests: `RasterSmudgeTest` (8) — lines run together and the gaps fill in the lines' own grey;
+  nothing beyond the finger moves; the corridor's graphite is kept when nothing is lost; loss
+  pales by the fraction asked; a bare page is a no-op; strength scales and feather softens; a
+  transparent neighbour lends no colour; the clipped box mean at an edge.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
