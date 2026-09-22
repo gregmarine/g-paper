@@ -12,6 +12,8 @@ import android.graphics.RectF
 import android.graphics.RenderNode
 import android.os.SystemClock
 import android.util.Log
+import kotlin.math.min
+import kotlin.math.abs
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
@@ -135,6 +137,15 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
         /** Default reach of the finger smudge in px (0.1.54) — about a fingertip at 300 ppi. */
         const val DEFAULT_SMUDGE_RADIUS_PX = 32f
+
+        /** A smudge sample nearer than this to the last kept one says nothing new. */
+        const val SMUDGE_THIN_PX = 2f
+
+        /** At most this many samples in one smudge batch; a longer event is several. */
+        const val SMUDGE_CHUNK_POINTS = 16
+
+        /** A smudge batch slower than this is logged — a real finger sends one every ~8 ms. */
+        const val SMUDGE_SLOW_MS = 30L
 
         /** Redraw at most this often while a lasso trail or drag-move sweeps. */
         const val LASSO_REFRESH_INTERVAL_MS = 60L
@@ -2120,6 +2131,28 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      */
     override fun smudgeAlong(points: List<StrokePoint>) {
         if (!smudging || points.isEmpty()) return
+        // Thin, then chunk. A finger dwelling on the glass reports the same spot at the
+        // digitizer's rate, and a coalesced event can carry a whole stroke of the arm; a
+        // sweep is only as long as the distance it covers, and a batch's rect is bounded so
+        // its blur and its posting to a panel are.
+        val kept = ArrayList<StrokePoint>(points.size)
+        var last = lastSmudgePoint
+        for (p in points) {
+            val l = last
+            if (l != null && abs(p.x - l.x) < SMUDGE_THIN_PX && abs(p.y - l.y) < SMUDGE_THIN_PX) continue
+            kept.add(p); last = p
+        }
+        if (kept.isEmpty()) return
+        var from = 0
+        while (from < kept.size) {
+            val to = min(kept.size, from + SMUDGE_CHUNK_POINTS)
+            smudgeChunk(kept.subList(from, to))
+            from = to
+        }
+    }
+
+    private fun smudgeChunk(points: List<StrokePoint>) {
+        val t0 = SystemClock.uptimeMillis()
         val prev = lastSmudgePoint
         val sweep = prev?.let { ArrayList<StrokePoint>(points.size + 1).apply { add(it); addAll(points) } } ?: points
         lastSmudgePoint = points.last()
@@ -2156,6 +2189,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (changed) onRasterPixelsChanged(dirty)
         rasterErasePending = rasterErasePending?.apply { union(dirty) } ?: Rect(dirty)
         throttledEraseRedraw()
+        val ms = SystemClock.uptimeMillis() - t0
+        if (ms >= SMUDGE_SLOW_MS) {
+            Log.w(TAG, "smudge batch: ${sweep.size} samples over ${dirty.width()}×${dirty.height()} took $ms ms")
+        }
     }
 
     override fun endSmudge() {

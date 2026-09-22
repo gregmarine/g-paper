@@ -46,7 +46,7 @@ class RasterSmudgeTest {
     fun `lines under the finger run together and the gaps fill from them`() {
         val px = hatch()
         val sweep = listOf(p(20f, 32f), p(44f, 32f))
-        val changed = smudge(px, sweep, RasterSmudging(strength = 1f, spread = 3, feather = 0f, loss = 0f))
+        val changed = smudge(px, sweep, RasterSmudging(strength = 1f, spread = 3, feather = 0f, loss = 0f, gamma = 1f))
         assertTrue(changed)
         // A gap pixel under the core now carries graphite, in the lines' own grey.
         assertTrue(alphaAt(px, 33, 32) > 0)
@@ -63,7 +63,7 @@ class RasterSmudgeTest {
     fun `nothing beyond the finger moves`() {
         val px = hatch()
         val before = px.copyOf()
-        smudge(px, listOf(p(32f, 32f)), RasterSmudging(strength = 1f, spread = 4, feather = 0.5f, loss = 0f))
+        smudge(px, listOf(p(32f, 32f)), RasterSmudging(strength = 1f, spread = 4, feather = 0.5f, loss = 0f, gamma = 1f))
         for (y in 0 until h) for (x in 0 until w) {
             val d = Math.hypot((x + 0.5 - 32.0), (y + 0.5 - 32.0))
             if (d >= radius) assertEquals("($x,$y)", before[y * w + x], px[y * w + x])
@@ -77,7 +77,7 @@ class RasterSmudgeTest {
         // wide so it holds exactly the graphite a mean over the lattice spreads across it.
         val x0 = 21; val x1 = 49; val y0 = 30; val y1 = 34
         val before = sum(px, x0, y0, x1, y1)
-        smudge(px, listOf(p(26f, 32f), p(38f, 32f)), RasterSmudging(strength = 1f, spread = 3, feather = 0f, loss = 0f))
+        smudge(px, listOf(p(26f, 32f), p(38f, 32f)), RasterSmudging(strength = 1f, spread = 3, feather = 0f, loss = 0f, gamma = 1f))
         val after = sum(px, x0, y0, x1, y1)
         // The hatch is periodic, so what flows out of the window is matched by what flows
         // in — within the per-pixel rounding of the mean, the total stands.
@@ -88,7 +88,7 @@ class RasterSmudgeTest {
     fun `loss pales the tone by the fraction asked`() {
         val solid = IntArray(w * h) { 0xFF505050.toInt() }
         val px = solid.copyOf()
-        smudge(px, listOf(p(32f, 32f)), RasterSmudging(strength = 1f, spread = 2, feather = 0f, loss = 0.10f))
+        smudge(px, listOf(p(32f, 32f)), RasterSmudging(strength = 1f, spread = 2, feather = 0f, loss = 0.10f, gamma = 1f))
         // Solid grey blurs to itself; only the loss shows. 255 × 0.9 = 229.5 → 230.
         assertEquals(230, alphaAt(px, 32, 32))
         assertEquals(0x50, greyAt(px, 32, 32))
@@ -106,12 +106,12 @@ class RasterSmudgeTest {
     fun `strength scales the pull and feather softens the edge`() {
         val light = hatch()
         val firm = hatch()
-        smudge(light, listOf(p(32f, 32f)), RasterSmudging(strength = 0.2f, spread = 3, feather = 0f, loss = 0f))
-        smudge(firm, listOf(p(32f, 32f)), RasterSmudging(strength = 0.8f, spread = 3, feather = 0f, loss = 0f))
+        smudge(light, listOf(p(32f, 32f)), RasterSmudging(strength = 0.2f, spread = 3, feather = 0f, loss = 0f, gamma = 1f))
+        smudge(firm, listOf(p(32f, 32f)), RasterSmudging(strength = 0.8f, spread = 3, feather = 0f, loss = 0f, gamma = 1f))
         // The gap beside the centre line fills more under the firmer pull.
         assertTrue(alphaAt(firm, 31, 32) > alphaAt(light, 31, 32))
         val feathered = hatch()
-        smudge(feathered, listOf(p(32f, 32f)), RasterSmudging(strength = 1f, spread = 3, feather = 1f, loss = 0f))
+        smudge(feathered, listOf(p(32f, 32f)), RasterSmudging(strength = 1f, spread = 3, feather = 1f, loss = 0f, gamma = 1f))
         // At the rim the pull has faded: a gap 10 px out fills less than one at the centre.
         assertTrue(alphaAt(feathered, 41, 32) < alphaAt(feathered, 31, 32))
     }
@@ -121,7 +121,7 @@ class RasterSmudgeTest {
         // One black line beside bare paper: the smudge into the gap must be black, not a
         // grey averaged with the transparent pixels' zero channels.
         val px = IntArray(w * h) { i -> if (i % w == 30) 0xFF000000.toInt() else 0 }
-        smudge(px, listOf(p(30f, 32f)), RasterSmudging(strength = 1f, spread = 2, feather = 0f, loss = 0f))
+        smudge(px, listOf(p(30f, 32f)), RasterSmudging(strength = 1f, spread = 2, feather = 0f, loss = 0f, gamma = 1f))
         assertTrue(alphaAt(px, 31, 32) > 0)
         assertEquals(0, greyAt(px, 31, 32))
     }
@@ -129,10 +129,10 @@ class RasterSmudgeTest {
     @Test
     fun `within a pass a pixel is pulled once, however many batches cross it`() {
         val once = hatch()
-        smudge(once, listOf(p(32f, 32f)), RasterSmudging(strength = 0.5f, spread = 3, feather = 0f, loss = 0f))
+        smudge(once, listOf(p(32f, 32f)), RasterSmudging(strength = 0.5f, spread = 3, feather = 0f, loss = 0f, gamma = 1f))
         val many = hatch()
         val pass = ByteArray(w * h)
-        val s = RasterSmudging(strength = 0.5f, spread = 3, feather = 0f, loss = 0f)
+        val s = RasterSmudging(strength = 0.5f, spread = 3, feather = 0f, loss = 0f, gamma = 1f)
         repeat(6) { smudge(many, listOf(p(32f, 32f)), s, pass) }
         for (x in 26..38) assertEquals("x=$x", alphaAt(once, x, 32), alphaAt(many, x, 32))
         // A fresh pass pulls again.
@@ -144,12 +144,38 @@ class RasterSmudgeTest {
     fun `loss is per pass too`() {
         val solid = IntArray(w * h) { 0xFF505050.toInt() }
         val pass = ByteArray(w * h)
-        val s = RasterSmudging(strength = 1f, spread = 2, feather = 0f, loss = 0.10f)
+        val s = RasterSmudging(strength = 1f, spread = 2, feather = 0f, loss = 0.10f, gamma = 1f)
         repeat(5) { smudge(solid, listOf(p(32f, 32f)), s, pass) }
         assertEquals(230, alphaAt(solid, 32, 32))
         RasterSmudge.clearPass(pass, w, 0, 0, w, h)
         smudge(solid, listOf(p(32f, 32f)), s, pass)
         assertEquals(207, alphaAt(solid, 32, 32))
+    }
+
+    @Test
+    fun `at gamma 2 a hatch settles to its root mean square, denser than its mean, and stays there`() {
+        // One full fleck in five: mean 51, RMS 114.
+        val px = IntArray(w * h) { i -> if (i % w % 5 == 0) 0xFF000000.toInt() else 0 }
+        val s = RasterSmudging(strength = 1f, spread = 2, feather = 0f, loss = 0f, gamma = 2f)
+        // Window 5 = one period: every pixel's neighbourhood is the same.
+        smudge(px, listOf(p(20f, 32f), p(44f, 32f)), s)
+        val a = alphaAt(px, 32, 32)
+        assertTrue("$a", a in 112..116)
+        // Even now; a fresh pass on an even field is a fixed point.
+        smudge(px, listOf(p(20f, 32f), p(44f, 32f)), s)
+        assertTrue(abs(alphaAt(px, 32, 32) - a) <= 1)
+        assertTrue(abs(alphaAt(px, 30, 32) - a) <= 1)
+    }
+
+    @Test
+    fun `the coverage field is the rubber's coverage, laid down per segment`() {
+        val sweep = listOf(p(20f, 30f), p(40f, 34f), p(38f, 20f))
+        val cov = FloatArray(w * h)
+        RasterSmudge.coverageField(cov, 0, 0, w, h, sweep, radius, 0.5f)
+        for (y in 0 until h) for (x in 0 until w) {
+            val want = RasterRub.coverage(sweep, radius, 0.5f, x + 0.5f, y + 0.5f)
+            assertEquals("($x,$y)", want, cov[y * w + x], 1e-5f)
+        }
     }
 
     @Test

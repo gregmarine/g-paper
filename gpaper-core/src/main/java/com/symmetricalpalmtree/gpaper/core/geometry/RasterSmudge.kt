@@ -2,8 +2,11 @@ package com.symmetricalpalmtree.gpaper.core.geometry
 
 import com.symmetricalpalmtree.gpaper.core.RasterSmudging
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
@@ -34,6 +37,17 @@ import kotlin.math.roundToInt
  *   pass, and each stroke of the arm blends again.
  * - **Loss** scales the alpha by `1 − loss × pull` per pass, raised the same way; colour is
  *   left as the blend made it.
+ * - **Tone** ([RasterSmudging.gamma]): the alpha a pixel is pulled toward is the mean of
+ *   its neighbours' alpha raised to `gamma`, brought back by the root — the plain mean at
+ *   1, the root mean square at 2. The colour comes from the plain premultiplied mean.
+ *
+ * **Cost is the swept area, never pixels × segments.** The coverage is laid down as a
+ * field first — each segment of the sweep visits only its own box, `radius` around it,
+ * and raises the field to its coverage — and the pixel loop reads the field. The first
+ * build tested every pixel of the batch's rect against every segment; a real finger's
+ * event carries dozens of samples, the queue coalesced behind the first slow batch, and
+ * the Nomad hung 12 s on one event (an ANR that closed the face). See
+ * `CanvasPaperView.smudgeAlong` for the thinning and chunking on the engine side.
  *
  * The caller hands over the pixels of a rect **padded by [RasterSmudging.spread]** around
  * the corridor, so the mean at the corridor's edge sees the true neighbours beyond it;
@@ -51,13 +65,64 @@ object RasterSmudge {
      */
     class Scratch {
         internal var a = IntArray(0)
+        internal var t = IntArray(0)
         internal var r = IntArray(0)
         internal var g = IntArray(0)
         internal var b = IntArray(0)
         internal var tmp = IntArray(0)
+        internal var cov = FloatArray(0)
+        internal var lutGamma = 0f
+        internal val lut = IntArray(256)
         internal fun ensure(n: Int) {
             if (a.size < n) {
-                a = IntArray(n); r = IntArray(n); g = IntArray(n); b = IntArray(n); tmp = IntArray(n)
+                a = IntArray(n); t = IntArray(n); r = IntArray(n); g = IntArray(n); b = IntArray(n)
+                tmp = IntArray(n); cov = FloatArray(n)
+            }
+        }
+        /** `alpha^gamma`, scaled to [TONE_SCALE], one entry per alpha. */
+        internal fun toneLut(gamma: Float): IntArray {
+            if (lutGamma != gamma) {
+                for (i in 0..255) lut[i] = ((i / 255f).toDouble().pow(gamma.toDouble()) * TONE_SCALE).roundToInt()
+                lutGamma = gamma
+            }
+            return lut
+        }
+    }
+
+    /** The tone plane's full-scale value: 4095, so a 129 × 129 window's sum still fits an Int. */
+    const val TONE_SCALE = 4095
+
+    /**
+     * Lay the corridor's coverage into [cov] for the [width] × [height] rect at ([left],
+     * [top]): the rubber's coverage ([RasterRub.coverage]), but each segment visits only
+     * its own box. Pixels the sweep never nears are left at 0 — the caller clears the
+     * field over the rect first.
+     */
+    fun coverageField(
+        cov: FloatArray, left: Int, top: Int, width: Int, height: Int,
+        sweep: List<StrokePoint>, radius: Float, feather: Float,
+    ) {
+        if (sweep.isEmpty() || radius <= 0f) return
+        val core = radius * (1f - feather)
+        val band = radius - core
+        val n = if (sweep.size == 1) 1 else sweep.size - 1
+        for (i in 0 until n) {
+            val a = sweep[i]
+            val b = if (sweep.size == 1) a else sweep[i + 1]
+            val x0 = max(left, floor(min(a.x, b.x) - radius).toInt())
+            val x1 = min(left + width - 1, ceil(max(a.x, b.x) + radius).toInt())
+            val y0 = max(top, floor(min(a.y, b.y) - radius).toInt())
+            val y1 = min(top + height - 1, ceil(max(a.y, b.y) + radius).toInt())
+            for (y in y0..y1) {
+                val py = y + 0.5f
+                val row = (y - top) * width
+                for (x in x0..x1) {
+                    val d = Geometry.distancePointToSegment(x + 0.5f, py, a.x, a.y, b.x, b.y)
+                    if (d >= radius) continue
+                    val c = if (d <= core || band <= 0f) 1f else (radius - d) / band
+                    val k = row + (x - left)
+                    if (c > cov[k]) cov[k] = c
+                }
             }
         }
     }
@@ -96,30 +161,36 @@ object RasterSmudge {
         if (sweep.isEmpty() || smudging.strength <= 0f || width <= 0 || height <= 0) return false
         val n = width * height
         scratch.ensure(n)
-        val pa = scratch.a; val pr = scratch.r; val pg = scratch.g; val pb = scratch.b
+        val pa = scratch.a; val pt = scratch.t; val pr = scratch.r; val pg = scratch.g; val pb = scratch.b
+        val lut = scratch.toneLut(smudging.gamma)
+        val invGamma = 1.0 / smudging.gamma
         // Premultiply: a transparent pixel contributes nothing but its emptiness.
         for (i in 0 until n) {
             val argb = pixels[i]
             val a = argb ushr 24
             pa[i] = a
+            pt[i] = lut[a]
             pr[i] = ((argb shr 16) and 0xFF) * a
             pg[i] = ((argb shr 8) and 0xFF) * a
             pb[i] = (argb and 0xFF) * a
         }
         val s = smudging.spread
         boxBlur(pa, scratch.tmp, width, height, s)
+        boxBlur(pt, scratch.tmp, width, height, s)
         boxBlur(pr, scratch.tmp, width, height, s)
         boxBlur(pg, scratch.tmp, width, height, s)
         boxBlur(pb, scratch.tmp, width, height, s)
+        val cov = scratch.cov
+        java.util.Arrays.fill(cov, 0, n, 0f)
+        coverageField(cov, left, top, width, height, sweep, radius, smudging.feather)
 
         var changed = false
         val rowEnd = min(innerTop + innerHeight, top + height)
         val colEnd = min(innerLeft + innerWidth, left + width)
         for (y in max(innerTop, top) until rowEnd) {
-            val py = y + 0.5f
             val row = (y - top) * width
             for (x in max(innerLeft, left) until colEnd) {
-                val c = RasterRub.coverage(sweep, radius, smudging.feather, x + 0.5f, py)
+                val c = cov[row + (x - left)]
                 if (c <= 0f) continue
                 val maskIndex = y * pageWidth + x
                 val p0 = (pass[maskIndex].toInt() and 0xFF) / 255f
@@ -132,25 +203,28 @@ object RasterSmudge {
                 val i = row + (x - left)
                 val argb = pixels[i]
                 val a0 = argb ushr 24
-                // The blurred planes are premultiplied; the mean alpha is the target.
-                val aMean = pa[i].toFloat()
-                if (a0 == 0 && aMean <= 0f) continue
-                val r0 = ((argb shr 16) and 0xFF) * a0
-                val g0 = ((argb shr 8) and 0xFF) * a0
-                val b0 = (argb and 0xFF) * a0
+                // The alpha target is the power mean of the neighbourhood's darkness; the
+                // colour target is the plain premultiplied mean's colour.
+                val aLin = pa[i].toFloat()
+                if (a0 == 0 && aLin <= 0f) continue
+                val aMean = if (smudging.gamma == 1f) aLin
+                    else (255.0 * (pt[i].toDouble() / TONE_SCALE).pow(invGamma)).toFloat()
                 val aBlend = a0 + (aMean - a0) * pull
-                val rBlend = r0 + (pr[i] - r0) * pull
-                val gBlend = g0 + (pg[i] - g0) * pull
-                val bBlend = b0 + (pb[i] - b0) * pull
                 var a1 = (aBlend * keep).roundToInt().coerceIn(0, 255)
                 if (a1 < GONE_BELOW_ALPHA) a1 = 0
                 val out = if (a1 == 0) 0 else {
-                    // Un-premultiply against the blended alpha (before the loss, which pales
-                    // the pixel without changing what colour its graphite is).
-                    val inv = 1f / max(aBlend, 1f)
-                    val r1 = (rBlend * inv).roundToInt().coerceIn(0, 255)
-                    val g1 = (gBlend * inv).roundToInt().coerceIn(0, 255)
-                    val b1 = (bBlend * inv).roundToInt().coerceIn(0, 255)
+                    // The colour: the pixel's own where it has one, moved `pull` of the way
+                    // toward the neighbourhood's (un-premultiplied) colour; a bare pixel
+                    // takes the neighbourhood's outright.
+                    val invLin = 1f / max(aLin, 1f)
+                    val rM = pr[i] * invLin; val gM = pg[i] * invLin; val bM = pb[i] * invLin
+                    val r0 = ((argb shr 16) and 0xFF).toFloat()
+                    val g0 = ((argb shr 8) and 0xFF).toFloat()
+                    val b0 = (argb and 0xFF).toFloat()
+                    val w = if (a0 == 0) 1f else pull
+                    val r1 = (r0 + (rM - r0) * w).roundToInt().coerceIn(0, 255)
+                    val g1 = (g0 + (gM - g0) * w).roundToInt().coerceIn(0, 255)
+                    val b1 = (b0 + (bM - b0) * w).roundToInt().coerceIn(0, 255)
                     (a1 shl 24) or (r1 shl 16) or (g1 shl 8) or b1
                 }
                 if (out != argb) {
