@@ -37,8 +37,10 @@ class RasterSmudgeTest {
         return s
     }
 
-    private fun smudge(px: IntArray, sweep: List<StrokePoint>, smudging: RasterSmudging) =
-        RasterSmudge.smudgeBatch(px, 0, 0, w, h, 0, 0, w, h, sweep, radius, smudging)
+    private fun smudge(
+        px: IntArray, sweep: List<StrokePoint>, smudging: RasterSmudging,
+        pass: ByteArray = ByteArray(w * h),
+    ) = RasterSmudge.smudgeBatch(px, 0, 0, w, h, 0, 0, w, h, w, pass, sweep, radius, smudging)
 
     @Test
     fun `lines under the finger run together and the gaps fill from them`() {
@@ -122,6 +124,32 @@ class RasterSmudgeTest {
         smudge(px, listOf(p(30f, 32f)), RasterSmudging(strength = 1f, spread = 2, feather = 0f, loss = 0f))
         assertTrue(alphaAt(px, 31, 32) > 0)
         assertEquals(0, greyAt(px, 31, 32))
+    }
+
+    @Test
+    fun `within a pass a pixel is pulled once, however many batches cross it`() {
+        val once = hatch()
+        smudge(once, listOf(p(32f, 32f)), RasterSmudging(strength = 0.5f, spread = 3, feather = 0f, loss = 0f))
+        val many = hatch()
+        val pass = ByteArray(w * h)
+        val s = RasterSmudging(strength = 0.5f, spread = 3, feather = 0f, loss = 0f)
+        repeat(6) { smudge(many, listOf(p(32f, 32f)), s, pass) }
+        for (x in 26..38) assertEquals("x=$x", alphaAt(once, x, 32), alphaAt(many, x, 32))
+        // A fresh pass pulls again.
+        smudge(many, listOf(p(32f, 32f)), s)
+        assertTrue(alphaAt(many, 31, 32) > alphaAt(once, 31, 32))
+    }
+
+    @Test
+    fun `loss is per pass too`() {
+        val solid = IntArray(w * h) { 0xFF505050.toInt() }
+        val pass = ByteArray(w * h)
+        val s = RasterSmudging(strength = 1f, spread = 2, feather = 0f, loss = 0.10f)
+        repeat(5) { smudge(solid, listOf(p(32f, 32f)), s, pass) }
+        assertEquals(230, alphaAt(solid, 32, 32))
+        RasterSmudge.clearPass(pass, w, 0, 0, w, h)
+        smudge(solid, listOf(p(32f, 32f)), s, pass)
+        assertEquals(207, alphaAt(solid, 32, 32))
     }
 
     @Test

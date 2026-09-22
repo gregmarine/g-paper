@@ -3043,7 +3043,7 @@ shading completely. Just normal pencil regardless of tilt."*
 - Phase 28 decision 5 stands again, this time by decision rather than by a units bug.
 
 ### Phase 40 — The finger smudge (post-v0.1.0)
-**Status:** 🔧 Built 2026-09-22 · **Publishes:** 0.1.54 · branch `smudge` (off `settle-gesture`).
+**Status:** 🔧 Built 2026-09-22, probed end-to-end on the Nomad (a debug broadcast in SN's sketch face synthesises the rub), per-pass rework the same day; the user's walk pending · **Publishes:** 0.1.54 · branch `smudge` (off `settle-gesture`).
 The user, on the Nomad, a pencil hatch that reads as separate lines: *"a smudge tool for sketches
 … only smudge the pencil content … blend the pencil lines into more like a shading look when
 smudged. It isn't to cause clumping. As the fleck is redistributed, it's possible that the tone
@@ -3054,9 +3054,11 @@ rub feel."*
   swapped. Under the finger every pixel is pulled toward the **mean of its neighbourhood** — a
   separable box of `spread` px to either side on **premultiplied** channels (a transparent
   neighbour lends emptiness, never colour) — by `strength × coverage` per batch; coverage is
-  `RasterRub.coverage` (the same feathered corridor). No pass mask: every batch pulls, because a
-  dwelling, wiggling finger *should* keep blending and a seam blended twice is not a bead the eye
-  finds. `loss` scales the alpha after the blend — the little a real smudge carries off. The
+  `RasterRub.coverage` (the same feathered corridor) — **per pass**, one stroke of the arm, on a
+  pass mask exactly as the rubber lifts: the first Nomad probe compounded the pull per batch and
+  eight strokes of the arm (240 batches) left 1 % of the tone; now a batch only raises a pixel's
+  pass value and moves it the remaining fraction toward the mean, a reversal starts the next
+  pass. `loss` scales the alpha per pass the same way — the little a real smudge carries off. The
   caller reads a rect padded by `spread` so the mean at the corridor's edge sees true neighbours,
   and writes back the corridor's rect only; graphite the blur pushes past the corridor is the
   other honest paling (a hatch smudged at its border pales there, as on paper).

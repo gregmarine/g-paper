@@ -24,11 +24,16 @@ import kotlin.math.roundToInt
  * - **Coverage** is the rubber's own ([RasterRub.coverage]): 1 within the corridor's core,
  *   falling to 0 at the radius across the feathered band.
  * - **Pull** is `strength × coverage` — the fraction of the way from the pixel's own
- *   value to its neighbourhood mean it moves in this batch. Every batch pulls; there is
- *   no pass mask, because a finger that dwells and wiggles *should* keep blending, and a
- *   seam blended twice is not a bead the eye can find the way a lift is.
- * - **Loss** scales the alpha down by `loss × pull` after the blend; colour is left as the
- *   blend made it.
+ *   value to its neighbourhood mean it moves in one **pass**. A pass is one stroke of the
+ *   arm, exactly as the rubber counts them ([RasterRub]): batches arrive every frame and
+ *   overlap under a fingertip many times over, and a pull that compounded per batch made
+ *   a slow hand or a dense digitizer blend the page away (the first Nomad probe: 240
+ *   batches for eight strokes of the arm, and 1 % of the tone left). So each pixel
+ *   carries the pass's pull so far (the pass mask) and a batch only ever raises it,
+ *   moving the pixel the *remaining* fraction toward the mean; a reversal starts a new
+ *   pass, and each stroke of the arm blends again.
+ * - **Loss** scales the alpha by `1 − loss × pull` per pass, raised the same way; colour is
+ *   left as the blend made it.
  *
  * The caller hands over the pixels of a rect **padded by [RasterSmudging.spread]** around
  * the corridor, so the mean at the corridor's edge sees the true neighbours beyond it;
@@ -61,8 +66,15 @@ object RasterSmudge {
      * Smudge one batch into [pixels] — the page's straight-alpha ARGB for the **padded**
      * rect at ([left], [top]) of [width] × [height] — writing back only inside the inner
      * rect [innerLeft], [innerTop], [innerWidth] × [innerHeight] (page coordinates, wholly
-     * within the padded one). [sweep] is the finger's polyline in page coordinates and
-     * [radius] its reach. Returns whether any pixel changed.
+     * within the padded one), and raise [pass] — the page-sized byte mask of this pass's
+     * pull so far, [pageWidth] to a row — to match. [sweep] is the finger's polyline in
+     * page coordinates and [radius] its reach. Returns whether any pixel changed.
+     *
+     * For every pixel under the finger: the pass value it should now carry is the larger
+     * of what it has and `strength × coverage`; if that is a rise from p0 to p1, the pixel
+     * moves `(p1 − p0) / (1 − p0)` of the remaining way to its neighbourhood mean — so
+     * across a pass it has moved p1 of the way in total, however many batches crossed it —
+     * and its alpha is scaled by `(1 − loss·p1) / (1 − loss·p0)`.
      */
     fun smudgeBatch(
         pixels: IntArray,
@@ -74,6 +86,8 @@ object RasterSmudge {
         innerTop: Int,
         innerWidth: Int,
         innerHeight: Int,
+        pageWidth: Int,
+        pass: ByteArray,
         sweep: List<StrokePoint>,
         radius: Float,
         smudging: RasterSmudging,
@@ -107,7 +121,14 @@ object RasterSmudge {
             for (x in max(innerLeft, left) until colEnd) {
                 val c = RasterRub.coverage(sweep, radius, smudging.feather, x + 0.5f, py)
                 if (c <= 0f) continue
-                val pull = smudging.strength * c
+                val maskIndex = y * pageWidth + x
+                val p0 = (pass[maskIndex].toInt() and 0xFF) / 255f
+                val p1 = max(p0, smudging.strength * c)
+                if (p1 <= p0 || p0 >= 1f) continue
+                pass[maskIndex] = (p1 * 255f).roundToInt().coerceIn(0, 255).toByte()
+                // The remaining fraction of the way: across the pass the pixel has moved p1.
+                val pull = (p1 - p0) / (1f - p0)
+                val keep = (1f - smudging.loss * p1) / (1f - smudging.loss * p0)
                 val i = row + (x - left)
                 val argb = pixels[i]
                 val a0 = argb ushr 24
@@ -121,7 +142,7 @@ object RasterSmudge {
                 val rBlend = r0 + (pr[i] - r0) * pull
                 val gBlend = g0 + (pg[i] - g0) * pull
                 val bBlend = b0 + (pb[i] - b0) * pull
-                var a1 = (aBlend * (1f - smudging.loss * pull)).roundToInt().coerceIn(0, 255)
+                var a1 = (aBlend * keep).roundToInt().coerceIn(0, 255)
                 if (a1 < GONE_BELOW_ALPHA) a1 = 0
                 val out = if (a1 == 0) 0 else {
                     // Un-premultiply against the blended alpha (before the loss, which pales
@@ -140,6 +161,10 @@ object RasterSmudge {
         }
         return changed
     }
+
+    /** Forget the pass over the rect at ([left], [top]) of [width] × [height]. */
+    fun clearPass(pass: ByteArray, pageWidth: Int, left: Int, top: Int, width: Int, height: Int) =
+        RasterRub.clearPass(pass, pageWidth, left, top, width, height)
 
     /**
      * In-place separable box mean of half-width [s] over a [width] × [height] plane. The

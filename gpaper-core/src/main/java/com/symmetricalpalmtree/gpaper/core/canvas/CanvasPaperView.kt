@@ -300,6 +300,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var lastSmudgePoint: StrokePoint? = null
     private var smudgePixels = IntArray(0)
     private val smudgeScratch = RasterSmudge.Scratch()
+    private var smudgePass: ByteArray? = null
+    private var smudgePassRect: Rect? = null
+    private var smudgePassWidth = 0
+    private var smudgeDirection: FloatArray? = null
 
     /** Content ids already reported to [PaperListener.onContentErased] this erase gesture —
      *  the host removes content asynchronously, so its hit target can outlive the report by
@@ -2081,13 +2085,32 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         smudging = true
         lastSmudgePoint = null
         rasterErasePending = null
+        dropSmudgePass()
+        smudgeDirection = null
+    }
+
+    /** The smudge's pass mask for a page of this size, made fresh if the page changed shape. */
+    private fun smudgePassFor(width: Int, height: Int): ByteArray {
+        val existing = smudgePass
+        if (existing != null && smudgePassWidth == width && existing.size == width * height) return existing
+        smudgePassRect = null
+        smudgePassWidth = width
+        return ByteArray(width * height).also { smudgePass = it }
+    }
+
+    /** Forget the smudge pass in progress: the next batch pulls again on top of what is there. */
+    private fun dropSmudgePass() {
+        val rect = smudgePassRect ?: return
+        smudgePass?.let { RasterSmudge.clearPass(it, smudgePassWidth, rect.left, rect.top, rect.width(), rect.height()) }
+        smudgePassRect = null
     }
 
     /**
      * Blend one batch of a smudge into the graphite image — the rubber's sweep with the
      * arithmetic swapped ([RasterSmudge] for [RasterRub]): the previous batch's last
-     * sample is chained on, the corridor's rect is announced before the pixels move and
-     * after, the engine seam hears the batch as it lands ([onRasterSmudgedBatch] for a
+     * sample is chained on, a reversal of travel ends the pass (so each stroke of the arm
+     * blends again and the batches within one never compound), the corridor's rect is
+     * announced before the pixels move and after, the engine seam hears the batch as it lands ([onRasterSmudgedBatch] for a
      * panel the engine paints itself, then [onRasterPixelsChanged] for its second image),
      * and the window redraw rides the eraser's cadence. The read is padded by the spread
      * so the mean at the corridor's edge sees its true neighbours; the write and every
@@ -2104,6 +2127,11 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         val target = graphiteRaster ?: return
         val dirty = RasterErase.batchRect(sweep, smudgeRadius, target.width, target.height)
             ?.toRectOut() ?: return
+        val pass = smudgePassFor(target.width, target.height)
+        RasterRub.direction(sweep)?.let { next ->
+            if (RasterRub.isReversal(smudgeDirection, next)) dropSmudgePass()
+            smudgeDirection = next
+        }
         val spread = rasterSmudging.spread
         val read = Rect(dirty).apply {
             inset(-spread, -spread)
@@ -2118,8 +2146,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             pixels = smudgePixels, left = read.left, top = read.top, width = w, height = h,
             innerLeft = dirty.left, innerTop = dirty.top,
             innerWidth = dirty.width(), innerHeight = dirty.height(),
+            pageWidth = target.width, pass = pass,
             sweep = sweep, radius = smudgeRadius, smudging = rasterSmudging, scratch = smudgeScratch,
         )
+        smudgePassRect = smudgePassRect?.apply { union(dirty) } ?: Rect(dirty)
         if (changed) target.setPixels(smudgePixels, 0, w, read.left, read.top, w, h)
         if (changed) onRasterSmudgedBatch(dirty)
         paperListener?.onRasterChanged(RasterLayer.GRAPHITE, dirty)
