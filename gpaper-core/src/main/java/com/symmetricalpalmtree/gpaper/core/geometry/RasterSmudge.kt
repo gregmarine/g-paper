@@ -98,6 +98,9 @@ object RasterSmudge {
     /** The tone plane's full-scale value: 4095, so a 129 × 129 window's sum still fits an Int. */
     const val TONE_SCALE = 4095
 
+    /** Only the finger's core picks graphite up — its feathered rim would read the edge's paper. */
+    const val LOAD_PICKUP_COVERAGE = 0.5f
+
     /**
      * The graphite on the finger across one contact: its tone as an alpha (0..255) and its
      * colour. Fresh at each [reset]; [smudgeBatch] decays and tops it up.
@@ -217,22 +220,24 @@ object RasterSmudge {
         val rowEnd = min(innerTop + innerHeight, top + height)
         val colEnd = min(innerLeft + innerWidth, left + width)
 
-        // The finger's load: decay it by the travel, then top it up to the corridor's tone
-        // (the power mean over the covered pixels) where that is darker, taking the
-        // corridor's colour with it.
+        // The finger's load: decay it by the travel, then top it up to the darkest local
+        // tone under the finger's core — a finger picks up where it touches graphite, and
+        // the corridor's average would be watered down by the bare paper beside a mark —
+        // taking the corridor's colour with it.
         if (smudging.carry > 0f) load.alpha *= exp(-travel(sweep) / smudging.carry) else load.alpha = 0f
         run {
-            var sumT = 0.0; var sumA = 0.0; var sumR = 0.0; var sumG = 0.0; var sumB = 0.0; var cnt = 0
+            var maxT = 0; var sumA = 0.0; var sumR = 0.0; var sumG = 0.0; var sumB = 0.0
             for (y in max(innerTop, top) until rowEnd) {
                 val row = (y - top) * width
                 for (x in max(innerLeft, left) until colEnd) {
                     val i = row + (x - left)
-                    if (cov[i] <= 0f) continue
-                    sumT += pt[i]; sumA += pa[i]; sumR += pr[i]; sumG += pg[i]; sumB += pb[i]; cnt++
+                    if (cov[i] < LOAD_PICKUP_COVERAGE) continue
+                    if (pt[i] > maxT) maxT = pt[i]
+                    sumA += pa[i]; sumR += pr[i]; sumG += pg[i]; sumB += pb[i]
                 }
             }
-            if (cnt > 0) {
-                val tone = (255.0 * (sumT / cnt / TONE_SCALE).pow(invGamma)).toFloat()
+            if (maxT > 0) {
+                val tone = (255.0 * (maxT.toDouble() / TONE_SCALE).pow(invGamma)).toFloat()
                 if (tone > load.alpha) {
                     load.alpha = tone
                     if (sumA > 0.0) {

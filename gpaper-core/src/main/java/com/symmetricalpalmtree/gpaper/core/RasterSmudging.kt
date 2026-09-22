@@ -32,11 +32,12 @@ package com.symmetricalpalmtree.gpaper.core
  * [carry] and [deposit] are the graphite on the finger. A finger that crosses graphite
  * picks it up and lays it down again as it goes on, so a rub out past the edge of a mark
  * dirties the paper beyond it, fading with the distance travelled — "a gradient depletion
- * of graphite … just enough to dirty the paper under it". The load is the tone of what
- * the finger is over (its power mean); it decays by `e^(−travel / carry)` px of travel and
- * is topped back up wherever the finger crosses something darker; under the finger a
- * pixel is pulled at least to [deposit] of the load. 30 px of carry lays a tenth of the
- * load 70 px out and nothing the eye finds past 150.
+ * of graphite … just enough to dirty the paper under it". The load is the darkest local
+ * tone under the finger's core (a finger picks up where it touches graphite; the
+ * corridor's average would be watered down by the paper beside a mark); it decays by
+ * `e^(−travel / carry)` px of travel and is topped back up wherever the finger crosses
+ * something darker; under the finger a pixel is pulled at least to [deposit] of the load.
+ * 40 px of carry lays a fifth of the load 65 px out and nothing the eye finds past 200.
  */
 data class RasterSmudging(
     val strength: Float = 0.45f,
@@ -44,8 +45,8 @@ data class RasterSmudging(
     val feather: Float = 0.5f,
     val loss: Float = 0.02f,
     val gamma: Float = 3f,
-    val carry: Float = 30f,
-    val deposit: Float = 0.35f,
+    val carry: Float = 40f,
+    val deposit: Float = 0.5f,
 ) {
     init {
         require(strength in 0f..1f) { "strength must be within 0..1" }
