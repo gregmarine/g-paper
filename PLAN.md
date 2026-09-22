@@ -3058,7 +3058,19 @@ rub feel."*
   pass mask exactly as the rubber lifts: the first Nomad probe compounded the pull per batch and
   eight strokes of the arm (240 batches) left 1 % of the tone; now a batch only raises a pixel's
   pass value and moves it the remaining fraction toward the mean, a reversal starts the next
-  pass. `loss` scales the alpha per pass the same way — the little a real smudge carries off. The
+  pass. `loss` (0.02) scales the alpha per pass the same way — the little a real smudge carries off.
+  **Tone (`gamma`, default 2):** the alpha target is the mean of the neighbourhood's darkness raised
+  to `gamma`, brought back by the root — the plain mean at 1 (ink conserved), the RMS at 2. The
+  user's first hand walk: *"it looks like it is removing it"* — the pencil lays sparse dark flecks
+  and the eye reads the hatch by them, so their plain mean spread evenly reads as a wash; real
+  smudged graphite reads denser. At gamma 2 a hatch one fifth covered settles near half tone,
+  and an even corridor is its own power mean, so the smudge converges and never runs away.
+  **Cost is the swept area:** the coverage is a field laid down per segment over its own box
+  (`coverageField`), the engine thins samples under 2 px apart and chunks a batch at 16
+  (`SMUDGE_THIN_PX`, `SMUDGE_CHUNK_POINTS`) and logs any batch over 30 ms — the first build tested
+  every pixel of the rect against every segment and the user's real finger hung the Nomad 12 s on
+  one event (an ANR that closed the face). Finger-dense probe after: 3 600 samples in 5.3 s of
+  main-thread time (~1.5 ms a sample), one batch over the line. The
   caller reads a rect padded by `spread` so the mean at the corridor's edge sees true neighbours,
   and writes back the corridor's rect only; graphite the blur pushes past the corridor is the
   other honest paling (a hatch smudged at its border pales there, as on paper).
