@@ -311,6 +311,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var lastSmudgePoint: StrokePoint? = null
     private var smudgePixels = IntArray(0)
     private val smudgeScratch = RasterSmudge.Scratch()
+    private val smudgeLoad = RasterSmudge.Load()
     private var smudgePass: ByteArray? = null
     private var smudgePassRect: Rect? = null
     private var smudgePassWidth = 0
@@ -2098,6 +2099,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         rasterErasePending = null
         dropSmudgePass()
         smudgeDirection = null
+        smudgeLoad.reset()
     }
 
     /** The smudge's pass mask for a page of this size, made fresh if the page changed shape. */
@@ -2181,6 +2183,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             innerWidth = dirty.width(), innerHeight = dirty.height(),
             pageWidth = target.width, pass = pass,
             sweep = sweep, radius = smudgeRadius, smudging = rasterSmudging, scratch = smudgeScratch,
+            load = smudgeLoad,
         )
         smudgePassRect = smudgePassRect?.apply { union(dirty) } ?: Rect(dirty)
         if (changed) target.setPixels(smudgePixels, 0, w, read.left, read.top, w, h)

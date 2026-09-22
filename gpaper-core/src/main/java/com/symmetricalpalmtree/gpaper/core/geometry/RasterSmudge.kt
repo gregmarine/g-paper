@@ -3,6 +3,7 @@ package com.symmetricalpalmtree.gpaper.core.geometry
 import com.symmetricalpalmtree.gpaper.core.RasterSmudging
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -40,6 +41,11 @@ import kotlin.math.roundToInt
  * - **Tone** ([RasterSmudging.gamma]): the alpha a pixel is pulled toward is the mean of
  *   its neighbours' alpha raised to `gamma`, brought back by the root — the plain mean at
  *   1, the root mean square at 2. The colour comes from the plain premultiplied mean.
+ * - **The load** ([Load], [RasterSmudging.carry] / [RasterSmudging.deposit]): what the
+ *   finger carries. Each batch it decays by the sweep's travel and is topped up to the
+ *   corridor's tone where that is darker; under the finger a pixel's target is at least
+ *   `deposit × load`, in the load's colour where the pixel has none of its own. That is
+ *   what lets a rub run out past a mark's edge and dirty the paper beyond it, fading.
  *
  * **Cost is the swept area, never pixels × segments.** The coverage is laid down as a
  * field first — each segment of the sweep visits only its own box, `radius` around it,
@@ -91,6 +97,29 @@ object RasterSmudge {
 
     /** The tone plane's full-scale value: 4095, so a 129 × 129 window's sum still fits an Int. */
     const val TONE_SCALE = 4095
+
+    /**
+     * The graphite on the finger across one contact: its tone as an alpha (0..255) and its
+     * colour. Fresh at each [reset]; [smudgeBatch] decays and tops it up.
+     */
+    class Load {
+        var alpha = 0f
+        var r = 0f
+        var g = 0f
+        var b = 0f
+        fun reset() { alpha = 0f; r = 0f; g = 0f; b = 0f }
+    }
+
+    /** The sweep's length in px. */
+    fun travel(sweep: List<StrokePoint>): Float {
+        var d = 0f
+        for (i in 1 until sweep.size) {
+            val dx = sweep[i].x - sweep[i - 1].x
+            val dy = sweep[i].y - sweep[i - 1].y
+            d += kotlin.math.sqrt(dx * dx + dy * dy)
+        }
+        return d
+    }
 
     /**
      * Lay the corridor's coverage into [cov] for the [width] × [height] rect at ([left],
@@ -157,6 +186,7 @@ object RasterSmudge {
         radius: Float,
         smudging: RasterSmudging,
         scratch: Scratch = Scratch(),
+        load: Load = Load(),
     ): Boolean {
         if (sweep.isEmpty() || smudging.strength <= 0f || width <= 0 || height <= 0) return false
         val n = width * height
@@ -184,9 +214,36 @@ object RasterSmudge {
         java.util.Arrays.fill(cov, 0, n, 0f)
         coverageField(cov, left, top, width, height, sweep, radius, smudging.feather)
 
-        var changed = false
         val rowEnd = min(innerTop + innerHeight, top + height)
         val colEnd = min(innerLeft + innerWidth, left + width)
+
+        // The finger's load: decay it by the travel, then top it up to the corridor's tone
+        // (the power mean over the covered pixels) where that is darker, taking the
+        // corridor's colour with it.
+        if (smudging.carry > 0f) load.alpha *= exp(-travel(sweep) / smudging.carry) else load.alpha = 0f
+        run {
+            var sumT = 0.0; var sumA = 0.0; var sumR = 0.0; var sumG = 0.0; var sumB = 0.0; var cnt = 0
+            for (y in max(innerTop, top) until rowEnd) {
+                val row = (y - top) * width
+                for (x in max(innerLeft, left) until colEnd) {
+                    val i = row + (x - left)
+                    if (cov[i] <= 0f) continue
+                    sumT += pt[i]; sumA += pa[i]; sumR += pr[i]; sumG += pg[i]; sumB += pb[i]; cnt++
+                }
+            }
+            if (cnt > 0) {
+                val tone = (255.0 * (sumT / cnt / TONE_SCALE).pow(invGamma)).toFloat()
+                if (tone > load.alpha) {
+                    load.alpha = tone
+                    if (sumA > 0.0) {
+                        load.r = (sumR / sumA).toFloat(); load.g = (sumG / sumA).toFloat(); load.b = (sumB / sumA).toFloat()
+                    }
+                }
+            }
+        }
+        val laid = load.alpha * smudging.deposit
+
+        var changed = false
         for (y in max(innerTop, top) until rowEnd) {
             val row = (y - top) * width
             for (x in max(innerLeft, left) until colEnd) {
@@ -206,9 +263,10 @@ object RasterSmudge {
                 // The alpha target is the power mean of the neighbourhood's darkness; the
                 // colour target is the plain premultiplied mean's colour.
                 val aLin = pa[i].toFloat()
-                if (a0 == 0 && aLin <= 0f) continue
-                val aMean = if (smudging.gamma == 1f) aLin
+                if (a0 == 0 && aLin <= 0f && laid < 1f) continue
+                var aMean = if (smudging.gamma == 1f) aLin
                     else (255.0 * (pt[i].toDouble() / TONE_SCALE).pow(invGamma)).toFloat()
+                if (laid > aMean) aMean = laid
                 val aBlend = a0 + (aMean - a0) * pull
                 var a1 = (aBlend * keep).roundToInt().coerceIn(0, 255)
                 if (a1 < GONE_BELOW_ALPHA) a1 = 0
@@ -216,8 +274,12 @@ object RasterSmudge {
                     // The colour: the pixel's own where it has one, moved `pull` of the way
                     // toward the neighbourhood's (un-premultiplied) colour; a bare pixel
                     // takes the neighbourhood's outright.
-                    val invLin = 1f / max(aLin, 1f)
-                    val rM = pr[i] * invLin; val gM = pg[i] * invLin; val bM = pb[i] * invLin
+                    // A bare neighbourhood has no colour to give: the load's, then.
+                    val rM: Float; val gM: Float; val bM: Float
+                    if (aLin > 0f) {
+                        val invLin = 1f / aLin
+                        rM = pr[i] * invLin; gM = pg[i] * invLin; bM = pb[i] * invLin
+                    } else { rM = load.r; gM = load.g; bM = load.b }
                     val r0 = ((argb shr 16) and 0xFF).toFloat()
                     val g0 = ((argb shr 8) and 0xFF).toFloat()
                     val b0 = (argb and 0xFF).toFloat()

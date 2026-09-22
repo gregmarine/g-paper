@@ -26,14 +26,26 @@ package com.symmetricalpalmtree.gpaper.core
  * conserved exactly), 2 is the root mean square, which a hatch one fifth covered in full
  * flecks settles to at nearly half tone rather than a fifth. Once the corridor is even,
  * its power mean is itself, so further passes change nothing — the smudge converges and
- * never runs away.
+ * never runs away. The artist's second walk moved it from 2 to 3: "too light … closer to
+ * the original".
+ *
+ * [carry] and [deposit] are the graphite on the finger. A finger that crosses graphite
+ * picks it up and lays it down again as it goes on, so a rub out past the edge of a mark
+ * dirties the paper beyond it, fading with the distance travelled — "a gradient depletion
+ * of graphite … just enough to dirty the paper under it". The load is the tone of what
+ * the finger is over (its power mean); it decays by `e^(−travel / carry)` px of travel and
+ * is topped back up wherever the finger crosses something darker; under the finger a
+ * pixel is pulled at least to [deposit] of the load. 30 px of carry lays a tenth of the
+ * load 70 px out and nothing the eye finds past 150.
  */
 data class RasterSmudging(
     val strength: Float = 0.45f,
     val spread: Int = 6,
     val feather: Float = 0.5f,
     val loss: Float = 0.02f,
-    val gamma: Float = 2f,
+    val gamma: Float = 3f,
+    val carry: Float = 30f,
+    val deposit: Float = 0.35f,
 ) {
     init {
         require(strength in 0f..1f) { "strength must be within 0..1" }
@@ -41,5 +53,7 @@ data class RasterSmudging(
         require(feather in 0f..1f) { "feather must be within 0..1" }
         require(loss in 0f..1f) { "loss must be within 0..1" }
         require(gamma in 1f..4f) { "gamma must be within 1..4" }
+        require(carry >= 0f) { "carry must be 0 or more px" }
+        require(deposit in 0f..1f) { "deposit must be within 0..1" }
     }
 }
