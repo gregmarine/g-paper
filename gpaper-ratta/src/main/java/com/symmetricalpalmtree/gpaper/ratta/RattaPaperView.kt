@@ -1522,12 +1522,17 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // compositor carries the window's frame to the panel a beat later. The host's own
         // [settleDisplay] and a raster change post straight to the panel: the host calls
         // before its chrome opens, and a rub or an undo has nothing over the page.
+        //
+        // **One post, not one per run** (Phase 37's second walk — "a multi-pass repaint
+        // section by section"). A mark's bake leaves up to sixty-four runs, and a page of
+        // drawing hundreds; posted one at a time each was its own panel write and its own
+        // refresh, and the settle read as the page repainting itself in pieces. The runs'
+        // union goes to the panel in a single write out of the display bytes [regenDitherRuns]
+        // has just rebuilt — the same bytes the window is about to present, so the two agree.
         if (panel && directRaster && !contactDirect && !contactRubbing) {
-            getLocationOnScreen(contactScreenLoc)
-            for (r in runs) {
-                toneRect.set(r)
-                if (toneRect.intersect(0, 0, liveAlphaW, liveAlphaH)) toneAndPost(toneRect, settled = true)
-            }
+            toneRect.setEmpty()
+            for (r in runs) toneRect.union(r)
+            if (toneRect.intersect(0, 0, width, height)) presentRectViaPanel(toneRect)
         }
         Log.i(TAG, "settled: ${runs.size} run(s) in ${(System.nanoTime() - t0) / 1_000_000} ms")
     }
@@ -1564,37 +1569,49 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      */
     private fun presentPageViaPanel() {
         if (!PRESENT_LOADED_PAGE_VIA_PANEL) return
+        if (width <= 0 || height <= 0) return
+        pageScreenRect.set(0, 0, width, height)
+        presentRectViaPanel(pageScreenRect)
+    }
+
+    /**
+     * [presentPageViaPanel]'s body for any view rect (Phase 37): [rect]'s levels out of
+     * [ditherBytes] — the display's truth, already flattened — in one panel write. White
+     * where the page image does not reach. Never while a contact is down. [rect] is in
+     * view coordinates and is not kept.
+     */
+    private fun presentRectViaPanel(rect: Rect) {
         if (!directRaster) return
         if (contactDirect || contactRubbing) return
         val bitmap = ditherDisplay ?: return
         val bytes = ditherBytes ?: return
-        val w = width
-        val h = height
+        val w = rect.width()
+        val h = rect.height()
         if (w <= 0 || h <= 0) return
         val t0 = System.nanoTime()
         val n = w * h
         if (pageLevels.size < n) pageLevels = ByteArray(n)
         val stride = bitmap.rowBytes
-        val pageW = minOf(w, bitmap.width)
-        val pageH = minOf(h, bitmap.height)
+        val pageW = (minOf(rect.right, bitmap.width) - rect.left).coerceAtLeast(0)
+        val pageH = (minOf(rect.bottom, bitmap.height) - rect.top).coerceAtLeast(0)
         for (y in 0 until h) {
             val row = y * w
             if (y >= pageH) {
                 java.util.Arrays.fill(pageLevels, row, row + w, LEVEL_WHITE)
                 continue
             }
-            val src = y * stride
+            val src = (rect.top + y) * stride + rect.left
             for (x in 0 until pageW) {
                 pageLevels[row + x] = LEVEL_OF_COVERAGE[bytes[src + x].toInt() and 0xFF]
             }
             if (pageW < w) java.util.Arrays.fill(pageLevels, row + pageW, row + w, LEVEL_WHITE)
         }
         getLocationOnScreen(contactScreenLoc)
-        pageScreenRect.set(0, 0, w, h)
+        pageScreenRect.set(rect)
         pageScreenRect.offset(contactScreenLoc[0], contactScreenLoc[1])
         panel.post(pageScreenRect, pageLevels, w)
         val ms = (System.nanoTime() - t0) / 1_000_000
-        Log.i(TAG, "panel: page presented ${w}x$h in $ms ms")
+        Log.i(TAG, "panel: ${w}x$h presented in $ms ms")
     }
 
     /**

@@ -2991,6 +2991,11 @@ closing the sketch. No longer on tool change."*
   exists) are removed. Closing the sketch needs nothing: the notebook shows the flattened rasters.
 - **Amends** Phases 32, 33 (the door's purpose), 34 (a rub no longer settles) and 35; Phases 31 and
   34's display rule (`settled` = outside the waiting runs) stands.
+- **Second walk — one post** (*"instead of just a rebake and a simple refresh, it seems to do a
+  multi-pass repaint section by section"*): the settle posted each waiting run to the panel by
+  itself — a panel write and a refresh per run, hundreds on a drawn page. Now the runs' union goes
+  in **one** write out of the just-rebuilt display bytes (`presentRectViaPanel`, the page present's
+  body for any rect). 0.1.52 republished again.
 
 ## Standing Open Questions (ask as they become relevant)
 
