@@ -3215,7 +3215,7 @@ as one dashed line; and whether the ±1-rounding difference between a live compo
 later vector re-render ever shows as a dot flipping at a page reload.
 
 ### Phase 43 — The lasso eraser's trail is an x-stream on the direct path (post-v0.1.0)
-**Status:** 🧪 Awaiting device verification — built 2026-09-22; first Nomad walk: x's too sparse, pitch 16 → 10 px, republished · **Publishes:** 0.1.58 · branch `panel-ink` (off `main`, on top of Phase 42).
+**Status:** ✅ Complete 2026-09-22 (8faae52) — walked on the user's Nomad in Notesprout SN ("So much better. We're good now"); the first walk found the x's too sparse, pitch 16 → 10 px · **Publishes:** 0.1.58 · branch `panel-ink` (off `main`, on top of Phase 42).
 Opened on the user's word after Notesprout SN arc 49's P3 walk: *"I don't like the lasso eraser.
 It works. But the look isn't different from the lasso selecter. The Supernote lasso eraser uses
 a bunch of little x's. Can we do something similar."* Phase 42 stated the gap it left — *"both
