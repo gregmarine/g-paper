@@ -3247,6 +3247,42 @@ open loop is a stream of small x-marks, the lasso's stays the dash.
 loop shows x's under the pen on every writing face, the lasso's loop still dashes, both wipe
 clean at pen-up, the erase itself unchanged.
 
+### Phase 44 — The erase narrow phase stops being quadratic (post-v0.1.0)
+**Status:** ✅ Built 2026-09-22 · **Publishes:** 0.1.59 · branch `panel-ink` (on top of Phase 43).
+Opened by a crash on the user's Nomad during Notesprout SN arc 49's P4 walk: *"I had just drawn a
+very long squiggly white line over a bunch of writing. And was trying to undo it when that
+happened."* The ANR trace (`/data/anr`, via a bugreport — the crash buffer had nothing) put the
+main thread in `EraseHitTest.hitStrokeIds` → `Geometry.polylineWithinDistance` →
+`distanceSegmentToSegment`, called from `recognizeGesture` at the squiggle's pen-up: the
+scribble-shaped stroke was being hit-tested against the page, **every sweep segment against every
+segment of every stroke whose bounds it touched** — thousands of samples × hundreds of strokes ×
+hundreds of points, on the main thread, 15 s, and the system killed the process. Not the undo,
+not P4's code: the same walk with a black pen would have done it, the white pen only invited a
+scribble over writing.
+
+**Design (built as written)**
+- **`PolylineIndex(points, distance)`** (core, `geometry`): the sweep polyline's segments in a
+  uniform grid (cell = max(2 × tolerance, 24 px), doubled until ≤ 16 384 cells; CSR buckets in
+  flat `IntArray`s, no boxing), each segment in every cell its tolerance-inflated bounds cover.
+  `withinDistanceOf(a)` walks the other polyline's segments, visits only the cells each one's
+  bounds cover, stamps each candidate once per query segment, and measures the survivors with the
+  exact `distanceSegmentToSegment` — **the pairwise answer for every input** (the grid decides
+  what to skip, never what to hit), stopping at the first hit.
+- **`EraseHitTest.hitStrokeIds`** builds the index once per sweep and asks it per candidate
+  stroke, after the same broad phase. Every caller — the scribble gesture, the point eraser's
+  `eraseAlong`, the lasso eraser's drain — gets it; `Geometry.polylineWithinDistance` stays for
+  its tests and as the reference.
+- Tests: `PolylineIndexTest` + 4 — the pairwise rules on empty / single-point inputs; a crossing
+  with no sample near the other polyline still hits and a 10 px parallel still misses; **600
+  random polyline pairs answer exactly as the pairwise test**, twice on one index; and the
+  walk's own shape — a 4 000-sample page-wide scribble against 300 strokes of 300 points —
+  finishes in bounded time (~0.3 s on the JVM, where the pairwise walk is ~360 M pairs) with the
+  pairwise answer stroke for stroke.
+
+**Gate:** the user's Nomad walk in Notesprout SN (`:sn-screen` → 0.1.59): a long squiggle over a
+page of writing at pen-up erases at once, no hang; the point eraser and the lasso eraser
+unchanged.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

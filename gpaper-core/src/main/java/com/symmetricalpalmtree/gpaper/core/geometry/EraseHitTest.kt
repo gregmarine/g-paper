@@ -12,8 +12,11 @@ import kotlin.math.hypot
  * Two phases, per the Notesprout erase-performance rules:
  * 1. **Broad phase** — the eraser sweep's AABB, inflated by [radius][hitStrokeIds], against
  *    each stroke's precomputed [Stroke.bounds]. O(1) per stroke, rejects the vast majority.
- * 2. **Narrow phase** — polyline-to-polyline distance ([Geometry.polylineWithinDistance]),
- *    so a fast sweep that jumps clean across a stroke between two samples still hits it.
+ * 2. **Narrow phase** — polyline-to-polyline distance, so a fast sweep that jumps clean across
+ *    a stroke between two samples still hits it. Since Phase 44 the sweep is indexed once
+ *    ([PolylineIndex]) and each candidate stroke is asked against the grid: the answer is
+ *    [Geometry.polylineWithinDistance]'s exactly, at a cost that no longer multiplies the
+ *    sweep's length by the page's — a long scribble over a page of writing was a 15 s ANR.
  *
  * Stroke *width* is deliberately ignored (the eraser radius dominates in practice and this
  * matches the reference engines). Callers throttle redraws; this function only computes.
@@ -31,10 +34,11 @@ object EraseHitTest {
     ): List<String> {
         if (strokes.isEmpty() || eraserPoints.isEmpty()) return emptyList()
         val sweepBounds = Bounds.of(eraserPoints).inflated(radius)
+        val index = PolylineIndex(eraserPoints, radius)
         val hits = ArrayList<String>()
         for (stroke in strokes) {
             if (!sweepBounds.intersects(stroke.bounds)) continue
-            if (Geometry.polylineWithinDistance(stroke.points, eraserPoints, radius)) {
+            if (index.withinDistanceOf(stroke.points)) {
                 hits.add(stroke.id)
             }
         }
