@@ -234,6 +234,9 @@ internal object DitherFlatten {
      */
     private val LIMIT = IntArray(256) { 512 * Dither.shade(it) }
 
+    /** `0xFFFFFFFF` — an opaque white pixel, the one [band] can answer without flattening. */
+    private const val OPAQUE_WHITE = -1
+
     /**
      * Flatten and dither a whole band of the page: `[x0, x0 + w) × [y0, y0 + h)` in page
      * coordinates, into [out] as [inked] where the pixel dithers black, [blank] where it
@@ -303,6 +306,15 @@ internal object DitherFlatten {
             while (x < w) {
                 val gp = if (g) graphite[src + x] else 0
                 val kp = if (k) ink[src + x] else 0
+                // Opaque white with nothing over it — most of a committed stroke page,
+                // whose base image is opaque everywhere (Phase 42) — is paper, and paper
+                // dithers blank by construction; say so without the flatten.
+                if (gp == OPAQUE_WHITE && kp == 0) {
+                    out[dst + x] = blank
+                    x++
+                    phase = (phase + 1) and (BlueNoise64.SIZE - 1)
+                    continue
+                }
                 var grey = 255
                 if ((gp or kp) ushr 24 != 0) {
                     // White paper, the graphite image over it, the ink image OVER that —

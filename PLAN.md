@@ -3119,6 +3119,101 @@ pen. On device always dithered. On export, always true tone."*
 - Notesprout SN's sketch face drops its swipe-down `settleDisplay()` binding (the door is a no-op
   on this engine; the gesture goes back to unassigned there).
 
+### Phase 42 — Ink on the panel: the stroke page goes direct on Ratta (post-v0.1.0)
+**Status:** 🧪 Built 2026-09-22, awaiting the user's Nomad walk of the demo's stroke page · **Publishes:** 0.1.56 · branch `panel-ink` (off `main`).
+Opened on the user's word for Notesprout SN arc 49 "Panel" (`apps/notesprout_sn/PANEL_INK_PLAN.md`
+§ 2 — ten decisions, P0 is this phase): the vector-ink *writing* faces get what the sketch face
+got in Phases 28–41 — app-painted live ink with the daemon off, the panel dithered, exports in
+true tone. Stroke-mode pages were left off the direct path for exactly one stated reason,
+*"there is nothing to flatten against in stroke mode"* — never latency — so this phase supplies
+the flatten base and nothing else changes shape.
+
+**Design (the plan's derived shape, built as written)**
+- **`PaperView.directInk`** — the host opt-in, false by default; every other engine ignores it.
+  `DirectGate` (pure): raster = firmware ∧ panel ∧ RASTER (unchanged); stroke = firmware ∧
+  panel ∧ STROKE ∧ directInk; `direct` = either. Everywhere "this page is ours" was asked of
+  `directRaster` — the tool push, the pen re-arm, the exclusion rects, the contact latches, the
+  eraser-radius re-arm — it now asks `direct`. The daemon is the fallback branch, every law
+  intact, when the panel refuses.
+- **The flatten base is the committed picture**: `committedPage`, a view-sized ARGB bitmap
+  (~10 MB Nomad, ~20 MB Manta — the plan's known cost; RGB_565 would halve it at 6-bit luma,
+  not taken) drawn by `super.drawCommittedContent(forDisplay = false)`, whole or clipped to a
+  rect. `flattenBase(layer)` routes every read that took the graphite image to it on a stroke
+  page (`readRaster`, `readRasterBand`); the ink image is absent. So `toneAndPost`,
+  `ditherBand`, `regenDither*` and `postRectFromDither` are **unchanged code** working on a
+  different base — and `DitherFlatten.band` gained one short cut, opaque white → blank without
+  the flatten, pinned against `coverage` pixel for pixel.
+- **The window records the dither** (`drawCommittedContent(forDisplay = true)` on a direct
+  stroke page draws `ditherDisplay` over white), so the compositor's rewrite of frame 0 is a
+  no-op — the raster page's mirror on a page that keeps its strokes. `renderToBitmap` and
+  every cover are the vector, true greys.
+- **Kept current by the change, not by the redraw.** `redrawCommitted` on a direct stroke page
+  asks `CommittedCache` (pure): current → record + invalidate; else a whole rebuild through
+  the existing `DitherCoalescer` (deferred, coalesced — the page-swap law's five redraws are
+  one render, one dither, one present, exactly as a raster load). What marks it current:
+  - `bakeAfterCommit(stroke)` — a **new core seam** (the no-arg form forwards, Onyx sees
+    nothing): the mark's `RasterDirty.along` runs (`rasterDirtyAlong` made `protected`); a
+    previewed contact composites its live layer in with `compositeLiveInto` — the raster
+    bake's own integer `SRC_OVER`, so the page holds precisely the pixels the panel showed; a
+    style not previewed re-renders its runs from the vector; then `regenDitherRuns`.
+  - `onCommittedStrokesChanged(rect)` — a **new core seam**, fired with the padded bounds of
+    strokes added (`addStrokes`) or removed (`removeStrokes`, the eraser's batch, a scribble
+    erase, a lasso erase) before their redraw: re-render the rect, dither it; and **when a
+    contact is erasing, post the rect to the panel at once** — decision 8, the stroke vanishes
+    under the tip. `strokeEraseRedrawIntervalMs` (new seam) is end-only there, as the raster
+    rubber's is.
+  - `notifyContentChanged` invalidates the cache whatever else was marked (a host removing a
+    content object mid-sweep must still cost a whole rebuild) — the one ordering
+    `CommittedCacheTest` exists for.
+- **The live pen** is Phase 29's `extendLiveInk` unchanged — `directInkStyle` admits `PEN`,
+  `BRUSH`, `CALLIGRAPHY` (the round-capped line whose segments join exactly); the pencil is not
+  previewed on a stroke page (its bake there is the vector render, a second derivation of the
+  grain, and arc 49 decision 10 offers no pencil on the writing faces) and appears at pen-up
+  with the other styles. A cancelled or gesture-consumed contact `dropLivePreview`s from the
+  committed base. The window is never invalidated mid-stroke (the mid-contact exclusion-split
+  commit is the one existing exception, as on the raster path).
+- **The lasso trail is app-painted (decision 2)**, on raster and stroke pages alike (until
+  now a direct raster page had no trail at all). `onLassoTrailExtended(points)` — a **new core
+  seam**, `onLiveStrokeExtended`'s twin, fired from the base's LASSO branch at down, move and
+  up — draws the new stretch with the base's own selection chrome (2 px black, 12/8 dash,
+  aliased) into the ink live layer and posts it; `TrailSweep` (pure) keeps the arc length so
+  each stretch's `DashPathEffect` phase continues the pattern across the join. At pen-up,
+  cancel or a tool change under it, `wipeTrail` clears the mask and re-presents the committed
+  picture under the trail's union rect in one post; the selection box is the window's and
+  follows. Both lassoes get the same dashed trail (the daemon distinguished the lasso eraser's
+  x-stream; this path does not — stated, not hidden).
+- **Every post is cut around the exclusion rects** — `PanelClip` (pure), `postLevels`, and an
+  origin-aware `EbcPanel.post` overload — because the daemon never painted inside a chrome
+  zone and a segment's padded rect up to a bar would otherwise write page pixels over the bar.
+  Applies to the raster path too (its rects are empty on the sketch face; nothing changes).
+- **No page-turn refresh (decision 3)**: the rebuild presents through the window as a raster
+  load does; `PRESENT_LOADED_PAGE_VIA_PANEL` stays false.
+- The flag's setter releases the overlay under the old rule first, then re-pushes the whole
+  tool and schedules the rebuild (on) or drops the image + dither and re-records the vector
+  (off). `pageMode`, `releasePanel` and release drop the image with the dither.
+- Demo: a `Direct` toggle on the stroke page (stroke-only chrome), `DIRECT` in the status
+  head, the Ratta capability note. `docs/api.md` (surface table + the Ratta paragraph),
+  `docs/architecture.md` (the direct path's four pure helpers), `CLAUDE.md` (the standing
+  rule), 0.1.56 published to mavenLocal.
+- Tests: `DirectGateTest`, `PanelClipTest` (pixel-counted against a mask), `TrailSweepTest`
+  (shared joins, phase continuity, bounds), `CommittedCacheTest`, and the band kernel's
+  opaque-page pin. Core **306**, ratta **97**; `./gradlew test` green, `:demo:assembleDebug`
+  green. No JVM test of the `View` wiring, for the reason Phases 28/29 recorded.
+
+**Gate:** the user's Nomad walk of the demo's stroke page with `Direct` on — black pen under
+the nib and nothing moving at pen-up; lasso trail + close + the box; point eraser vanishing
+strokes under the tip; undo (host `removeStrokes`) and clear; page swap (`Swap pg` is raster —
+use Clear + write); a dense page's first render (`committed: whole page … ms`); chrome over
+the page (the notes overlay); the `Direct` toggle both ways under ink. Measure: `live ink: …
+tone N ms`, `dither: …`, `committed: whole page …`, PSS. Then SN P1.
+
+**What only a device can answer:** whether the dithered committed picture reads well where
+the window used to show anti-aliased greys — template lines, a heading's text edges — and
+whether a text-dense page's flip ghosts worse than the sketch face's (decision 3's revisit
+clause); the whole-page render's cost on a dense vector page; whether the trail's joins read
+as one dashed line; and whether the ±1-rounding difference between a live composite and a
+later vector re-render ever shows as a dot flipping at a page reload.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

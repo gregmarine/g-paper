@@ -151,6 +151,14 @@ data** — points arrive as ordinary MotionEvents, so capture is exactly the bas
   because the Manta reports itself as a Nomad in every build property.
 - Process-global ink ownership mirrors the Onyx guard; a pen-approach re-arm recovers sessions
   the daemon silently dropped during window transitions.
+- **The direct path (Phases 28–42)** — where `/dev/ebc` opens, a raster page (always) and a
+  stroke page (`directInk`) are painted by the engine itself: the live mark into a page-sized
+  alpha mask, flattened against the page images (raster) or the committed picture kept as an
+  image (`committedPage`, stroke), dithered by `DitherFlatten` and written into frame 0; the
+  window records the same dither, so the compositor's rewrite is a no-op. `DirectGate` is the
+  gate, `CommittedCache` the "is the committed image current" state a redraw consults,
+  `PanelClip` cuts every post around the exclusion rects, `TrailSweep` carries the lasso
+  trail's dash phase across segments. All four pure, JVM-tested.
 
 ## Palm rejection (shared gate)
 

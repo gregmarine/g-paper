@@ -612,7 +612,11 @@ class MainActivity : Activity() {
                 |  Two logcat lines say which behaviour you have: the
                 |  session's (GPaperRatta "panel: direct" / "panel: needle")
                 |  and the page's ("direct: pencil+pen+rubber").
-                |  Stroke-mode pages are the firmware's exactly as before.
+                |  Stroke page (0.1.56): the firmware's, unless "Direct" is on
+                |  — then the engine keeps the committed picture as an image,
+                |  shows the page dithered, and the pen, the point eraser and
+                |  the lasso trail paint /dev/ebc too ("direct: ink+eraser+
+                |  trail (stroke page)"). Exports keep true greys either way.
             """.trimMargin()
             else -> """
                 |GENERIC ENGINE
@@ -895,6 +899,7 @@ class MainActivity : Activity() {
     private lateinit var transformButton: TextView
     private lateinit var lockButton: TextView
     private lateinit var rasterButton: TextView
+    private lateinit var directButton: TextView
     private lateinit var rasterPenButton: TextView
     private var transformLocked = false
 
@@ -997,6 +1002,19 @@ class MainActivity : Activity() {
             applyTransformButtons()
         }
 
+        // The stroke page on the panel (0.1.56, Phase 42): the host opt-in, as a toggle
+        // on the stroke page only — a raster page is direct already. On Supernote with the
+        // panel open the page re-renders dithered and the live pen, the point eraser and
+        // the lasso trail go through /dev/ebc; elsewhere the flag is inert and the button
+        // only says so.
+        directButton = toolbarButton("Direct") { }
+        directButton.setOnClickListener {
+            paper.directInk = !paper.directInk
+            styleButton(directButton, selected = paper.directInk)
+            lastEvent = "directInk=${paper.directInk} (stroke page painted by the engine where the panel is open)"
+            refreshStatus()
+        }
+
         // ── Raster mode (0.1.32) ────────────────────────────────────────────
         rasterButton = toolbarButton("Raster") { toggleRaster() }
         val undoButton = toolbarButton("Undo") { rasterUndo() }
@@ -1048,14 +1066,14 @@ class MainActivity : Activity() {
 
         strokeOnlyButtons += listOf(
             lassoButton, styleButton, widthButton, colorButton,
-            smartLassoButton, scribbleButton, transformButton, lockButton,
+            smartLassoButton, scribbleButton, transformButton, lockButton, directButton,
         )
         rasterOnlyButtons += listOf(
             rasterPenButton, shadeButton, leadButton, undoButton, redoButton, swapPageButton,
             dumpButton,
         )
 
-        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, smartLassoButton, scribbleButton, clearButton, transformButton, lockButton, rasterButton, rasterPenButton, shadeButton, leadButton, undoButton, redoButton, swapPageButton, dumpButton, notesButton)) {
+        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, smartLassoButton, scribbleButton, clearButton, transformButton, lockButton, directButton, rasterButton, rasterPenButton, shadeButton, leadButton, undoButton, redoButton, swapPageButton, dumpButton, notesButton)) {
             bar.addView(b, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginEnd = dp(6) })
@@ -1157,8 +1175,9 @@ class MainActivity : Activity() {
             "engine:${paper.engineId} · RASTER $armed · undo:$rasterCursor/${rasterHistory.size} · " +
                 "penLifts:$penLifts · raw:$rawEvents"
         } else {
-            "engine:${paper.engineId} · strokes:${paper.getStrokes().size} · " +
-                "penLifts:$penLifts · raw:$rawEvents"
+            "engine:${paper.engineId} · strokes:${paper.getStrokes().size}" +
+                (if (paper.directInk) " · DIRECT" else "") +
+                " · penLifts:$penLifts · raw:$rawEvents"
         }
         status.text = "$head\n$lastEvent"
     }

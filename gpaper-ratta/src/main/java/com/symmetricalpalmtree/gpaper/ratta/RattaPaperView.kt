@@ -4,7 +4,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Point
 import android.graphics.PorterDuff
 import android.graphics.Rect
@@ -96,6 +98,17 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
          *  0…31 sweep measured that code rendering at. Independent of the ink pen's
          *  width mapping: the trail is chrome, not ink. */
         const val LASSO_TRAIL_EMR = 300
+
+        /**
+         * The app-painted lasso trail on a direct page (Phase 42, the user's decision 2):
+         * a 2 px black dashed line, 12 on / 8 off — the base's own selection chrome
+         * (`selectionPaint`), so the trail a direct page paints onto the panel is the
+         * trail every other engine draws in its window. Aliased, because the panel is
+         * dithered anyway and a crisp dash reads better than a soft one there.
+         */
+        const val TRAIL_WIDTH_PX = 2f
+        const val TRAIL_DASH_ON_PX = 12f
+        const val TRAIL_DASH_OFF_PX = 8f
 
         /**
          * Horizontal registration offsets, measured by nudge-to-null on one unit per
@@ -327,6 +340,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         get() = super.tool
         set(value) {
             val changed = super.tool != value
+            // A tool change cancels the outline under the pen (the base clears its
+            // points); the trail this view painted onto the panel goes with it.
+            if (changed && contactTrail) wipeTrail()
             super.tool = value
             // Every tool change is a handoff boundary: bake + clear FIRST, then push
             // the new tool state.
@@ -366,6 +382,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 // display list is still holding it, and the panel keeps those pixels until
                 // the host loads the page the new mode understands (see [ditherDisplay]).
                 dropDither()
+                dropCommittedPage()
                 // Anything posted against the old page goes with it: a rebuild of pixels
                 // that are gone.
                 removeCallbacks(ditherRebuild)
@@ -381,11 +398,44 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             }
         }
 
+    override var directInk: Boolean
+        get() = super.directInk
+        set(value) {
+            val changed = super.directInk != value
+            if (changed && firmware) {
+                // Strokes the overlay is still showing bake and clear under the old rule
+                // before the rule changes: once the page is ours there is no overlay to
+                // hand them off from, and once it is the daemon's again the committed
+                // image must not be what the window records.
+                releaseFirmwareOverlay()
+            }
+            super.directInk = value
+            if (!changed) return
+            if (!firmware) return
+            if (pageMode == PageMode.STROKE) {
+                if (value) {
+                    // The flatten base does not exist yet: a whole rebuild renders it,
+                    // dithers it and re-records the window off it, deferred like a load.
+                    refreshDitherDisplay()
+                } else {
+                    dropCommittedPage()
+                    dropDither()
+                    removeCallbacks(ditherRebuild)
+                    ditherCoalescer.reset()
+                    redrawCommitted() // the vector record, true greys, the daemon's page again
+                }
+            }
+            // Which thing paints the live ink changed for every tool: a full tool push,
+            // as a page-mode flip is.
+            rearmForPageMode()
+            announceDirectPath()
+        }
+
     override var eraserRadius: Float
         get() = super.eraserRadius
         set(value) {
             super.eraserRadius = value
-            if (firmware && inkOwner === this && tool == Tool.ERASER && !barrelDown) {
+            if (firmware && inkOwner === this && tool == Tool.ERASER && !barrelDown && !direct) {
                 SupernoteInk.setEraser(false, eraserEmr())
             }
         }
@@ -448,7 +498,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             // A direct raster page wants the daemon OFF, and this is the path every
             // style/colour/width change comes down — so leaving the page re-arms the needle
             // and arriving on it takes the needle away, with no tool boundary needed.
-            if (directRaster) fullScreenDisable() else applyPenToFirmware()
+            if (direct) fullScreenDisable() else applyPenToFirmware()
         }
     }
 
@@ -478,6 +528,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      */
     private fun announceDirectPath() {
         if (directRaster) Log.i(TAG, "direct: pencil+pen+rubber")
+        else if (directStroke) Log.i(TAG, "direct: ink+eraser+trail (stroke page)")
     }
 
     /**
@@ -498,7 +549,35 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * entirely.
      */
     private val directRaster: Boolean
-        get() = firmware && panel.isOpen && pageMode == PageMode.RASTER
+        get() = DirectGate.raster(firmware, panel.isOpen, pageMode)
+
+    /**
+     * Whether **this stroke page** is ours to paint (Phase 42, 0.1.56) — the host opted in
+     * ([directInk]) and the panel is open. The flatten base a stroke page lacks is made
+     * here: [committedPage], the committed picture as an image of its own, kept current
+     * by every path that changes it (see [redrawCommitted]). The daemon is full-screen-
+     * disabled across the page exactly as on a direct raster one; where the panel refused
+     * the page is the daemon's with every law intact, so a host may opt in unconditionally.
+     */
+    private val directStroke: Boolean
+        get() = DirectGate.stroke(firmware, panel.isOpen, pageMode, directInk)
+
+    /** Either direct page — the daemon off, every post ours. */
+    private val direct: Boolean
+        get() = directRaster || directStroke
+
+    /**
+     * Which styles a direct **stroke** page previews live — the pen family only: `PEN` and
+     * the two that render as it, the uniform round-capped line whose segments join exactly
+     * (see [directStyle]). The pencil is not among them here: on a stroke page its bake is
+     * the vector render, a second derivation of the grain the live layer laid, and the
+     * writing faces this path exists for offer no pencil (arc 49, decision 10). Every other
+     * style appears at pen-up, as on a direct raster page.
+     */
+    private fun directInkStyle(style: StrokeStyle): Boolean = when (style) {
+        StrokeStyle.PEN, StrokeStyle.BRUSH, StrokeStyle.CALLIGRAPHY -> true
+        else -> false
+    }
 
     /**
      * Whether a mark in [style] is one this path can **preview**, fleck by fleck or segment
@@ -535,7 +614,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             fullScreenDisable()
             return
         }
-        if (directRaster) {
+        if (direct) {
             // Atelier's arrangement: with the app painting the panel itself, the daemon must
             // not paint over it. A full-screen disable is the only "firmware off" switch
             // there is (the disable areas are screen-space), and it is issued from the same
@@ -543,12 +622,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             // armed from — so the hand-over happens wherever a tool, style, colour, width or
             // page mode changes. **Every tool** (0.1.43): the rubber shows through the panel
             // now, and the lasso's trail would otherwise be firmware ink on a page whose
-            // pixels we own. Its consequence is stated rather than hidden: a lasso outline on
-            // such a page has **no live trail at all** — the daemon that drew it is off and
-            // the base draws none while the firmware is present. The selection box still
-            // appears at pen-up. Nothing that ships uses the lasso on a raster page (the
-            // demo's raster page has none, and SN's sketch face is one tool), and giving the
-            // trail back means deciding whether overlay chrome may sit over pixels we own.
+            // pixels we own. The lasso's trail is painted by this view instead (Phase 42,
+            // [onLassoTrailExtended]) — the dashed outline posted like a stroke segment and
+            // wiped by re-presenting the committed picture under it, on a raster page and
+            // a stroke page alike. (Until 0.1.55 a lasso on a direct raster page had no
+            // live trail at all; nothing that shipped lassoed there.)
             fullScreenDisable()
             return
         }
@@ -603,16 +681,59 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
     override fun setExclusionRects(rects: List<Rect>) {
         super.setExclusionRects(rects)
+        // The same zones, as the quads every panel post is cut around ([postLevels]).
+        exclusionQuads = IntArray(rects.size * 4).also { q ->
+            for ((i, r) in rects.withIndex()) {
+                q[i * 4] = r.left; q[i * 4 + 1] = r.top; q[i * 4 + 2] = r.right; q[i * 4 + 3] = r.bottom
+            }
+        }
         // Apply live unless a full-screen disable owns the areas right now (suppressed
         // mode or held barrel) — leaving those re-applies via applyToolToFirmware.
         if (firmware && inkOwner === this && !firmwareInkSuppressed && !barrelDown) {
-            // A direct raster page owns a full-screen disable; re-sending the complement
-            // bands here would hand the daemon back the paper it is meant to be kept off.
-            if (directRaster) fullScreenDisable() else applyDisableAreas()
+            // A direct page owns a full-screen disable; re-sending the complement bands
+            // here would hand the daemon back the paper it is meant to be kept off.
+            if (direct) fullScreenDisable() else applyDisableAreas()
         }
     }
 
+    /** [exclusionRects] as `l, t, r, b` quads — what [PanelClip] cuts a post around. */
+    private var exclusionQuads = IntArray(0)
+
     // ── Deferred bake & overlay handoff ──────────────────────────────────────
+
+    /**
+     * A mark committed on a direct **stroke** page (Phase 42): lay it into [committedPage]
+     * over its runs, dither those runs, and let the window mirror — the raster path's
+     * shape, with the committed picture where the page images were.
+     *
+     * A contact this view previewed lays its live layer by the same integer `SRC_OVER`
+     * the raster bake uses ([compositeLiveInto]), so the page holds precisely the pixels
+     * the panel showed and the mirror is exact at the one moment it matters. A style this
+     * path did not preview is re-rendered from the vector over the same runs. Either way
+     * the whole-page render is not done here — the runs are the mark's ink, never its
+     * bounding box (0.1.33's rule), and the redraw that follows finds the image current.
+     */
+    override fun bakeAfterCommit(stroke: Stroke) {
+        if (!firmware || !directStroke) {
+            bakeAfterCommit()
+            return
+        }
+        val runs = rasterDirtyAlong(stroke)
+        val page = ensureCommittedPage()
+        if (page != null && runs.isNotEmpty()) {
+            val mask = if (contactDirect) liveLayer(contactLayer) else null
+            if (mask != null) {
+                for (r in runs) compositeLiveInto(page, mask, r, contactPenColor)
+            } else {
+                for (r in runs) renderCommittedPage(r)
+            }
+            // A pending whole rebuild covers these runs and will consume the mark.
+            if (!ditherCoalescer.scheduled) regenDitherRuns(runs)
+            committedCache.markCurrent()
+        }
+        redrawCommitted()
+        if (contactDirect) clearLivePreview()
+    }
 
     override fun bakeAfterCommit() {
         if (firmware && (contactDirect || directRaster)) {
@@ -645,6 +766,21 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (ditherCoalescer.deferRedraw) return
         if (!firmware) {
             super.redrawCommitted()
+            return
+        }
+        if (directStroke) {
+            // The committed image is the flatten base and the window records the dither of
+            // it, so a redraw is one of two things. A change that was laid already — a
+            // mark's runs, an erase batch, an undone stroke — left the image current
+            // ([committedCache]), and the window need only mirror it. Anything else — a
+            // load, a template, the host's own content — rebuilds the whole page, deferred
+            // and coalesced exactly as a raster load is: the page-swap law is five calls
+            // and one rebuild.
+            if (committedCache.take() && committedPage != null) {
+                if (recordCommitted()) invalidate()
+            } else if (ditherCoalescer.onWholePage() == DitherCoalescer.Action.SCHEDULE_WHOLE) {
+                post(ditherRebuild)
+            }
             return
         }
         // Every re-record bakes the whole model — pending overlay-shown strokes
@@ -698,6 +834,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      */
     override val rasterEraseRedrawIntervalMs: Long
         get() = if (directRaster) rasterEraseRedrawEndOnly else RASTER_ERASE_REDRAW_MS
+
+    /** End-only on a direct stroke page for the same reason: each erase batch is shown
+     *  on the panel as it lands ([onCommittedStrokesChanged]), and the window mirrors once
+     *  at the sweep's end. The base's cadence stands wherever the daemon previews. */
+    override val strokeEraseRedrawIntervalMs: Long
+        get() = if (directStroke) rasterEraseRedrawEndOnly else super.strokeEraseRedrawIntervalMs
 
     /**
      * `PENCIL` bakes at a constant pressure on this engine ([PENCIL_BAKE_PRESSURE], whose
@@ -1234,10 +1376,35 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 toneLevels[row + x] = LEVEL_OF_COVERAGE[coverage]
             }
         }
-        toneScreenRect.set(rect)
-        toneScreenRect.offset(contactScreenLoc[0], contactScreenLoc[1])
-        panel.post(toneScreenRect, toneLevels, w)
+        postLevels(rect, toneLevels, w)
     }
+
+    /**
+     * Put [levels] — [rect]'s pixels, [stride] to a row, in view coordinates — on the
+     * panel, **cut around the host's exclusion rects** ([PanelClip]). The daemon never
+     * painted inside a chrome zone; neither may this view, or a segment drawn up to a bar
+     * writes page pixels over the bar until the compositor next repaints it. Each piece
+     * goes out on its own with the same array, indexed from the rect's corner.
+     */
+    private fun postLevels(rect: Rect, levels: ByteArray, stride: Int) {
+        val loc = contactScreenLoc
+        if (exclusionQuads.isEmpty()) {
+            toneScreenRect.set(rect)
+            toneScreenRect.offset(loc[0], loc[1])
+            panel.post(toneScreenRect, levels, stride)
+            return
+        }
+        clipQuad[0] = rect.left; clipQuad[1] = rect.top; clipQuad[2] = rect.right; clipQuad[3] = rect.bottom
+        val pieces = PanelClip.subtract(clipQuad, exclusionQuads)
+        var i = 0
+        while (i + 3 < pieces.size) {
+            toneScreenRect.set(pieces[i] + loc[0], pieces[i + 1] + loc[1], pieces[i + 2] + loc[0], pieces[i + 3] + loc[1])
+            panel.post(toneScreenRect, levels, stride, rect.left + loc[0], rect.top + loc[1])
+            i += 4
+        }
+    }
+
+    private val clipQuad = IntArray(4)
 
     /**
      * [layer]'s pixels for [rect] into [into], zero-filled where the page image does not
@@ -1250,7 +1417,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         val w = rect.width()
         val h = rect.height()
         java.util.Arrays.fill(into, 0, w * h, 0)
-        val bitmap = rasterFor(layer) ?: return false
+        val bitmap = flattenBase(layer) ?: return false
         val left = rect.left.coerceAtLeast(0)
         val top = rect.top.coerceAtLeast(0)
         val right = rect.right.coerceAtMost(bitmap.width)
@@ -1272,7 +1439,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * a page smaller than the view — because those pixels really are blank paper.
      */
     private fun readRasterBand(layer: RasterLayer, rect: Rect, into: IntArray): Boolean {
-        val bitmap = rasterFor(layer) ?: return false
+        val bitmap = flattenBase(layer) ?: return false
         val w = rect.width()
         val h = rect.height()
         val left = rect.left.coerceAtLeast(0)
@@ -1404,6 +1571,135 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /** Whether the window is showing the dither rather than the page images themselves. */
     private val ditherDisplayed: Boolean
         get() = panel.isOpen && pageMode == PageMode.RASTER
+
+    // ── The committed picture as the flatten base (Phase 42) ─────────────────
+    //
+    // A stroke page has no page images to flatten against, which is the one reason it was
+    // left to the daemon through Phases 28–41. So on a direct stroke page the base is the
+    // **committed picture** — white, the template, the host's content, the strokes — drawn
+    // by `drawCommittedContent` itself into an image of the view's size, and everything
+    // above reads it where it read the graphite image: the live flatten under the nib
+    // ([toneAndPost]), the display dither ([ditherBand]), a rect presented from the
+    // display bytes. Ink over it composites with the same `srcOver` a pen's ink composites
+    // over graphite; the ink image is simply absent.
+    //
+    // It is kept current the way the page images are — by the change, not by a redraw:
+    // a mark composites its live layer in over its runs, an erased or undone stroke
+    // re-renders its rect from the vector, and anything without a rect re-renders the
+    // whole page in the deferred rebuild. The window's record is the dither of it, so the
+    // compositor's rewrite of frame 0 lands on the pixels already there — the raster
+    // page's mirror, on a page that keeps its strokes.
+
+    /** The committed picture, view-sized, ARGB — allocated on the first direct stroke
+     *  render, dropped with the page, the panel or the opt-out. About 10 MB on a Nomad
+     *  page: the cost of a flatten base a stroke page does not otherwise have. */
+    private var committedPage: Bitmap? = null
+    private var committedCanvas: Canvas? = null
+
+    /** Whether [committedPage] is current when a redraw arrives — see [CommittedCache]. */
+    private val committedCache = CommittedCache()
+
+    /** [committedPage] at the view's size, made fresh when the view changes shape. Null
+     *  before layout. */
+    private fun ensureCommittedPage(): Bitmap? {
+        val w = width
+        val h = height
+        if (w <= 0 || h <= 0) return null
+        val existing = committedPage
+        if (existing != null && existing.width == w && existing.height == h) return existing
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        committedPage = bitmap
+        committedCanvas = Canvas(bitmap)
+        // A fresh image is blank everywhere a caller's rect is not: whatever that caller
+        // marks, the next redraw must render the whole page.
+        committedCache.invalidate()
+        return bitmap
+    }
+
+    private fun dropCommittedPage() {
+        committedPage = null
+        committedCanvas = null
+    }
+
+    /**
+     * Render the committed picture into [committedPage] over [rect], or the whole of it
+     * when null — the base's own `drawCommittedContent`, true greys, clipped. The one
+     * place the vector page is drawn on this path; every other update of the image is a
+     * composite of a live layer ([bakeAfterCommit]).
+     */
+    private fun renderCommittedPage(rect: Rect?) {
+        if (ensureCommittedPage() == null) return
+        val canvas = committedCanvas ?: return
+        val t0 = System.nanoTime()
+        val save = canvas.save()
+        if (rect != null) canvas.clipRect(rect)
+        super.drawCommittedContent(canvas, forDisplay = false)
+        canvas.restoreToCount(save)
+        if (rect == null) {
+            Log.i(TAG, "committed: whole page ${width}x$height rendered in ${(System.nanoTime() - t0) / 1_000_000} ms")
+        }
+    }
+
+    /**
+     * What [layer] is flattened over: the page image on a raster page; on a stroke page
+     * the committed picture stands where the graphite image would, and there is no ink
+     * image. Keyed on the mode rather than on [directStroke], so a read mid-flip is
+     * consistent with itself.
+     */
+    private fun flattenBase(layer: RasterLayer): Bitmap? =
+        if (pageMode == PageMode.STROKE) {
+            if (layer == RasterLayer.GRAPHITE) committedPage else null
+        } else {
+            rasterFor(layer)
+        }
+
+    /** The flatten's extent: the page images' on a raster page, the view's on a stroke
+     *  page (the committed picture is drawn to the view, template and all). */
+    private val flattenW: Int get() = if (pageMode == PageMode.STROKE) width else rasterPageWidth
+    private val flattenH: Int get() = if (pageMode == PageMode.STROKE) height else rasterPageHeight
+
+    /**
+     * The window's picture of a direct stroke page is the dither of the committed image
+     * ([ditherDisplay]), not the vector content — so that what the compositor rewrites
+     * into frame 0 is what this view already painted there. Only for the window
+     * (`forDisplay`), and only once a rebuild has made the dither: before that, and for a
+     * cover or an export, the page draws as it is stored.
+     */
+    override fun drawCommittedContent(canvas: Canvas, forDisplay: Boolean) {
+        if (forDisplay && directStroke && committedPage != null) {
+            val dither = ditherDisplay
+            if (dither != null) {
+                canvas.drawColor(Color.WHITE)
+                canvas.drawBitmap(dither, 0f, 0f, ditherPaint)
+                return
+            }
+        }
+        super.drawCommittedContent(canvas, forDisplay)
+    }
+
+    /**
+     * Strokes were added to or removed from the committed model over [rect] and a redraw
+     * is about to follow (Phase 42): re-render that rect of the committed image from the
+     * vector, dither it, and mark the image current so the redraw only mirrors. An erase
+     * batch is the one caller whose redraw does **not** follow at once — the cadence is
+     * end-only here — so its rect goes to the panel now, under the tip: the user's
+     * decision 8, an erased stroke vanishes as the tip crosses it.
+     */
+    override fun onCommittedStrokesChanged(rect: Rect) {
+        if (!firmware || !directStroke) return
+        if (ensureCommittedPage() == null) return
+        renderCommittedPage(rect)
+        regenDither(rect)
+        committedCache.markCurrent()
+        if (contactErasing) postRectFromDither(rect)
+    }
+
+    override fun notifyContentChanged() {
+        // The host's content moved and nothing laid it: whatever else was marked, the next
+        // redraw rebuilds the whole page.
+        committedCache.invalidate()
+        super.notifyContentChanged()
+    }
 
     /**
      * Draw the raster page for [forDisplay].
@@ -1550,10 +1846,22 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  it once. */
     private val ditherRebuild = Runnable {
         if (!ditherCoalescer.takeScheduled()) return@Runnable
-        if (!ditherDisplayed) return@Runnable
+        // A change laid while this rebuild was pending was consumed by it, not by a
+        // redraw of its own: a mark left standing here would let the next unrelated
+        // redraw mirror a page it should have rebuilt.
+        committedCache.take()
+        val stroke = directStroke
+        if (!ditherDisplayed && !stroke) return@Runnable
+        // A stroke page's base is rendered here, once, before the dither reads it.
+        if (stroke) renderCommittedPage(null)
         regenDither(null)
         presentPageViaPanel()
-        redrawCommitted()
+        if (stroke) {
+            // Straight to the record: redrawCommitted would schedule another rebuild.
+            if (recordCommitted()) invalidate()
+        } else {
+            redrawCommitted()
+        }
     }
 
     /**
@@ -1590,8 +1898,19 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * view coordinates and is not kept.
      */
     private fun presentRectViaPanel(rect: Rect) {
-        if (!directRaster) return
+        if (!direct) return
         if (contactDirect || contactRubbing) return
+        postRectFromDither(rect)
+    }
+
+    /**
+     * [presentRectViaPanel] without its contact guard — for a caller that *is* the contact:
+     * an erase batch on a direct stroke page, and the trail's wipe at pen-up, both of which
+     * want the committed picture on the glass now. Reads the screen offset afresh only
+     * when no contact is down; a contact took it at ACTION_DOWN, and a mid-layout read lies.
+     */
+    private fun postRectFromDither(rect: Rect) {
+        if (!direct) return
         val bitmap = ditherDisplay ?: return
         val bytes = ditherBytes ?: return
         val w = rect.width()
@@ -1615,10 +1934,8 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             }
             if (pageW < w) java.util.Arrays.fill(pageLevels, row + pageW, row + w, LEVEL_WHITE)
         }
-        getLocationOnScreen(contactScreenLoc)
-        pageScreenRect.set(rect)
-        pageScreenRect.offset(contactScreenLoc[0], contactScreenLoc[1])
-        panel.post(pageScreenRect, pageLevels, w)
+        if (!isPenDown) getLocationOnScreen(contactScreenLoc)
+        postLevels(rect, pageLevels, w)
         val ms = (System.nanoTime() - t0) / 1_000_000
         Log.i(TAG, "panel: ${w}x$h presented in $ms ms")
     }
@@ -1817,8 +2134,8 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * array that claims to be its truth has to be blank with it.
      */
     private fun ensureDither(): Bitmap? {
-        val w = rasterPageWidth
-        val h = rasterPageHeight
+        val w = flattenW
+        val h = flattenH
         if (w <= 0 || h <= 0) return null
         val existing = ditherDisplay
         if (existing != null && ditherW == w && ditherH == h && ditherBytes != null) return existing
@@ -1847,7 +2164,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  changed rather than the page: the panel opening under a page already drawn on.
      *  Through the same deferral as a load, so the two can never both run. */
     private fun refreshDitherDisplay() {
-        if (!ditherDisplayed) return
+        if (!ditherDisplayed && !directStroke) return
         if (ditherCoalescer.onWholePage() == DitherCoalescer.Action.SCHEDULE_WHOLE) {
             post(ditherRebuild)
         }
@@ -1901,6 +2218,92 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         toneRect.set(liveRect)
         clearLivePreview()
         toneAndPost(toneRect)
+    }
+
+    // ── The lasso trail, app-painted (Phase 42, decision 2) ──────────────────
+
+    /** The outline under the pen, laid a segment at a time with its dash phase carried —
+     *  see [TrailSweep]. Null between outline contacts. */
+    private var trail: TrailSweep? = null
+
+    /** Whether this contact's outline is painted by this view (a direct page), latched at
+     *  ACTION_DOWN with the other contact latches. */
+    private var contactTrail = false
+
+    /** The trail's stroke: the base's selection chrome, aliased — the dash effect is set
+     *  per segment with that segment's phase. */
+    private val trailPaint = Paint().apply {
+        style = Paint.Style.STROKE
+        color = Color.BLACK
+        strokeWidth = TRAIL_WIDTH_PX
+        strokeCap = Paint.Cap.ROUND
+        isAntiAlias = false
+    }
+    private val trailPath = Path()
+
+    private fun beginTrail() {
+        contactTrail = true
+        trail = null
+        laidInkCount = 0
+        liveRect.setEmpty()
+        // Chrome, in black, on the ink layer — the flatten reads the colour from here.
+        contactLayer = RasterLayer.INK
+        contactPenColor = Color.BLACK
+    }
+
+    /**
+     * The outline grew: draw the new stretch — dashes continuing from where the last
+     * stretch's left off ([TrailSweep]) — into the ink live layer and show it, exactly as
+     * a pen segment is shown ([extendLiveInk]). A single first point is a dot, which is
+     * what a tap's trail is on the daemon too.
+     */
+    override fun onLassoTrailExtended(points: List<StrokePoint>) {
+        if (!contactTrail) return
+        val mask = ensureLiveLayer(RasterLayer.INK) ?: return
+        val sweep = trail ?: TrailSweep(TRAIL_DASH_ON_PX + TRAIL_DASH_OFF_PX).also { trail = it }
+        val seg = sweep.advance(points) ?: return
+        val pad = ceil(TRAIL_WIDTH_PX / 2f).toInt() + 2
+        toneRect.set(
+            floor(seg.minX).toInt() - pad,
+            floor(seg.minY).toInt() - pad,
+            ceil(seg.maxX).toInt() + pad,
+            ceil(seg.maxY).toInt() + pad,
+        )
+        if (!toneRect.intersect(0, 0, liveAlphaW, liveAlphaH)) return
+        val rect = toneRect
+        val scratch = ensureBatch(rect.width(), rect.height()) ?: return
+        val canvas = batchCanvas ?: return
+        val save = canvas.save()
+        canvas.clipRect(0, 0, rect.width(), rect.height())
+        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
+        trailPaint.pathEffect = DashPathEffect(floatArrayOf(TRAIL_DASH_ON_PX, TRAIL_DASH_OFF_PX), seg.phase)
+        if (seg.to - seg.from == 1) {
+            val p = points[seg.from]
+            canvas.drawPoint(p.x, p.y, trailPaint)
+        } else {
+            trailPath.rewind()
+            trailPath.moveTo(points[seg.from].x, points[seg.from].y)
+            for (i in seg.from + 1 until seg.to) trailPath.lineTo(points[i].x, points[i].y)
+            canvas.drawPath(trailPath, trailPaint)
+        }
+        canvas.restoreToCount(save)
+        mergeBatchIntoLive(scratch, rect, mask)
+        liveRect.union(rect)
+        toneAndPost(rect)
+    }
+
+    /** The outline is over (closed, cancelled, or the tool changed under it): drop the
+     *  trail from the live layer and put the committed picture back under it, in one
+     *  post. The selection box, if any, is the window's and follows a beat later. */
+    private fun wipeTrail() {
+        if (!contactTrail) return
+        contactTrail = false
+        trail = null
+        liveLayer(RasterLayer.INK)?.let { clearMaskRect(it, liveRect) }
+        if (!liveRect.isEmpty) postRectFromDither(Rect(liveRect))
+        liveRect.setEmpty()
+        laidInkCount = 0
     }
 
     // ── The bake IS the live layer (Phase 29) ────────────────────────────────
@@ -2390,12 +2793,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     // A direct raster page has no overlay ink anywhere on it — the daemon
                     // is disabled across the whole page — so there is nothing to flush,
                     // release or chase with a ladder for an erase contact there.
-                    contactRubbing = contactErasing && directRaster
+                    contactRubbing = contactErasing && direct
                     // The panel speaks screen coordinates and a mid-layout read lies, so
                     // every contact on a direct page takes the offset once, here — an
                     // inking one, a rubbing one, and a lasso or scribble that turns out to
                     // rub after the fact.
-                    if (directRaster) getLocationOnScreen(contactScreenLoc)
+                    if (direct) getLocationOnScreen(contactScreenLoc)
                     // Armed gesture-trace clear: normally already flushed from the
                     // hover approach (flushArmedOverlayClearOnApproach — a down-time
                     // clear pairs with a frame presented into THIS contact's ink and
@@ -2412,13 +2815,15 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     // Latched like every other contact state: what previews this mark may
                     // not change under it half way through (a host arming the pen mid-stroke
                     // would otherwise leave half a mark on the panel and half on the overlay).
-                    contactDirect = contactInking && directRaster && directStyle(penStyle)
+                    contactDirect = contactInking &&
+                        ((directRaster && directStyle(penStyle)) || (directStroke && directInkStyle(penStyle)))
                     if (contactDirect) beginLivePreview()
                     Log.i(
                         TAG,
                         "contact: direct=$contactDirect rubbing=$contactRubbing " +
                             "inking=$contactInking panel=${panel.isOpen} " +
-                            "mode=$pageMode style=$penStyle tool=$tool suppressed=$firmwareInkSuppressed",
+                            "mode=$pageMode directInk=$directInk style=$penStyle tool=$tool " +
+                            "suppressed=$firmwareInkSuppressed",
                     )
                     // The lasso eraser (0.1.28) is always an outline contact — no box, no
                     // drag; its x-trail rides the same gesture-trace ladder at lift.
@@ -2435,6 +2840,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                             contactLassoOutline = true
                         }
                     }
+                    // On a direct page the daemon that drew the dashed trail is off: this
+                    // view paints it (Phase 42, decision 2), for either lasso.
+                    if (contactLassoOutline && direct) beginTrail()
                 }
                 else -> Unit
             }
@@ -2461,8 +2869,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             } else if (contactLassoOutline) {
                 // The dashed trail (a tap paints a dash dot too) corresponds to nothing
                 // in the app layer — wipe it with the proven gesture-trace ladder. The
-                // base has already drawn the selection box by now (super ran first).
-                releaseGestureTrace()
+                // base has already drawn the selection box by now (super ran first). On a
+                // direct page the trail is this view's own pixels: re-present the
+                // committed picture under it.
+                if (contactTrail) wipeTrail() else releaseGestureTrace()
             } else if (contactLassoDrag) {
                 // Drag contact over: the base finished/cancelled the drag inside super
                 // (isSelectionDragActive is false again), so this push restores the
@@ -2632,9 +3042,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         liveAlphaH = 0
         batchCanvas = null
         batchBitmap = null
+        trail = null
+        contactTrail = false
         // No redraw: this runs at detach and at release, where the view has nothing left
         // to show anyone. The dither simply stops being what [drawRasterLayers] answers.
         dropDither()
+        dropCommittedPage()
     }
 
     override fun onAttachedToWindow() {

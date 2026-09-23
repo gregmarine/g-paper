@@ -216,8 +216,19 @@ internal class EbcPanel {
      * unioned into whatever the display thread has not sent yet. Clipped to the panel: a
      * host whose view overhangs the screen still draws, it simply shows nothing off the
      * edge.
+     *
+     * [levels] is indexed from ([originLeft], [originTop]) — the rect's own corner unless
+     * the caller says otherwise, which it does when posting one **piece** of a larger
+     * rect's levels (a post cut around a chrome zone, [PanelClip]): the piece's rect is
+     * smaller, the array is still the whole rect's.
      */
-    fun post(screenRect: Rect, levels: ByteArray, stride: Int) {
+    fun post(
+        screenRect: Rect,
+        levels: ByteArray,
+        stride: Int,
+        originLeft: Int = screenRect.left,
+        originTop: Int = screenRect.top,
+    ) {
         val m = map ?: return
         if (!open) return
         val screenW = if (rotated) panelH else panelW
@@ -228,7 +239,7 @@ internal class EbcPanel {
         val bottom = screenRect.bottom.coerceIn(0, screenH)
         if (right <= left || bottom <= top) return
         for (sy in top until bottom) {
-            val row = (sy - screenRect.top) * stride - screenRect.left
+            val row = (sy - originTop) * stride - originLeft
             for (sx in left until right) {
                 m.put(EbcGeometry.panelIndex(rotated, panelW, panelH, sx, sy), levels[row + sx])
             }

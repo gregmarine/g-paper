@@ -287,6 +287,39 @@ class DitherFlattenTest {
     }
 
     @Test
+    fun `an opaque committed page - white and all - is the per-pixel answer too`() {
+        // Phase 42's flatten base is opaque everywhere, and the band kernel answers
+        // opaque white without flattening it. That short cut must be invisible: the
+        // per-pixel rule for opaque white is blank in both display modes, and every other
+        // opaque pixel still goes the long way.
+        val w = 67
+        val h = 23
+        val page = IntArray(w * h)
+        var seed = 0x42
+        fun next(): Int {
+            seed = seed * 1103515245 + 12345
+            return seed ushr 8
+        }
+        for (i in 0 until w * h) {
+            page[i] = when (next() % 3) {
+                0 -> -1 // opaque white, most of a written page
+                1 -> 0xFF000000.toInt() or (next() and 0xFFFFFF)
+                else -> 0xFF000000.toInt() or ((next() and 0xFF) * 0x010101) // a grey
+            }
+        }
+        val none = IntArray(0)
+        for (settled in listOf(false, true)) {
+            val out = ByteArray(w * h)
+            DitherFlatten.band(page, true, none, false, 3, 5, w, h, out, 0, w, ON, OFF, settled)
+            for (y in 0 until h) for (x in 0 until w) {
+                val expected = DitherFlatten.coverage(page[y * w + x], 0, 0, 0, 0, 0, 3 + x, 5 + y, settled)
+                assertEquals("pixel ($x, $y) settled=$settled", expected.toByte(), out[y * w + x])
+                if (page[y * w + x] == -1) assertEquals(OFF, out[y * w + x])
+            }
+        }
+    }
+
+    @Test
     fun `settled marks show their true tone, live marks and unsettled ones dither`() {
         // Phases 31 and 34: a settled pixel either image covers answers 255 − luma; a live
         // mark, and anything not yet settled, is one of the two dither ends, exactly as

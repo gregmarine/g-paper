@@ -97,6 +97,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         /** Redraw at most this often while the eraser sweeps (erase-path performance rule). */
         const val ERASE_REDRAW_INTERVAL_MS = 60L
 
+        /** Slack around a changed stroke's padded bounds for [committedStrokesBounds] — the
+         *  anti-aliased rim and the rounding out, the same two px the live paths use. */
+        const val COMMITTED_CHANGE_PAD_PX = 2f
+
         /**
          * The raster eraser's own cadence (0.1.26): one frame, not 60 ms. Rubbing is
          * judged by the hand as it happens, and the artist felt the stroke-mode
@@ -519,6 +523,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             field = value
         }
 
+    /** Nothing here reads it: the base paints no panel. Supernote's engine does. */
+    override var directInk: Boolean = false
+
     override var smartLassoEnabled: Boolean = false
 
     override var scribbleEraseEnabled: Boolean = false
@@ -592,6 +599,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         }
         strokeList.addAll(strokes)
         modelChanged()
+        committedStrokesBounds(strokes)?.let { onCommittedStrokesChanged(it) }
         redrawCommitted()
     }
 
@@ -601,8 +609,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         // In raster mode there is nothing to remove by id — the objects were let go at
         // commit. A host that undoes a raster mark does it with a before-image.
         val idSet = ids as? Set<String> ?: ids.toHashSet()
+        val going = committedStrokesBounds(strokeList.filter { it.id in idSet })
         if (strokeList.removeAll { it.id in idSet }) {
             modelChanged()
+            going?.let { onCommittedStrokesChanged(it) }
             redrawCommitted()
         }
     }
@@ -972,7 +982,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * [RasterDirty.of] makes of its run, generous and page-clipped, and a short mark
      * still comes back as the single rect it always did.
      */
-    private fun rasterDirtyAlong(stroke: Stroke): List<Rect> {
+    protected fun rasterDirtyAlong(stroke: Stroke): List<Rect> {
         val w = if (pageWidth > 0) pageWidth else width
         val h = if (pageHeight > 0) pageHeight else height
         return RasterDirty.along(
@@ -984,6 +994,35 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             maxRects = RASTER_DIRTY_MAX_RECTS,
         ).map { it.toRectOut() }
     }
+
+    /**
+     * The view-space rect [strokes] cover on the committed layer, padded by each stroke's
+     * own dirty width ([rasterDirtyWidth] — a pencil reaches past its lead) plus the
+     * anti-aliased rim, clipped to the view; null when there is nothing or the view has no
+     * size. What [onCommittedStrokesChanged] announces.
+     */
+    private fun committedStrokesBounds(strokes: List<Stroke>): Rect? {
+        if (strokes.isEmpty() || width <= 0 || height <= 0) return null
+        var b: Bounds? = null
+        for (s in strokes) {
+            val padded = s.bounds.inflated(rasterDirtyWidth(s) + COMMITTED_CHANGE_PAD_PX)
+            b = b?.union(padded) ?: padded
+        }
+        val r = (b ?: return null).toRectOut()
+        return if (r.intersect(0, 0, width, height)) r else null
+    }
+
+    /**
+     * Strokes were just added to or removed from the committed model over [rect] (view
+     * coordinates, already padded and clipped), and the redraw that shows it is about to
+     * run — a mark committed by the pen excepted, which arrives through
+     * [bakeAfterCommit] with its stroke. A no-op here; it exists for an engine keeping a
+     * second image of the committed page (Supernote's direct stroke path, Phase 42), which
+     * would otherwise have to re-render the whole page for an erased stroke, and which
+     * shows an erase batch on its panel as the tip crosses rather than at the sweep's end.
+     * It must not present anything itself; its callers do that.
+     */
+    protected open fun onCommittedStrokesChanged(rect: Rect) {}
 
     // ── PaperView: template & page geometry ──────────────────────────────────
 
@@ -1166,6 +1205,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                             lassoCapturing = true
                             lassoPoints.clear()
                             lassoPoints.add(event.strokePointAt(-1))
+                            onLassoTrailExtended(lassoPoints)
                             GestureMode.LASSO
                         }
                     // The lasso eraser captures the same outline and never drags: there is
@@ -1175,6 +1215,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                         lassoCapturing = true
                         lassoPoints.clear()
                         lassoPoints.add(event.strokePointAt(-1))
+                        onLassoTrailExtended(lassoPoints)
                         GestureMode.LASSO
                     }
                     else -> GestureMode.DRAW
@@ -1205,6 +1246,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                     GestureMode.ERASE -> eraseAlong(newPoints)
                     GestureMode.LASSO -> {
                         lassoPoints.addAll(newPoints)
+                        onLassoTrailExtended(lassoPoints)
                         if (rendersLiveTrail) throttledLassoInvalidate()
                     }
                     GestureMode.DRAG -> lassoDragMove(event.x, event.y)
@@ -1242,6 +1284,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                             maybeEndSmartLassoSession()
                         } else {
                             lassoPoints.add(event.strokePointAt(-1))
+                            onLassoTrailExtended(lassoPoints)
                             val outline = lassoPoints.toList()
                             lassoPoints.clear()
                             completeLassoOutline(outline)
@@ -1647,14 +1690,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             } else {
                 compositeIntoRaster(listOf(stroke), dirty)
             }
-            bakeAfterCommit()
+            bakeAfterCommit(stroke)
             paperListener?.onStrokeCommitted(stroke)
             for (r in dirty) paperListener?.onRasterChanged(layer, r)
             return true
         }
         strokeList.add(stroke)
         modelChanged()
-        bakeAfterCommit()
+        bakeAfterCommit(stroke)
         paperListener?.onStrokeCommitted(stroke)
         return true
     }
@@ -1775,8 +1818,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 clearSelection()
             }
             if (hitIds.isNotEmpty()) {
+                val going = committedStrokesBounds(strokeList.filter { it.id in idSet })
                 strokeList.removeAll { it.id in idSet }
                 modelChanged()
+                going?.let { onCommittedStrokesChanged(it) }
             }
             // One gesture, one callback — the host has to be able to record one undo entry
             // even when the scribble took ink and content together. The content is still on
@@ -1867,6 +1912,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     /**
+     * [bakeAfterCommit] with the stroke that was just committed — the form the commit path
+     * calls (Phase 42). Forwards to the no-argument seam, so an engine overriding that one
+     * sees nothing new; an engine that needs the mark's own rect to paint its panel
+     * (Supernote's direct stroke path) overrides this one.
+     */
+    protected open fun bakeAfterCommit(stroke: Stroke) {
+        bakeAfterCommit()
+    }
+
+    /**
      * Give a device engine the chance to lay [stroke] into the raster page **itself**,
      * over the runs [dirty] names, instead of the base compositing it (Phase 29). False
      * here, and false on every engine but Supernote's direct path: the base lays the mark
@@ -1931,6 +1986,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * it, never retain it. Called on the input thread that delivered the samples.
      */
     protected open fun onLiveStrokeExtended(points: List<StrokePoint>) {}
+
+    /**
+     * The lasso outline under the pen has grown: [points] is everything captured for it so
+     * far, in order, and every call is a superset of the last until the contact ends —
+     * [onLiveStrokeExtended]'s twin for the trail (Phase 42). A no-op here; for an engine
+     * that draws neither the trail in the window ([rendersLiveTrail] false) nor through a
+     * firmware that is off — Supernote's direct path, which paints the dashed trail onto
+     * the panel itself. Same rules: read the list, never retain it; input thread.
+     */
+    protected open fun onLassoTrailExtended(points: List<StrokePoint>) {}
 
     /**
      * How `PENCIL` lays its graphite on this engine for a stroke of [color] — the stroke's own
@@ -2015,8 +2080,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             clearSelection()
         }
         if (hitIds.isNotEmpty()) {
+            val going = committedStrokesBounds(strokeList.filter { it.id in idSet })
             strokeList.removeAll { it.id in idSet }
             modelChanged()
+            going?.let { onCommittedStrokesChanged(it) }
             paperListener?.onStrokesErased(hitIds)
             throttledEraseRedraw()
         }
@@ -2271,9 +2338,18 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      */
     protected open fun onRasterErasedBatch(rect: Rect) {}
 
+    /**
+     * How often the **stroke** eraser may redraw mid-sweep, in milliseconds — the
+     * stroke-mode twin of [rasterEraseRedrawIntervalMs] (Phase 42). [ERASE_REDRAW_INTERVAL_MS]
+     * everywhere but Supernote's direct stroke path, which shows each erase batch on its
+     * panel as it lands and presents the window once, at the sweep's end
+     * ([rasterEraseRedrawEndOnly] is the sentinel there too).
+     */
+    protected open val strokeEraseRedrawIntervalMs: Long get() = ERASE_REDRAW_INTERVAL_MS
+
     private fun throttledEraseRedraw() {
         val interval = if (pageMode == PageMode.RASTER) rasterEraseRedrawIntervalMs
-                       else ERASE_REDRAW_INTERVAL_MS
+                       else strokeEraseRedrawIntervalMs
         // End-only: nothing is presented until finalizeEraseRedraw, which redraws the
         // committed layer whether or not a mid-sweep redraw ever ran. The pending
         // union goes on accumulating and is dropped there, exactly as it is when the
@@ -2603,8 +2679,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             clearSelection()
         }
         if (hitIds.isNotEmpty()) {
+            val going = committedStrokesBounds(strokeList.filter { it.id in idSet })
             strokeList.removeAll { it.id in idSet }
             modelChanged()
+            going?.let { onCommittedStrokesChanged(it) }
         }
         // One gesture, one callback. The content is still on the committed layer at this
         // point; the host removes it and calls notifyContentChanged, as for the eraser tool.
