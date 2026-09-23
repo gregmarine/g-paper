@@ -2279,7 +2279,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             if (RasterRub.isReversal(smudgeDirection, next)) dropSmudgePass()
             smudgeDirection = next
         }
-        val spread = rasterSmudging.spread
+        // A batch with no net travel smudges nothing (0.1.60) — chain the sample and go.
+        if (RasterSmudge.heading(sweep) == null) return
+        // The one-sided smear reaches 2 × spread behind a pixel: pad the read by that.
+        val spread = rasterSmudging.spread * 2
         val read = Rect(dirty).apply {
             inset(-spread, -spread)
             if (!intersect(0, 0, target.width, target.height)) return
