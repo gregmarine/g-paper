@@ -57,21 +57,24 @@ import kotlin.math.roundToInt
  *
  * **The smear follows the hand (0.1.60).** The neighbourhood is a box **turned to the
  * batch's direction of travel** — [RasterSmudging.spread] px to either side along it and
- * [RasterSmudging.across] px to either side across it ([orientedOffsets]) — so graphite is
+ * [RasterSmudging.across] px to either side across it ([lineMean]) — so graphite is
  * pushed the way the finger goes: a rub left and right runs a vertical hatch together
  * and a rub up and down along its lines only smears each line along itself. The
  * direction is the sweep's **principal axis** ([axis]) — the structure tensor of its
  * segments, so a batch that turns back on itself still reads as one line of travel
  * rather than a net displacement of nothing — and a batch with no travel (a dwell, a
- * single sample) falls back to the plain square box of 0.1.54. The oriented mean is a
- * gathered sum over a precomputed offset list, clipped at the padded rect's edge and
- * divided by what it covered, exactly as the box is.
+ * single sample) falls back to the plain square box of 0.1.54. The axis is **quantized
+ * to the lattice's four** — 0°, 45°, 90°, 135° ([quantizeAxis]) — so the mean can run
+ * **separably** as two running sums along lattice lines ([lineMean]): along the axis,
+ * then across it. A first cut gathered a precomputed offset list per pixel and cost the
+ * Nomad two to three seconds an event at `across` 4; this is O(n) whatever the reach,
+ * and a hand cannot tell a 30° streak from a 45° one under a fingertip.
  *
  * The caller hands over the pixels of a rect **padded by [RasterSmudging.spread]** around
  * the corridor, so the mean at the corridor's edge sees the true neighbours beyond it;
  * only pixels inside the corridor's own rect are written back. The square blur is a
- * separable box on running sums — O(n) in the padded area, whatever the spread; the
- * oriented one costs the offset count per pixel, (2·spread + 1)(2·across + 1) at most.
+ * separable box on running sums — O(n) in the padded area, whatever the spread — and so
+ * is the oriented one, two line passes per plane.
  */
 object RasterSmudge {
 
@@ -90,12 +93,8 @@ object RasterSmudge {
         internal var b = IntArray(0)
         internal var tmp = IntArray(0)
         internal var cov = FloatArray(0)
-        /** The oriented kernel's offsets, as (dx, dy) pairs, for the last axis asked. */
-        internal var offsets = IntArray(0)
-        internal var offsetsUx = Float.NaN
-        internal var offsetsUy = Float.NaN
-        internal var offsetsSpread = -1
-        internal var offsetsAcross = -1
+        /** One lattice line's indices for [lineMean] — `max(width, height)` long. */
+        internal var line = IntArray(0)
         internal var lutGamma = 0f
         internal val lut = IntArray(256)
         internal fun ensure(n: Int) {
@@ -103,6 +102,7 @@ object RasterSmudge {
                 a = IntArray(n); t = IntArray(n); r = IntArray(n); g = IntArray(n); b = IntArray(n)
                 tmp = IntArray(n); cov = FloatArray(n)
             }
+            if (line.size < n) line = IntArray(n)
         }
         /** `alpha^gamma`, scaled to [TONE_SCALE], one entry per alpha. */
         internal fun toneLut(gamma: Float): IntArray {
@@ -164,50 +164,75 @@ object RasterSmudge {
     }
 
     /**
-     * The (dx, dy) offsets of a box [along] px to either side of the axis ([ux], [uy]) and
-     * [across] px to either side across it, rounded to the lattice and deduplicated —
-     * flat pairs, `[dx0, dy0, dx1, dy1, …]`. Cached on [scratch] for a repeated axis.
+     * The nearest of the four lattice axes to ([ux], [uy]) — 0°, 45°, 90° or 135° — as a
+     * unit step `(sx, sy)` in `{(1,0), (1,1), (0,1), (1,-1)}`. The smear is separable only
+     * along lines the lattice can walk, and a hand cannot tell a 30° streak from a 45°
+     * one under a fingertip; a general gather cost 117 samples a pixel at the defaults and
+     * two seconds an event on the Nomad.
      */
-    internal fun orientedOffsets(scratch: Scratch, ux: Float, uy: Float, along: Int, across: Int): IntArray {
-        if (scratch.offsetsUx == ux && scratch.offsetsUy == uy &&
-            scratch.offsetsSpread == along && scratch.offsetsAcross == across) return scratch.offsets
-        val seen = HashSet<Long>()
-        val out = ArrayList<Int>((2 * along + 1) * (2 * across + 1) * 2)
-        for (i in -along..along) for (j in -across..across) {
-            val dx = (i * ux - j * uy).roundToInt()
-            val dy = (i * uy + j * ux).roundToInt()
-            if (seen.add((dx.toLong() shl 32) or (dy.toLong() and 0xFFFFFFFFL))) { out.add(dx); out.add(dy) }
+    fun quantizeAxis(ux: Float, uy: Float): IntArray {
+        // Fold to the upper half-plane (the axis has no sign), then pick by angle.
+        val x = if (uy < 0f) -ux else ux
+        val y = if (uy < 0f) -uy else uy
+        val angle = Math.toDegrees(kotlin.math.atan2(y.toDouble(), x.toDouble()))   // 0..180
+        return when {
+            angle < 22.5 || angle >= 157.5 -> intArrayOf(1, 0)
+            angle < 67.5 -> intArrayOf(1, 1)
+            angle < 112.5 -> intArrayOf(0, 1)
+            else -> intArrayOf(1, -1)
         }
-        val arr = IntArray(out.size) { out[it] }
-        scratch.offsets = arr
-        scratch.offsetsUx = ux; scratch.offsetsUy = uy
-        scratch.offsetsSpread = along; scratch.offsetsAcross = across
-        return arr
     }
 
     /**
-     * In-place mean of [plane] over the offset list [offsets] (flat (dx, dy) pairs), on a
-     * [width] × [height] plane; offsets that fall outside the plane are left out of the
-     * count, as the box's clipped window is. [tmp] receives the result and is swapped in.
+     * In-place mean of [plane] over a window of [half] samples to either side **along the
+     * lattice line** of step ([sx], [sy]) through each pixel, on a [width] × [height]
+     * plane — a running sum per line, clipped at the plane's edge and divided by what it
+     * covered, as [boxBlur] is. Every pixel lies on exactly one line of each step, so the
+     * cost is O(n) whatever [half]. [tmp] is scratch of at least `width × height`;
+     * [line] is scratch of at least `max(width, height)`.
      */
-    internal fun orientedMean(plane: IntArray, tmp: IntArray, width: Int, height: Int, offsets: IntArray) {
-        val n = offsets.size / 2
-        for (y in 0 until height) {
-            val row = y * width
-            for (x in 0 until width) {
-                var sum = 0; var count = 0
-                var k = 0
-                while (k < n) {
-                    val px = x + offsets[2 * k]
-                    val py = y + offsets[2 * k + 1]
-                    k++
-                    if (px < 0 || py < 0 || px >= width || py >= height) continue
-                    sum += plane[py * width + px]; count++
-                }
-                tmp[row + x] = if (count == 0) plane[row + x] else (sum + count / 2) / count
+    internal fun lineMean(plane: IntArray, tmp: IntArray, line: IntArray, width: Int, height: Int, sx: Int, sy: Int, half: Int) {
+        if (half <= 0) return
+        fun walk(x0: Int, y0: Int) {
+            var n = 0
+            var x = x0; var y = y0
+            while (x in 0 until width && y in 0 until height) { line[n++] = y * width + x; x += sx; y += sy }
+            if (n == 0) return
+            var sum = 0; var count = 0
+            val prime = min(half, n - 1)
+            for (i in 0..prime) { sum += plane[line[i]]; count++ }
+            for (i in 0 until n) {
+                tmp[line[i]] = (sum + count / 2) / count
+                val add = i + half + 1
+                if (add < n) { sum += plane[line[add]]; count++ }
+                val drop = i - half
+                if (drop >= 0) { sum -= plane[line[drop]]; count-- }
             }
         }
+        when {
+            sx == 1 && sy == 0 -> for (y in 0 until height) walk(0, y)
+            sx == 0 && sy == 1 -> for (x in 0 until width) walk(x, 0)
+            sx == 1 && sy == 1 -> { for (x in 0 until width) walk(x, 0); for (y in 1 until height) walk(0, y) }
+            else -> { for (x in 0 until width) walk(x, height - 1); for (y in 0 until height - 1) walk(0, y) }
+        }
         System.arraycopy(tmp, 0, plane, 0, width * height)
+    }
+
+    /**
+     * The oriented mean, separably: the mean along the quantized axis ([along] px to
+     * either side) and then across it ([across] px to either side). On a diagonal the
+     * lattice step is √2 px, so the sample counts are scaled to keep the reach in px.
+     */
+    internal fun orientedMean(plane: IntArray, scratch: Scratch, width: Int, height: Int, axis: IntArray, along: Int, across: Int) {
+        val diagonal = axis[0] != 0 && axis[1] != 0
+        val scale = if (diagonal) 0.70710677f else 1f
+        val a = (along * scale).roundToInt()
+        val c = (across * scale).roundToInt()
+        lineMean(plane, scratch.tmp, scratch.line, width, height, axis[0], axis[1], a)
+        // The perpendicular step: (sx, sy) → (-sy, sx), folded to the four canonical steps.
+        val px = -axis[1]; val py = axis[0]
+        val (qx, qy) = if (px < 0 || (px == 0 && py < 0)) -px to -py else px to py
+        lineMean(plane, scratch.tmp, scratch.line, width, height, qx, qy, c)
     }
 
     /** The sweep's length in px. */
@@ -313,13 +338,14 @@ object RasterSmudge {
             boxBlur(pg, scratch.tmp, width, height, s)
             boxBlur(pb, scratch.tmp, width, height, s)
         } else {
-            // The smear follows the hand: the box turned to the batch's line of travel.
-            val offsets = orientedOffsets(scratch, dir[0], dir[1], s, smudging.across)
-            orientedMean(pa, scratch.tmp, width, height, offsets)
-            orientedMean(pt, scratch.tmp, width, height, offsets)
-            orientedMean(pr, scratch.tmp, width, height, offsets)
-            orientedMean(pg, scratch.tmp, width, height, offsets)
-            orientedMean(pb, scratch.tmp, width, height, offsets)
+            // The smear follows the hand: the box turned to the batch's line of travel,
+            // quantized to the lattice's four axes and run separably.
+            val axis = quantizeAxis(dir[0], dir[1])
+            orientedMean(pa, scratch, width, height, axis, s, smudging.across)
+            orientedMean(pt, scratch, width, height, axis, s, smudging.across)
+            orientedMean(pr, scratch, width, height, axis, s, smudging.across)
+            orientedMean(pg, scratch, width, height, axis, s, smudging.across)
+            orientedMean(pb, scratch, width, height, axis, s, smudging.across)
         }
         val cov = scratch.cov
         java.util.Arrays.fill(cov, 0, n, 0f)

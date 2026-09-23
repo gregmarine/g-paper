@@ -272,16 +272,39 @@ class RasterSmudgeTest {
     }
 
     @Test
-    fun `the oriented offsets are the box turned to the axis, deduplicated`() {
-        val sc = RasterSmudge.Scratch()
-        val horizontal = RasterSmudge.orientedOffsets(sc, 1f, 0f, 3, 1)
-        assertEquals(7 * 3 * 2, horizontal.size)
-        val same = RasterSmudge.orientedOffsets(sc, 1f, 0f, 3, 1)
-        assertTrue(same === horizontal)   // cached for a repeated axis
-        val r = 0.70710677f
-        val diagonal = RasterSmudge.orientedOffsets(sc, r, r, 2, 0)
-        // ±2 along the diagonal rounds to (±1,±1) and (±1,±1) again → 3 distinct offsets.
-        assertEquals(3 * 2, diagonal.size)
+    fun `the axis is quantized to the lattice's four`() {
+        assertTrue(RasterSmudge.quantizeAxis(1f, 0f).contentEquals(intArrayOf(1, 0)))
+        assertTrue(RasterSmudge.quantizeAxis(-1f, 0.1f).contentEquals(intArrayOf(1, 0)))
+        assertTrue(RasterSmudge.quantizeAxis(0f, 1f).contentEquals(intArrayOf(0, 1)))
+        assertTrue(RasterSmudge.quantizeAxis(0.7f, 0.7f).contentEquals(intArrayOf(1, 1)))
+        assertTrue(RasterSmudge.quantizeAxis(-0.7f, -0.7f).contentEquals(intArrayOf(1, 1)))
+        assertTrue(RasterSmudge.quantizeAxis(-0.7f, 0.7f).contentEquals(intArrayOf(1, -1)))
+        assertTrue(RasterSmudge.quantizeAxis(0.7f, -0.7f).contentEquals(intArrayOf(1, -1)))
+        // 30° is nearer the diagonal than the row.
+        assertTrue(RasterSmudge.quantizeAxis(0.866f, 0.5f).contentEquals(intArrayOf(1, 1)))
+    }
+
+    @Test
+    fun `a line mean is a clipped running mean along its lattice line, every pixel visited once`() {
+        // One full pixel at (1, 1) on a 4 × 4 plane; a (1,1) diagonal mean of half 1.
+        val plane = IntArray(16); plane[1 * 4 + 1] = 90
+        val tmp = IntArray(16); val line = IntArray(4)
+        RasterSmudge.lineMean(plane, tmp, line, 4, 4, 1, 1, 1)
+        assertEquals(45, plane[0 * 4 + 0])   // window {(0,0),(1,1)} clipped at the start
+        assertEquals(30, plane[1 * 4 + 1])   // {(0,0),(1,1),(2,2)}
+        assertEquals(30, plane[2 * 4 + 2])   // {(1,1),(2,2),(3,3)}
+        assertEquals(0, plane[3 * 4 + 3])
+        assertEquals(0, plane[0 * 4 + 1])    // another line: untouched
+        // The anti-diagonal walks every pixel exactly once too: a constant plane stays constant.
+        val flat = IntArray(16) { 7 }
+        RasterSmudge.lineMean(flat, tmp, line, 4, 4, 1, -1, 2)
+        for (v in flat) assertEquals(7, v)
+        val rows = IntArray(16) { 7 }
+        RasterSmudge.lineMean(rows, tmp, line, 4, 4, 1, 0, 2)
+        for (v in rows) assertEquals(7, v)
+        val cols = IntArray(16) { 7 }
+        RasterSmudge.lineMean(cols, tmp, line, 4, 4, 0, 1, 2)
+        for (v in cols) assertEquals(7, v)
     }
 
     @Test
