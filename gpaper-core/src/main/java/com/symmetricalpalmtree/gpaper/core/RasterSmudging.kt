@@ -38,6 +38,14 @@ package com.symmetricalpalmtree.gpaper.core
  * `e^(−travel / carry)` px of travel and is topped back up wherever the finger crosses
  * something darker; under the finger a pixel is pulled at least to [deposit] of the load.
  * 40 px of carry lays a fifth of the load 65 px out and nothing the eye finds past 200.
+ *
+ * [across] makes the smear **follow the hand** (0.1.60). A finger dragged left and right
+ * pushes graphite left and right, not up and down: the neighbourhood a pixel is pulled
+ * toward is a box turned to the batch's direction of travel — [spread] px to either side
+ * *along* it and [across] px to either side *across* it — so a line rubbed along its own
+ * length smears along itself and one rubbed across bleeds into its neighbours. A batch
+ * with no direction (a dwell, a single sample) uses the plain square box. 0.1.54's box
+ * was the same in every direction, and a rub read the same whichever way the hand went.
  */
 data class RasterSmudging(
     val strength: Float = 0.45f,
@@ -47,6 +55,7 @@ data class RasterSmudging(
     val gamma: Float = 3f,
     val carry: Float = 40f,
     val deposit: Float = 0.5f,
+    val across: Int = 2,
 ) {
     init {
         require(strength in 0f..1f) { "strength must be within 0..1" }
@@ -56,5 +65,6 @@ data class RasterSmudging(
         require(gamma in 1f..4f) { "gamma must be within 1..4" }
         require(carry >= 0f) { "carry must be 0 or more px" }
         require(deposit in 0f..1f) { "deposit must be within 0..1" }
+        require(across in 0..64) { "across must be within 0..64 px" }
     }
 }

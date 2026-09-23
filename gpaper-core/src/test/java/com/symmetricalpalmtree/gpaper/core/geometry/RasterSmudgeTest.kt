@@ -214,6 +214,76 @@ class RasterSmudgeTest {
         assertEquals(0, alphaAt(px, 45, 32))
     }
 
+    // ── The smear follows the hand (0.1.60) ─────────────────────────────────
+
+    private fun iso(spread: Int, across: Int = 0) =
+        RasterSmudging(strength = 1f, spread = spread, feather = 0f, loss = 0f, gamma = 1f, carry = 0f, across = across)
+
+    @Test
+    fun `the axis is the line of travel, out and back alike, and nothing for a dwell`() {
+        val right = RasterSmudge.axis(listOf(p(10f, 10f), p(30f, 10f)))!!
+        assertEquals(1f, abs(right[0]), 1e-4f)
+        assertEquals(0f, right[1], 1e-4f)
+        val outAndBack = RasterSmudge.axis(listOf(p(10f, 10f), p(30f, 10f), p(12f, 10f)))!!
+        assertEquals(1f, abs(outAndBack[0]), 1e-4f)
+        val diagonal = RasterSmudge.axis(listOf(p(0f, 0f), p(10f, 10f)))!!
+        assertEquals(abs(diagonal[0]), abs(diagonal[1]), 1e-4f)
+        assertEquals(null, RasterSmudge.axis(listOf(p(5f, 5f))))
+        assertEquals(null, RasterSmudge.axis(listOf(p(5f, 5f), p(5.5f, 5f))))
+    }
+
+    @Test
+    fun `a rub across the hatch runs it together, a rub along it does not`() {
+        // Vertical lines every 7 px; a horizontal rub sees a 7 px window across them.
+        val acrossHatch = hatch()
+        smudge(acrossHatch, listOf(p(20f, 32f), p(44f, 32f)), iso(spread = 3))
+        assertTrue(alphaAt(acrossHatch, 31, 32) > 0)   // a gap pixel filled from the lines
+        // A vertical rub over the same lines: the kernel lies along them, and a gap pixel
+        // three px from the nearest line sees nothing but gap.
+        val alongHatch = hatch()
+        smudge(alongHatch, listOf(p(32f, 20f), p(32f, 44f)), iso(spread = 3))
+        assertEquals(0, alphaAt(alongHatch, 31, 32))
+        assertEquals(0, alphaAt(alongHatch, 32, 32))
+        // …and the lines themselves are untouched: their mean along themselves is themselves.
+        assertEquals(255, alphaAt(alongHatch, 28, 32))
+    }
+
+    @Test
+    fun `a diagonal rub smears a dot along the diagonal only`() {
+        val px = IntArray(w * h)
+        px[32 * w + 32] = 0xFF000000.toInt()
+        smudge(px, listOf(p(24f, 24f), p(40f, 40f)), iso(spread = 4))
+        // Along the line of travel the dot has spread; across it, nothing.
+        assertTrue(alphaAt(px, 34, 34) > 0)
+        assertTrue(alphaAt(px, 30, 30) > 0)
+        assertEquals(0, alphaAt(px, 34, 30))
+        assertEquals(0, alphaAt(px, 30, 34))
+    }
+
+    @Test
+    fun `across widens the smear beside the line of travel`() {
+        val narrow = IntArray(w * h).also { it[32 * w + 32] = 0xFF000000.toInt() }
+        smudge(narrow, listOf(p(20f, 32f), p(44f, 32f)), iso(spread = 4, across = 0))
+        assertEquals(0, alphaAt(narrow, 32, 33))
+        val wide = IntArray(w * h).also { it[32 * w + 32] = 0xFF000000.toInt() }
+        smudge(wide, listOf(p(20f, 32f), p(44f, 32f)), iso(spread = 4, across = 1))
+        assertTrue(alphaAt(wide, 32, 33) > 0)
+        assertEquals(0, alphaAt(wide, 32, 34))
+    }
+
+    @Test
+    fun `the oriented offsets are the box turned to the axis, deduplicated`() {
+        val sc = RasterSmudge.Scratch()
+        val horizontal = RasterSmudge.orientedOffsets(sc, 1f, 0f, 3, 1)
+        assertEquals(7 * 3 * 2, horizontal.size)
+        val same = RasterSmudge.orientedOffsets(sc, 1f, 0f, 3, 1)
+        assertTrue(same === horizontal)   // cached for a repeated axis
+        val r = 0.70710677f
+        val diagonal = RasterSmudge.orientedOffsets(sc, r, r, 2, 0)
+        // ±2 along the diagonal rounds to (±1,±1) and (±1,±1) again → 3 distinct offsets.
+        assertEquals(3 * 2, diagonal.size)
+    }
+
     @Test
     fun `box blur is a clipped mean at the edge`() {
         val plane = IntArray(4 * 1) { 100 }

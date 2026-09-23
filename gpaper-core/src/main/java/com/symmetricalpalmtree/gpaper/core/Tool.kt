@@ -51,4 +51,16 @@ enum class Tool {
      * lasso-eraser x-stream on Ratta, the lasso's trail elsewhere).
      */
     LASSO_ERASER,
+
+    /**
+     * Stylus smudge (0.1.60): the nib smudges the **graphite** raster exactly as the
+     * host-driven finger smudge does ([PaperView.beginSmudge] / [PaperView.smudgeAlong] /
+     * [PaperView.endSmudge]), but the engine's own touch handling drives it — a stylus
+     * contact is the sweep, within [PaperView.smudgeToolRadius] (a stump, narrower than
+     * the fingertip's [PaperView.smudgeRadius]). Nothing is drawn, nothing is erased;
+     * the ink image is never read. On EPD engines the hardware ink overlay is disabled
+     * under it, as under [NONE]. A no-op in stroke mode. The barrel button / eraser end
+     * still point-erases, as under every capturing tool.
+     */
+    SMUDGE,
 }

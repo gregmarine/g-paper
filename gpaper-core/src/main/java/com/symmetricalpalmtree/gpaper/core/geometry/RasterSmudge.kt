@@ -55,10 +55,23 @@ import kotlin.math.roundToInt
  * the Nomad hung 12 s on one event (an ANR that closed the face). See
  * `CanvasPaperView.smudgeAlong` for the thinning and chunking on the engine side.
  *
+ * **The smear follows the hand (0.1.60).** The neighbourhood is a box **turned to the
+ * batch's direction of travel** — [RasterSmudging.spread] px to either side along it and
+ * [RasterSmudging.across] px to either side across it ([orientedOffsets]) — so graphite is
+ * pushed the way the finger goes: a rub left and right runs a vertical hatch together
+ * and a rub up and down along its lines only smears each line along itself. The
+ * direction is the sweep's **principal axis** ([axis]) — the structure tensor of its
+ * segments, so a batch that turns back on itself still reads as one line of travel
+ * rather than a net displacement of nothing — and a batch with no travel (a dwell, a
+ * single sample) falls back to the plain square box of 0.1.54. The oriented mean is a
+ * gathered sum over a precomputed offset list, clipped at the padded rect's edge and
+ * divided by what it covered, exactly as the box is.
+ *
  * The caller hands over the pixels of a rect **padded by [RasterSmudging.spread]** around
  * the corridor, so the mean at the corridor's edge sees the true neighbours beyond it;
- * only pixels inside the corridor's own rect are written back. The blur is a separable
- * box on running sums — O(n) in the padded area, whatever the spread.
+ * only pixels inside the corridor's own rect are written back. The square blur is a
+ * separable box on running sums — O(n) in the padded area, whatever the spread; the
+ * oriented one costs the offset count per pixel, (2·spread + 1)(2·across + 1) at most.
  */
 object RasterSmudge {
 
@@ -77,6 +90,12 @@ object RasterSmudge {
         internal var b = IntArray(0)
         internal var tmp = IntArray(0)
         internal var cov = FloatArray(0)
+        /** The oriented kernel's offsets, as (dx, dy) pairs, for the last axis asked. */
+        internal var offsets = IntArray(0)
+        internal var offsetsUx = Float.NaN
+        internal var offsetsUy = Float.NaN
+        internal var offsetsSpread = -1
+        internal var offsetsAcross = -1
         internal var lutGamma = 0f
         internal val lut = IntArray(256)
         internal fun ensure(n: Int) {
@@ -111,6 +130,84 @@ object RasterSmudge {
         var g = 0f
         var b = 0f
         fun reset() { alpha = 0f; r = 0f; g = 0f; b = 0f }
+    }
+
+    /**
+     * The sweep's principal axis as a unit vector, or null when it has no direction — a
+     * single sample, or less than [RasterRub.MIN_TRAVEL_PX] of travel in all. It is the
+     * eigenvector of the segments' structure tensor (Σdx², Σdxdy, Σdy²), so a batch that
+     * runs out and back along one line still answers that line, where a first-to-last
+     * displacement would answer nothing. Sign is meaningless: the kernel is symmetric.
+     */
+    fun axis(sweep: List<StrokePoint>): FloatArray? {
+        if (sweep.size < 2) return null
+        var sxx = 0.0; var sxy = 0.0; var syy = 0.0; var len = 0f
+        for (i in 1 until sweep.size) {
+            val dx = (sweep[i].x - sweep[i - 1].x).toDouble()
+            val dy = (sweep[i].y - sweep[i - 1].y).toDouble()
+            sxx += dx * dx; sxy += dx * dy; syy += dy * dy
+            len += kotlin.math.sqrt(dx * dx + dy * dy).toFloat()
+        }
+        if (len < RasterRub.MIN_TRAVEL_PX) return null
+        // The larger eigenvalue's eigenvector of [[sxx, sxy], [sxy, syy]].
+        val half = (sxx + syy) / 2.0
+        val diff = (sxx - syy) / 2.0
+        val root = kotlin.math.sqrt(diff * diff + sxy * sxy)
+        val lambda = half + root
+        var ux: Double; var uy: Double
+        if (kotlin.math.abs(sxy) > 1e-9) { ux = lambda - syy; uy = sxy }
+        else if (sxx >= syy) { ux = 1.0; uy = 0.0 }
+        else { ux = 0.0; uy = 1.0 }
+        val n = kotlin.math.sqrt(ux * ux + uy * uy)
+        if (n < 1e-12) return null
+        return floatArrayOf((ux / n).toFloat(), (uy / n).toFloat())
+    }
+
+    /**
+     * The (dx, dy) offsets of a box [along] px to either side of the axis ([ux], [uy]) and
+     * [across] px to either side across it, rounded to the lattice and deduplicated —
+     * flat pairs, `[dx0, dy0, dx1, dy1, …]`. Cached on [scratch] for a repeated axis.
+     */
+    internal fun orientedOffsets(scratch: Scratch, ux: Float, uy: Float, along: Int, across: Int): IntArray {
+        if (scratch.offsetsUx == ux && scratch.offsetsUy == uy &&
+            scratch.offsetsSpread == along && scratch.offsetsAcross == across) return scratch.offsets
+        val seen = HashSet<Long>()
+        val out = ArrayList<Int>((2 * along + 1) * (2 * across + 1) * 2)
+        for (i in -along..along) for (j in -across..across) {
+            val dx = (i * ux - j * uy).roundToInt()
+            val dy = (i * uy + j * ux).roundToInt()
+            if (seen.add((dx.toLong() shl 32) or (dy.toLong() and 0xFFFFFFFFL))) { out.add(dx); out.add(dy) }
+        }
+        val arr = IntArray(out.size) { out[it] }
+        scratch.offsets = arr
+        scratch.offsetsUx = ux; scratch.offsetsUy = uy
+        scratch.offsetsSpread = along; scratch.offsetsAcross = across
+        return arr
+    }
+
+    /**
+     * In-place mean of [plane] over the offset list [offsets] (flat (dx, dy) pairs), on a
+     * [width] × [height] plane; offsets that fall outside the plane are left out of the
+     * count, as the box's clipped window is. [tmp] receives the result and is swapped in.
+     */
+    internal fun orientedMean(plane: IntArray, tmp: IntArray, width: Int, height: Int, offsets: IntArray) {
+        val n = offsets.size / 2
+        for (y in 0 until height) {
+            val row = y * width
+            for (x in 0 until width) {
+                var sum = 0; var count = 0
+                var k = 0
+                while (k < n) {
+                    val px = x + offsets[2 * k]
+                    val py = y + offsets[2 * k + 1]
+                    k++
+                    if (px < 0 || py < 0 || px >= width || py >= height) continue
+                    sum += plane[py * width + px]; count++
+                }
+                tmp[row + x] = if (count == 0) plane[row + x] else (sum + count / 2) / count
+            }
+        }
+        System.arraycopy(tmp, 0, plane, 0, width * height)
     }
 
     /** The sweep's length in px. */
@@ -208,11 +305,22 @@ object RasterSmudge {
             pb[i] = (argb and 0xFF) * a
         }
         val s = smudging.spread
-        boxBlur(pa, scratch.tmp, width, height, s)
-        boxBlur(pt, scratch.tmp, width, height, s)
-        boxBlur(pr, scratch.tmp, width, height, s)
-        boxBlur(pg, scratch.tmp, width, height, s)
-        boxBlur(pb, scratch.tmp, width, height, s)
+        val dir = axis(sweep)
+        if (dir == null) {
+            boxBlur(pa, scratch.tmp, width, height, s)
+            boxBlur(pt, scratch.tmp, width, height, s)
+            boxBlur(pr, scratch.tmp, width, height, s)
+            boxBlur(pg, scratch.tmp, width, height, s)
+            boxBlur(pb, scratch.tmp, width, height, s)
+        } else {
+            // The smear follows the hand: the box turned to the batch's line of travel.
+            val offsets = orientedOffsets(scratch, dir[0], dir[1], s, smudging.across)
+            orientedMean(pa, scratch.tmp, width, height, offsets)
+            orientedMean(pt, scratch.tmp, width, height, offsets)
+            orientedMean(pr, scratch.tmp, width, height, offsets)
+            orientedMean(pg, scratch.tmp, width, height, offsets)
+            orientedMean(pb, scratch.tmp, width, height, offsets)
+        }
         val cov = scratch.cov
         java.util.Arrays.fill(cov, 0, n, 0f)
         coverageField(cov, left, top, width, height, sweep, radius, smudging.feather)

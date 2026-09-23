@@ -3283,6 +3283,42 @@ scribble over writing.
 page of writing at pen-up erases at once, no hang; the point eraser and the lasso eraser
 unchanged.
 
+### Phase 45 — The smear follows the hand, and a stylus smudge tool (post-v0.1.0)
+**Status:** 🔧 Built 2026-09-22, tests green (core + ratta 809, `RasterSmudgeTest` 19); awaiting the user's Nomad walk in Notesprout SN (arc 50 "Stump") · **Publishes:** 0.1.60 · branch `smudge-tool` (off `main`).
+The user, on the finger smudge: *"does it push graphite around based on the direction of the
+finger movement? … If we can do that, let's give it a try. And let's also add a smudge toolbar
+button to implement the ability to also do this with the stylus. Finger smudge would always be
+available. But to use the stylus for the work, an explicit tool selection would be needed."*
+Phase 40's box was a square, the same in every direction; the only directional thing was the
+carried load.
+- **`RasterSmudge.axis(sweep)`**: the sweep's principal axis — the eigenvector of its segments'
+  structure tensor, so a batch that runs out and back reads as one line of travel where a
+  first-to-last displacement would read as nothing; null under `RasterRub.MIN_TRAVEL_PX`.
+- **The oriented kernel**: with an axis, every plane's mean is gathered over `orientedOffsets`
+  — the box turned to the axis, `spread` px to either side along it and **`RasterSmudging.across`**
+  (new, default 2) to either side across it, rounded to the lattice and deduplicated, cached on
+  the `Scratch` for a repeated axis — clipped at the padded rect's edge and divided by what it
+  covered, as the box is. Without an axis (a dwell, one sample) the square box stands. The read
+  is still padded by `spread` (the longer reach). Cost per pixel is the offset count,
+  (2·6+1)(2·2+1) = 65 at the defaults, over the padded batch rect — a few ms on the Nomad.
+- **`Tool.SMUDGE`** — the stylus smudge: `GestureMode.SMUDGE` in the base's touch handling drives
+  `beginSmudge()` → `smudgeAlong` → `endSmudge()` from the nib exactly as the host drives it from
+  the finger, within **`PaperView.smudgeToolRadius`** (new, default 16 px — a stump, half the
+  fingertip's `smudgeRadius`; `smudgeReach` is fixed at `beginSmudge`). A cancel still ends the
+  smudge (pixels moved; the host's entry closes). Ratta: `firmwareInkSuppressed` now includes
+  `SMUDGE` (the needle must paint nothing under it); `beginSmudge` takes the screen offset again,
+  the same answer the contact took. Onyx: raw drawing off, as under `NONE`. The barrel button /
+  eraser end point-erases, as under every capturing tool.
+- Tests: `RasterSmudgeTest` + 5 — the axis (out-and-back, diagonal, dwell); a rub across a hatch
+  fills its gaps while a rub along it leaves them and the lines untouched; a diagonal rub smears
+  a dot along the diagonal only; `across` widens the smear beside the travel; the offsets are
+  the turned box, deduplicated and cached.
+
+**Gate:** the user's Nomad walk in Notesprout SN (`:sn-screen` → 0.1.60, the sketch face's new
+Smudge button): a left-right rub over a vertical hatch runs it together, an up-down rub streaks
+it along itself, a diagonal rub follows the hand; the stylus under Smudge blends like the finger
+at half its reach and leaves no needle mark.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
