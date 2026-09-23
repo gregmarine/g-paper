@@ -2317,9 +2317,18 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (!smudging) return
         smudging = false
         lastSmudgePoint = null
-        finalizeEraseRedraw()
+        onSmudgeEnded()
         paperListener?.onPenLifted()
     }
+
+    /**
+     * The smudge contact is over and the window has to catch up with the pixels — the
+     * eraser's end-of-sweep redraw, by default. An engine that paints the panel itself may
+     * defer and coalesce it: a light rub with the stylus makes the tip switch chatter, four
+     * contacts a second, and a window frame per contact on the Supernote's direct path was
+     * one of the two things behind a page going blank there (Notesprout SN arc 50, walk 4).
+     */
+    protected open fun onSmudgeEnded() = finalizeEraseRedraw()
 
     /**
      * One batch of a finger smudge has just landed in the graphite image over [rect] —

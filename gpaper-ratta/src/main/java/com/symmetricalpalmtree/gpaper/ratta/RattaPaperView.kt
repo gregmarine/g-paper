@@ -92,6 +92,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
         const val TAG = "GPaperRatta"
 
+        /** How long after the last smudge contact ends the window mirror is presented on the
+         *  direct path — long enough to ride out a chattering tip switch (~250 ms a contact). */
+        const val SMUDGE_MIRROR_DELAY_MS = 400L
+
         /** Floor for the firmware eraser EMR size (`radius * 50`, min 400 — PoC-validated). */
         const val ERASER_EMR_MIN = 400
 
@@ -2516,8 +2520,26 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
     override fun beginSmudge() {
         super.beginSmudge()
-        if (directRaster) getLocationOnScreen(contactScreenLoc)
+        if (directRaster) {
+            getLocationOnScreen(contactScreenLoc)
+            removeCallbacks(smudgeMirror)
+        }
     }
+
+    /**
+     * On the direct path the corridor is already on the panel batch by batch, so the window's
+     * mirror is not needed at every contact end — and a light rub's tip switch chatters, four
+     * contacts a second: a frame per contact was one of the two things behind a page going
+     * blank on the Nomad (Notesprout SN arc 50, walk 4). The mirror is posted once, a beat
+     * after the last contact ends, and every new contact pushes it back.
+     */
+    override fun onSmudgeEnded() {
+        if (!directRaster) { super.onSmudgeEnded(); return }
+        removeCallbacks(smudgeMirror)
+        postDelayed(smudgeMirror, SMUDGE_MIRROR_DELAY_MS)
+    }
+
+    private val smudgeMirror = Runnable { finalizeEraseRedraw() }
 
     override fun onRasterErasedBatch(rect: Rect) {
         if (!directRaster) return
@@ -3117,6 +3139,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun onDetachedFromWindow() {
         overlayClearArmed = false
         removeCallbacks(overlayClearRunnable)
+        removeCallbacks(smudgeMirror)
         releasePanel()
         if (firmware && inkOwner === this) {
             releaseFirmwareOverlay()
@@ -3162,6 +3185,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun release() {
         overlayClearArmed = false
         removeCallbacks(overlayClearRunnable)
+        removeCallbacks(smudgeMirror)
         releasePanel()
         if (firmware && inkOwner === this) {
             releaseFirmwareOverlay()
