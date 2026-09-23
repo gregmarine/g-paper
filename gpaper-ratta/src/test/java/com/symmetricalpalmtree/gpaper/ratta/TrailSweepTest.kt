@@ -68,6 +68,66 @@ class TrailSweepTest {
         assertEquals(whole.length, pieces.length, 1e-4f)
     }
 
+    /** The whole path's marks at [pitch], by the committed CROSS rule (first point, then
+     *  every pitch of arc length). */
+    private fun marksOf(points: List<StrokePoint>, pitch: Float): List<Float> {
+        val out = ArrayList<Float>()
+        out.add(points[0].x); out.add(points[0].y)
+        var traveled = 0f
+        var nextAt = pitch
+        for (i in 1 until points.size) {
+            val a = points[i - 1]; val b = points[i]
+            val len = hypot(b.x - a.x, b.y - a.y)
+            while (traveled + len >= nextAt) {
+                val t = (nextAt - traveled) / len
+                out.add(a.x + t * (b.x - a.x)); out.add(a.y + t * (b.y - a.y))
+                nextAt += pitch
+            }
+            traveled += len
+        }
+        return out
+    }
+
+    @Test
+    fun `x-marks laid piecewise are the whole path's marks, none doubled at a join`() {
+        val pitch = 10f
+        // Cuts chosen so joins land exactly on a mark (arc 10 at index 2, arc 20 at index 3)
+        // and between marks (arc 50 at index 5 is on one too; index 6 is not).
+        val pieces = TrailSweep(pitch, crosses = true)
+        val laid = ArrayList<Float>()
+        for (c in listOf(1, 2, 3, 5, 6, 7)) {
+            val seg = pieces.advance(path.subList(0, c))!!
+            for (v in seg.marks) laid.add(v)
+        }
+        val whole = marksOf(path, pitch)
+        assertEquals(whole.size, laid.size)
+        for (i in whole.indices) assertEquals(whole[i], laid[i], 1e-3f)
+    }
+
+    @Test
+    fun `the first point carries a mark and a dashed sweep carries none`() {
+        val crosses = TrailSweep(10f, crosses = true)
+        val first = crosses.advance(path.subList(0, 1))!!
+        assertEquals(2, first.marks.size)
+        assertEquals(0f, first.marks[0], 0f)
+        val dashed = TrailSweep(10f)
+        assertEquals(0, dashed.advance(path)!!.marks.size)
+    }
+
+    @Test
+    fun `a stretch shorter than the pitch carries no mark and the next one catches up`() {
+        val s = TrailSweep(10f, crosses = true)
+        s.advance(path.subList(0, 1))
+        // (0,0) → (4,0): arc 4, no mark past the first.
+        val short = s.advance(listOf(pt(0f, 0f), pt(4f, 0f)))!!
+        assertEquals(0, short.marks.size)
+        // → (25,0): arc 25, marks at 10 and 20.
+        val next = s.advance(listOf(pt(0f, 0f), pt(4f, 0f), pt(25f, 0f)))!!
+        assertEquals(4, next.marks.size)
+        assertEquals(10f, next.marks[0], 1e-4f)
+        assertEquals(20f, next.marks[2], 1e-4f)
+    }
+
     @Test
     fun `a segment's bounds are its own points, join included`() {
         val s = TrailSweep(20f)

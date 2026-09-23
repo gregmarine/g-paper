@@ -16,6 +16,7 @@ import com.symmetricalpalmtree.gpaper.core.PageMode
 import com.symmetricalpalmtree.gpaper.core.RasterLayer
 import com.symmetricalpalmtree.gpaper.core.Tool
 import com.symmetricalpalmtree.gpaper.core.canvas.CanvasPaperView
+import com.symmetricalpalmtree.gpaper.core.canvas.LassoTrailChrome
 import com.symmetricalpalmtree.gpaper.core.canvas.PencilInk
 import com.symmetricalpalmtree.gpaper.core.geometry.GraphiteGrain
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
@@ -101,14 +102,17 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
         /**
          * The app-painted lasso trail on a direct page (Phase 42, the user's decision 2):
-         * a 2 px black dashed line, 12 on / 8 off — the base's own selection chrome
-         * (`selectionPaint`), so the trail a direct page paints onto the panel is the
-         * trail every other engine draws in its window. Aliased, because the panel is
-         * dithered anyway and a crisp dash reads better than a soft one there.
+         * [LassoTrailChrome] — a 2 px black dashed line, 12 on / 8 off, for the lasso, and
+         * since Phase 43 (0.1.57) a stream of 2 px x-marks every 16 px, 5 px arms, for the
+         * lasso eraser — the daemon's own two trails, and the chrome every other engine
+         * draws in its window. Aliased, because the panel is dithered anyway and a crisp
+         * mark reads better than a soft one there.
          */
-        const val TRAIL_WIDTH_PX = 2f
-        const val TRAIL_DASH_ON_PX = 12f
-        const val TRAIL_DASH_OFF_PX = 8f
+        const val TRAIL_WIDTH_PX = LassoTrailChrome.WIDTH_PX
+        const val TRAIL_DASH_ON_PX = LassoTrailChrome.DASH_ON_PX
+        const val TRAIL_DASH_OFF_PX = LassoTrailChrome.DASH_OFF_PX
+        const val TRAIL_CROSS_PITCH_PX = LassoTrailChrome.CROSS_PITCH_PX
+        const val TRAIL_CROSS_ARM_PX = LassoTrailChrome.CROSS_ARM_PX
 
         /**
          * Horizontal registration offsets, measured by nudge-to-null on one unit per
@@ -2230,6 +2234,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  ACTION_DOWN with the other contact latches. */
     private var contactTrail = false
 
+    /** Whether this contact's trail is the lasso eraser's x-stream rather than the lasso's
+     *  dash (Phase 43) — read off the tool at [beginTrail], with [contactTrail]. */
+    private var contactTrailCrosses = false
+
     /** The trail's stroke: the base's selection chrome, aliased — the dash effect is set
      *  per segment with that segment's phase. */
     private val trailPaint = Paint().apply {
@@ -2243,6 +2251,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
     private fun beginTrail() {
         contactTrail = true
+        contactTrailCrosses = tool == Tool.LASSO_ERASER
         trail = null
         laidInkCount = 0
         liveRect.setEmpty()
@@ -2260,9 +2269,14 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun onLassoTrailExtended(points: List<StrokePoint>) {
         if (!contactTrail) return
         val mask = ensureLiveLayer(RasterLayer.INK) ?: return
-        val sweep = trail ?: TrailSweep(TRAIL_DASH_ON_PX + TRAIL_DASH_OFF_PX).also { trail = it }
+        val crosses = contactTrailCrosses
+        val sweep = trail ?: (
+            if (crosses) TrailSweep(TRAIL_CROSS_PITCH_PX, crosses = true)
+            else TrailSweep(TRAIL_DASH_ON_PX + TRAIL_DASH_OFF_PX)
+            ).also { trail = it }
         val seg = sweep.advance(points) ?: return
-        val pad = ceil(TRAIL_WIDTH_PX / 2f).toInt() + 2
+        if (crosses && seg.marks.isEmpty()) return
+        val pad = (if (crosses) ceil(TRAIL_CROSS_ARM_PX + TRAIL_WIDTH_PX).toInt() else ceil(TRAIL_WIDTH_PX / 2f).toInt()) + 2
         toneRect.set(
             floor(seg.minX).toInt() - pad,
             floor(seg.minY).toInt() - pad,
@@ -2277,11 +2291,27 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         canvas.clipRect(0, 0, rect.width(), rect.height())
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-        trailPaint.pathEffect = DashPathEffect(floatArrayOf(TRAIL_DASH_ON_PX, TRAIL_DASH_OFF_PX), seg.phase)
-        if (seg.to - seg.from == 1) {
+        if (crosses) {
+            // The lasso eraser's x-stream: the marks this stretch reached, each two lines.
+            trailPaint.pathEffect = null
+            trailPaint.strokeCap = Paint.Cap.BUTT
+            val arm = TRAIL_CROSS_ARM_PX
+            var m = 0
+            while (m + 1 < seg.marks.size) {
+                val x = seg.marks[m]
+                val y = seg.marks[m + 1]
+                m += 2
+                canvas.drawLine(x - arm, y - arm, x + arm, y + arm, trailPaint)
+                canvas.drawLine(x - arm, y + arm, x + arm, y - arm, trailPaint)
+            }
+        } else if (seg.to - seg.from == 1) {
+            trailPaint.pathEffect = DashPathEffect(floatArrayOf(TRAIL_DASH_ON_PX, TRAIL_DASH_OFF_PX), seg.phase)
+            trailPaint.strokeCap = Paint.Cap.ROUND
             val p = points[seg.from]
             canvas.drawPoint(p.x, p.y, trailPaint)
         } else {
+            trailPaint.pathEffect = DashPathEffect(floatArrayOf(TRAIL_DASH_ON_PX, TRAIL_DASH_OFF_PX), seg.phase)
+            trailPaint.strokeCap = Paint.Cap.ROUND
             trailPath.rewind()
             trailPath.moveTo(points[seg.from].x, points[seg.from].y)
             for (i in seg.from + 1 until seg.to) trailPath.lineTo(points[i].x, points[i].y)

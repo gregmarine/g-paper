@@ -31,6 +31,7 @@ import com.symmetricalpalmtree.gpaper.core.RawTool
 import com.symmetricalpalmtree.gpaper.core.Tool
 import com.symmetricalpalmtree.gpaper.core.engine.GPaper
 import com.symmetricalpalmtree.gpaper.core.geometry.EraseHitTest
+import com.symmetricalpalmtree.gpaper.core.geometry.Geometry
 import com.symmetricalpalmtree.gpaper.core.geometry.GestureRecognizer
 import com.symmetricalpalmtree.gpaper.core.geometry.GraphiteGrain
 import com.symmetricalpalmtree.gpaper.core.geometry.LassoHitTest
@@ -399,13 +400,24 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      *  re-record, so opted-in hosts hide the originals; empty outside a drag. */
     private var dragHiddenContentIds: Set<String> = emptySet()
 
-    /** Dashed chrome for the lasso trail, the selection box, and drag ghosts. */
+    /** Dashed chrome for the lasso trail, the selection box, and drag ghosts
+     *  ([LassoTrailChrome]'s dash). */
     private val selectionPaint = Paint().apply {
         style = Paint.Style.STROKE
         color = Color.BLACK
-        strokeWidth = 2f
-        pathEffect = DashPathEffect(floatArrayOf(12f, 8f), 0f)
+        strokeWidth = LassoTrailChrome.WIDTH_PX
+        pathEffect = DashPathEffect(floatArrayOf(LassoTrailChrome.DASH_ON_PX, LassoTrailChrome.DASH_OFF_PX), 0f)
         strokeCap = Paint.Cap.ROUND
+        isAntiAlias = false
+    }
+
+    /** The lasso eraser's trail: [LassoTrailChrome]'s x-marks, so the open loop already
+     *  says which lasso it is (0.1.57). Solid — the marks are placed, not dashed. */
+    private val crossTrailPaint = Paint().apply {
+        style = Paint.Style.STROKE
+        color = Color.BLACK
+        strokeWidth = LassoTrailChrome.WIDTH_PX
+        strokeCap = Paint.Cap.BUTT
         isAntiAlias = false
     }
 
@@ -1384,10 +1396,20 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         }
         // Lasso trail (engines with hardware trails set rendersLiveTrail = false).
         if (rendersLiveTrail && lassoCapturing && lassoPoints.size >= 2) {
-            val trail = Path()
-            trail.moveTo(lassoPoints[0].x, lassoPoints[0].y)
-            for (i in 1 until lassoPoints.size) trail.lineTo(lassoPoints[i].x, lassoPoints[i].y)
-            canvas.drawPath(trail, selectionPaint)
+            if (tool == Tool.LASSO_ERASER) {
+                // The lasso eraser's loop is a stream of x-marks, not a dash, so the two
+                // lassoes read apart while the loop is open (the daemon's own distinction).
+                val arm = LassoTrailChrome.CROSS_ARM_PX
+                for (c in Geometry.sampleAlongPolyline(lassoPoints, LassoTrailChrome.CROSS_PITCH_PX)) {
+                    canvas.drawLine(c.x - arm, c.y - arm, c.x + arm, c.y + arm, crossTrailPaint)
+                    canvas.drawLine(c.x - arm, c.y + arm, c.x + arm, c.y - arm, crossTrailPaint)
+                }
+            } else {
+                val trail = Path()
+                trail.moveTo(lassoPoints[0].x, lassoPoints[0].y)
+                for (i in 1 until lassoPoints.size) trail.lineTo(lassoPoints[i].x, lassoPoints[i].y)
+                canvas.drawPath(trail, selectionPaint)
+            }
         }
         // Drag layer: the committed record omits the selected strokes; their snapshots
         // draw translated on top. Selected host content draws live through the

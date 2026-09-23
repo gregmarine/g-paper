@@ -284,9 +284,10 @@ the panel").** `paper.directInk = true`, set with the page's other properties, a
 with the panel open a **stroke** page is painted by the engine exactly as a raster page is: the
 daemon is disabled across it, the live pen goes into the panel segment by segment, the point
 eraser's batches re-present their rect as the tip crosses (an erased stroke vanishes under the
-tip, not at the sweep's end), and the lasso's dashed trail is painted by the engine — the dash
-phase carried across segments, wiped at pen-up by re-presenting the picture under it — since
-the daemon that drew it is off. The flatten base a stroke page lacks is the **committed
+tip, not at the sweep's end), and the lasso's trail is painted by the engine — the lasso's dash
+with its phase carried across segments, the lasso eraser's x-stream with its pitch carried the
+same way (0.1.57, the daemon's own two trails), wiped at pen-up by re-presenting the picture
+under it — since the daemon that drew it is off. The flatten base a stroke page lacks is the **committed
 picture**: white, template, host content and strokes, drawn by the engine into an image of the
 view's size (ARGB, about 10 MB on a Nomad page) and kept current by every change — a mark
 composites its live layer in over its runs by the same integer `SRC_OVER` the raster bake
@@ -408,7 +409,9 @@ growing while the bake goes on laying the width you asked for.
 Ratta codes with no `StrokeStyle`: 12 is broken firmware-side (never armed), 6/7/9/13
 render nothing, 0/5/8/11 are redundant solid variants of `NEEDLE`, 17–31 alias `INK`.
 The lasso gestures' trail chrome stays engine-internal (the engines arm trail styles
-themselves during selection), but both trail *appearances* are host-usable pen types:
+themselves during selection — `LassoTrailChrome`: the lasso's dash, the lasso eraser's
+x-stream, on every engine that paints its own trail), but both trail *appearances* are
+host-usable pen types:
 `DASH` (native live on both platforms) and `CROSS` (native live on Ratta, approximated
 live on Onyx, exact when baked — each module implements whatever comes closest).
 

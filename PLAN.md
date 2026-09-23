@@ -3214,6 +3214,39 @@ clause); the whole-page render's cost on a dense vector page; whether the trail'
 as one dashed line; and whether the ±1-rounding difference between a live composite and a
 later vector re-render ever shows as a dot flipping at a page reload.
 
+### Phase 43 — The lasso eraser's trail is an x-stream on the direct path (post-v0.1.0)
+**Status:** 🧪 Awaiting device verification — built 2026-09-22 · **Publishes:** 0.1.57 · branch `panel-ink` (off `main`, on top of Phase 42).
+Opened on the user's word after Notesprout SN arc 49's P3 walk: *"I don't like the lasso eraser.
+It works. But the look isn't different from the lasso selecter. The Supernote lasso eraser uses
+a bunch of little x's. Can we do something similar."* Phase 42 stated the gap it left — *"both
+lassoes get the same dashed trail (the daemon distinguished the lasso eraser's x-stream; this
+path does not)"* — and this phase closes it with the daemon's own answer: the lasso eraser's
+open loop is a stream of small x-marks, the lasso's stays the dash.
+
+**Design (built as written)**
+- **`LassoTrailChrome`** (core, `canvas`): the one statement of both trails — 2 px black,
+  aliased; the lasso's 12/8 dash; the lasso eraser's x-marks every 16 px of arc length with
+  5 px arms (the committed `CROSS` style's rule at chrome size). The base view's window trail
+  reads it too, and draws the x-stream for `Tool.LASSO_ERASER` where it drew the dash — so the
+  generic engine and Onyx's window trail (if it ever paints one) agree with Supernote.
+- **`TrailSweep(period, crosses)`**: with `crosses` a segment carries the centres of the marks
+  that fall on it (`marks`, x/y pairs) instead of a phase to dash from — the first point
+  carries one, then one every pitch of arc length, and a mark exactly on a join belongs to the
+  segment that reached it (inclusive reach, the next segment starts past what is laid). The
+  pitch continues across joins as the dash phase did.
+- **`RattaPaperView`**: `beginTrail` latches `contactTrailCrosses` off the tool with the other
+  contact latches; `onLassoTrailExtended` builds the sweep for the latched kind, skips a stretch
+  with no mark on it (nothing to post), pads the rect by the arm rather than half the width,
+  and draws each mark as two aliased lines (butt caps) or the dash as before (round caps, the
+  phase set per segment). `wipeTrail` is unchanged — the union rect covers the marks.
+- Tests: `TrailSweepTest` + 3 (piecewise marks equal the whole path's, none doubled at a join;
+  the first point's mark and a dashed sweep's none; a short stretch carries none and the next
+  catches up). No JVM test of the window draw, as before.
+
+**Gate:** the user's Nomad walk in Notesprout SN (`:sn-screen` → 0.1.57): the lasso eraser's
+loop shows x's under the pen on every writing face, the lasso's loop still dashes, both wipe
+clean at pen-up, the erase itself unchanged.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

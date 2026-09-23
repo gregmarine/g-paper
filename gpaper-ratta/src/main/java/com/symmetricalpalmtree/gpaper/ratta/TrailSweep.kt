@@ -1,6 +1,7 @@
 package com.symmetricalpalmtree.gpaper.ratta
 
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
+import kotlin.math.floor
 import kotlin.math.hypot
 
 /**
@@ -20,11 +21,21 @@ import kotlin.math.hypot
  * `DashPathEffect` with the phase given. Everything is in view coordinates.
  */
 internal class TrailSweep(
-    /** The dash pattern's period — the sum of its on and off lengths, in px. */
+    /** The dash pattern's period — the sum of its on and off lengths, in px; with
+     *  [crosses], the pitch between one x-mark and the next. */
     private val period: Float,
+    /**
+     * The lasso eraser's trail (0.1.57): instead of a dash phase, each segment carries the
+     * **centres of the x-marks** that fall on it — one every [period] of arc length from
+     * the outline's first point, laid by the same arc-length rule the committed `CROSS`
+     * style uses, so the marks keep their pitch across a join exactly as the dashes keep
+     * their phase. A mark that lands on a join belongs to the segment that reached it.
+     */
+    private val crosses: Boolean = false,
 ) {
     /** One new stretch of the trail: the points `[from, to)` of the list given, the dash
-     *  phase they start at, and their bounds (unpadded). */
+     *  phase they start at, their bounds (unpadded), and — with [crosses] — the x-mark
+     *  centres on it as `x, y` pairs (empty otherwise). */
     class Segment(
         val from: Int,
         val to: Int,
@@ -33,6 +44,7 @@ internal class TrailSweep(
         val minY: Float,
         val maxX: Float,
         val maxY: Float,
+        val marks: FloatArray = FloatArray(0),
     )
 
     /** How many of the outline's points are already laid — a count, so "nothing new" is
@@ -59,18 +71,37 @@ internal class TrailSweep(
         var maxY = -Float.MAX_VALUE
         var prevX = 0f
         var prevY = 0f
+        val marks = if (crosses) ArrayList<Float>() else null
+        // The next mark's arc length: the first point carries one; after that the first
+        // multiple of the pitch *past* what is laid — a mark exactly on the join was the
+        // previous segment's (its reach is inclusive).
+        var nextAt = if (laid == 0) 0f else (floor(length / period) + 1f) * period
+        if (marks != null && laid == 0) {
+            marks.add(points[0].x); marks.add(points[0].y)
+            nextAt = period
+        }
         for (i in from until points.size) {
             val p = points[i]
             if (p.x < minX) minX = p.x
             if (p.x > maxX) maxX = p.x
             if (p.y < minY) minY = p.y
             if (p.y > maxY) maxY = p.y
-            if (i > from) length += hypot(p.x - prevX, p.y - prevY)
+            if (i > from) {
+                val segLen = hypot(p.x - prevX, p.y - prevY)
+                if (marks != null && segLen > 0f) {
+                    while (length + segLen >= nextAt) {
+                        val t = (nextAt - length) / segLen
+                        marks.add(prevX + t * (p.x - prevX)); marks.add(prevY + t * (p.y - prevY))
+                        nextAt += period
+                    }
+                }
+                length += segLen
+            }
             prevX = p.x
             prevY = p.y
         }
         val to = points.size
         laid = to
-        return Segment(from, to, phase, minX, minY, maxX, maxY)
+        return Segment(from, to, phase, minX, minY, maxX, maxY, marks?.toFloatArray() ?: FloatArray(0))
     }
 }
