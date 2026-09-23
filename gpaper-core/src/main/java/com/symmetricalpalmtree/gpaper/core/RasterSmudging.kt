@@ -46,16 +46,20 @@ package com.symmetricalpalmtree.gpaper.core
  * length smears along itself and one rubbed across bleeds into its neighbours. A batch
  * with no direction (a dwell, a single sample) uses the plain square box. 0.1.54's box
  * was the same in every direction, and a rub read the same whichever way the hand went.
+ * The first Nomad export at `across` 2 and `loss` 0.02 streaked as asked but paled to
+ * near nothing — along a streak the graphite only thins — so `across` is 4 (still two
+ * thirds of the way to a streak from the square) and `loss` is 0: the directional feel
+ * with arc 48's darkness kept.
  */
 data class RasterSmudging(
     val strength: Float = 0.45f,
     val spread: Int = 6,
     val feather: Float = 0.5f,
-    val loss: Float = 0.02f,
+    val loss: Float = 0f,
     val gamma: Float = 3f,
     val carry: Float = 40f,
     val deposit: Float = 0.5f,
-    val across: Int = 2,
+    val across: Int = 4,
 ) {
     init {
         require(strength in 0f..1f) { "strength must be within 0..1" }
