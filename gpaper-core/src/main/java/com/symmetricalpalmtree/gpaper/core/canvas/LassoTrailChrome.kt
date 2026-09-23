@@ -9,7 +9,7 @@ package com.symmetricalpalmtree.gpaper.core.canvas
  * - [Tool.LASSO][com.symmetricalpalmtree.gpaper.core.Tool.LASSO]: a dashed line,
  *   [WIDTH_PX] wide, [DASH_ON_PX] on / [DASH_OFF_PX] off — the selection chrome.
  * - [Tool.LASSO_ERASER][com.symmetricalpalmtree.gpaper.core.Tool.LASSO_ERASER]: a stream of
- *   small x-marks along the path, one every [CROSS_PITCH_PX] of arc length, each arm
+ *   small x-marks along the path, one every [CROSS_PITCH_PX] of arc length (10 px — the arms nearly touch; 16 px read too sparse on the user's Nomad), each arm
  *   [CROSS_ARM_PX] long, drawn [WIDTH_PX] wide — the Supernote lasso-eraser look, the
  *   committed [StrokeStyle.CROSS][com.symmetricalpalmtree.gpaper.core.model.StrokeStyle.CROSS]
  *   at chrome size.
@@ -20,6 +20,6 @@ object LassoTrailChrome {
     const val WIDTH_PX = 2f
     const val DASH_ON_PX = 12f
     const val DASH_OFF_PX = 8f
-    const val CROSS_PITCH_PX = 16f
+    const val CROSS_PITCH_PX = 10f
     const val CROSS_ARM_PX = 5f
 }

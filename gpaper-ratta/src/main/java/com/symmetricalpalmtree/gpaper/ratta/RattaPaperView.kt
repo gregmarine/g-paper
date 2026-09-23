@@ -103,7 +103,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         /**
          * The app-painted lasso trail on a direct page (Phase 42, the user's decision 2):
          * [LassoTrailChrome] — a 2 px black dashed line, 12 on / 8 off, for the lasso, and
-         * since Phase 43 (0.1.57) a stream of 2 px x-marks every 16 px, 5 px arms, for the
+         * since Phase 43 (0.1.57) a stream of 2 px x-marks every 10 px, 5 px arms, for the
          * lasso eraser — the daemon's own two trails, and the chrome every other engine
          * draws in its window. Aliased, because the panel is dithered anyway and a crisp
          * mark reads better than a soft one there.

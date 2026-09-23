@@ -3215,7 +3215,7 @@ as one dashed line; and whether the ±1-rounding difference between a live compo
 later vector re-render ever shows as a dot flipping at a page reload.
 
 ### Phase 43 — The lasso eraser's trail is an x-stream on the direct path (post-v0.1.0)
-**Status:** 🧪 Awaiting device verification — built 2026-09-22 · **Publishes:** 0.1.57 · branch `panel-ink` (off `main`, on top of Phase 42).
+**Status:** 🧪 Awaiting device verification — built 2026-09-22; first Nomad walk: x's too sparse, pitch 16 → 10 px, republished · **Publishes:** 0.1.58 · branch `panel-ink` (off `main`, on top of Phase 42).
 Opened on the user's word after Notesprout SN arc 49's P3 walk: *"I don't like the lasso eraser.
 It works. But the look isn't different from the lasso selecter. The Supernote lasso eraser uses
 a bunch of little x's. Can we do something similar."* Phase 42 stated the gap it left — *"both
@@ -3225,8 +3225,8 @@ open loop is a stream of small x-marks, the lasso's stays the dash.
 
 **Design (built as written)**
 - **`LassoTrailChrome`** (core, `canvas`): the one statement of both trails — 2 px black,
-  aliased; the lasso's 12/8 dash; the lasso eraser's x-marks every 16 px of arc length with
-  5 px arms (the committed `CROSS` style's rule at chrome size). The base view's window trail
+  aliased; the lasso's 12/8 dash; the lasso eraser's x-marks every 10 px of arc length with
+  5 px arms (16 px on the first walk — the user asked for them closer) (the committed `CROSS` style's rule at chrome size). The base view's window trail
   reads it too, and draws the x-stream for `Tool.LASSO_ERASER` where it drew the dash — so the
   generic engine and Onyx's window trail (if it ever paints one) agree with Supernote.
 - **`TrailSweep(period, crosses)`**: with `crosses` a segment carries the centres of the marks
