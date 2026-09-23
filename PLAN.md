@@ -3120,7 +3120,7 @@ pen. On device always dithered. On export, always true tone."*
   on this engine; the gesture goes back to unassigned there).
 
 ### Phase 42 — Ink on the panel: the stroke page goes direct on Ratta (post-v0.1.0)
-**Status:** 🧪 Built 2026-09-22, awaiting the user's Nomad walk of the demo's stroke page · **Publishes:** 0.1.56 · branch `panel-ink` (off `main`).
+**Status:** ✅ Complete 2026-09-22 — walked on the Nomad demo, then in Notesprout SN's notebook (P1) · **Publishes:** 0.1.56 · branch `panel-ink` (off `main`).
 Opened on the user's word for Notesprout SN arc 49 "Panel" (`apps/notesprout_sn/PANEL_INK_PLAN.md`
 § 2 — ten decisions, P0 is this phase): the vector-ink *writing* faces get what the sketch face
 got in Phases 28–41 — app-painted live ink with the daemon off, the panel dithered, exports in
