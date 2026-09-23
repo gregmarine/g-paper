@@ -3248,7 +3248,7 @@ loop shows x's under the pen on every writing face, the lasso's loop still dashe
 clean at pen-up, the erase itself unchanged.
 
 ### Phase 44 — The erase narrow phase stops being quadratic (post-v0.1.0)
-**Status:** ✅ Built 2026-09-22 · **Publishes:** 0.1.59 · branch `panel-ink` (on top of Phase 43).
+**Status:** ✅ Complete 2026-09-22 — walked on the user's Nomad in Notesprout SN (arc 49 P4, "Tests pass") · **Publishes:** 0.1.59 · branch `panel-ink` (on top of Phase 43); `panel-ink` stays unmerged on the user's word.
 Opened by a crash on the user's Nomad during Notesprout SN arc 49's P4 walk: *"I had just drawn a
 very long squiggly white line over a bunch of writing. And was trying to undo it when that
 happened."* The ANR trace (`/data/anr`, via a bugreport — the crash buffer had nothing) put the
