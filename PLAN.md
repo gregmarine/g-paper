@@ -3119,6 +3119,170 @@ pen. On device always dithered. On export, always true tone."*
 - Notesprout SN's sketch face drops its swipe-down `settleDisplay()` binding (the door is a no-op
   on this engine; the gesture goes back to unassigned there).
 
+### Phase 42 — Ink on the panel: the stroke page goes direct on Ratta (post-v0.1.0)
+**Status:** ✅ Complete 2026-09-22 — walked on the Nomad demo, then in Notesprout SN's notebook (P1) · **Publishes:** 0.1.56 · branch `panel-ink` (off `main`).
+Opened on the user's word for Notesprout SN arc 49 "Panel" (`apps/notesprout_sn/PANEL_INK_PLAN.md`
+§ 2 — ten decisions, P0 is this phase): the vector-ink *writing* faces get what the sketch face
+got in Phases 28–41 — app-painted live ink with the daemon off, the panel dithered, exports in
+true tone. Stroke-mode pages were left off the direct path for exactly one stated reason,
+*"there is nothing to flatten against in stroke mode"* — never latency — so this phase supplies
+the flatten base and nothing else changes shape.
+
+**Design (the plan's derived shape, built as written)**
+- **`PaperView.directInk`** — the host opt-in, false by default; every other engine ignores it.
+  `DirectGate` (pure): raster = firmware ∧ panel ∧ RASTER (unchanged); stroke = firmware ∧
+  panel ∧ STROKE ∧ directInk; `direct` = either. Everywhere "this page is ours" was asked of
+  `directRaster` — the tool push, the pen re-arm, the exclusion rects, the contact latches, the
+  eraser-radius re-arm — it now asks `direct`. The daemon is the fallback branch, every law
+  intact, when the panel refuses.
+- **The flatten base is the committed picture**: `committedPage`, a view-sized ARGB bitmap
+  (~10 MB Nomad, ~20 MB Manta — the plan's known cost; RGB_565 would halve it at 6-bit luma,
+  not taken) drawn by `super.drawCommittedContent(forDisplay = false)`, whole or clipped to a
+  rect. `flattenBase(layer)` routes every read that took the graphite image to it on a stroke
+  page (`readRaster`, `readRasterBand`); the ink image is absent. So `toneAndPost`,
+  `ditherBand`, `regenDither*` and `postRectFromDither` are **unchanged code** working on a
+  different base — and `DitherFlatten.band` gained one short cut, opaque white → blank without
+  the flatten, pinned against `coverage` pixel for pixel.
+- **The window records the dither** (`drawCommittedContent(forDisplay = true)` on a direct
+  stroke page draws `ditherDisplay` over white), so the compositor's rewrite of frame 0 is a
+  no-op — the raster page's mirror on a page that keeps its strokes. `renderToBitmap` and
+  every cover are the vector, true greys.
+- **Kept current by the change, not by the redraw.** `redrawCommitted` on a direct stroke page
+  asks `CommittedCache` (pure): current → record + invalidate; else a whole rebuild through
+  the existing `DitherCoalescer` (deferred, coalesced — the page-swap law's five redraws are
+  one render, one dither, one present, exactly as a raster load). What marks it current:
+  - `bakeAfterCommit(stroke)` — a **new core seam** (the no-arg form forwards, Onyx sees
+    nothing): the mark's `RasterDirty.along` runs (`rasterDirtyAlong` made `protected`); a
+    previewed contact composites its live layer in with `compositeLiveInto` — the raster
+    bake's own integer `SRC_OVER`, so the page holds precisely the pixels the panel showed; a
+    style not previewed re-renders its runs from the vector; then `regenDitherRuns`.
+  - `onCommittedStrokesChanged(rect)` — a **new core seam**, fired with the padded bounds of
+    strokes added (`addStrokes`) or removed (`removeStrokes`, the eraser's batch, a scribble
+    erase, a lasso erase) before their redraw: re-render the rect, dither it; and **when a
+    contact is erasing, post the rect to the panel at once** — decision 8, the stroke vanishes
+    under the tip. `strokeEraseRedrawIntervalMs` (new seam) is end-only there, as the raster
+    rubber's is.
+  - `notifyContentChanged` invalidates the cache whatever else was marked (a host removing a
+    content object mid-sweep must still cost a whole rebuild) — the one ordering
+    `CommittedCacheTest` exists for.
+- **The live pen** is Phase 29's `extendLiveInk` unchanged — `directInkStyle` admits `PEN`,
+  `BRUSH`, `CALLIGRAPHY` (the round-capped line whose segments join exactly); the pencil is not
+  previewed on a stroke page (its bake there is the vector render, a second derivation of the
+  grain, and arc 49 decision 10 offers no pencil on the writing faces) and appears at pen-up
+  with the other styles. A cancelled or gesture-consumed contact `dropLivePreview`s from the
+  committed base. The window is never invalidated mid-stroke (the mid-contact exclusion-split
+  commit is the one existing exception, as on the raster path).
+- **The lasso trail is app-painted (decision 2)**, on raster and stroke pages alike (until
+  now a direct raster page had no trail at all). `onLassoTrailExtended(points)` — a **new core
+  seam**, `onLiveStrokeExtended`'s twin, fired from the base's LASSO branch at down, move and
+  up — draws the new stretch with the base's own selection chrome (2 px black, 12/8 dash,
+  aliased) into the ink live layer and posts it; `TrailSweep` (pure) keeps the arc length so
+  each stretch's `DashPathEffect` phase continues the pattern across the join. At pen-up,
+  cancel or a tool change under it, `wipeTrail` clears the mask and re-presents the committed
+  picture under the trail's union rect in one post; the selection box is the window's and
+  follows. Both lassoes get the same dashed trail (the daemon distinguished the lasso eraser's
+  x-stream; this path does not — stated, not hidden).
+- **Every post is cut around the exclusion rects** — `PanelClip` (pure), `postLevels`, and an
+  origin-aware `EbcPanel.post` overload — because the daemon never painted inside a chrome
+  zone and a segment's padded rect up to a bar would otherwise write page pixels over the bar.
+  Applies to the raster path too (its rects are empty on the sketch face; nothing changes).
+- **No page-turn refresh (decision 3)**: the rebuild presents through the window as a raster
+  load does; `PRESENT_LOADED_PAGE_VIA_PANEL` stays false.
+- The flag's setter releases the overlay under the old rule first, then re-pushes the whole
+  tool and schedules the rebuild (on) or drops the image + dither and re-records the vector
+  (off). `pageMode`, `releasePanel` and release drop the image with the dither.
+- Demo: a `Direct` toggle on the stroke page (stroke-only chrome), `DIRECT` in the status
+  head, the Ratta capability note. `docs/api.md` (surface table + the Ratta paragraph),
+  `docs/architecture.md` (the direct path's four pure helpers), `CLAUDE.md` (the standing
+  rule), 0.1.56 published to mavenLocal.
+- Tests: `DirectGateTest`, `PanelClipTest` (pixel-counted against a mask), `TrailSweepTest`
+  (shared joins, phase continuity, bounds), `CommittedCacheTest`, and the band kernel's
+  opaque-page pin. Core **306**, ratta **97**; `./gradlew test` green, `:demo:assembleDebug`
+  green. No JVM test of the `View` wiring, for the reason Phases 28/29 recorded.
+
+**Gate:** the user's Nomad walk of the demo's stroke page with `Direct` on — black pen under
+the nib and nothing moving at pen-up; lasso trail + close + the box; point eraser vanishing
+strokes under the tip; undo (host `removeStrokes`) and clear; page swap (`Swap pg` is raster —
+use Clear + write); a dense page's first render (`committed: whole page … ms`); chrome over
+the page (the notes overlay); the `Direct` toggle both ways under ink. Measure: `live ink: …
+tone N ms`, `dither: …`, `committed: whole page …`, PSS. Then SN P1.
+
+**What only a device can answer:** whether the dithered committed picture reads well where
+the window used to show anti-aliased greys — template lines, a heading's text edges — and
+whether a text-dense page's flip ghosts worse than the sketch face's (decision 3's revisit
+clause); the whole-page render's cost on a dense vector page; whether the trail's joins read
+as one dashed line; and whether the ±1-rounding difference between a live composite and a
+later vector re-render ever shows as a dot flipping at a page reload.
+
+### Phase 43 — The lasso eraser's trail is an x-stream on the direct path (post-v0.1.0)
+**Status:** ✅ Complete 2026-09-22 (8faae52) — walked on the user's Nomad in Notesprout SN ("So much better. We're good now"); the first walk found the x's too sparse, pitch 16 → 10 px · **Publishes:** 0.1.58 · branch `panel-ink` (off `main`, on top of Phase 42).
+Opened on the user's word after Notesprout SN arc 49's P3 walk: *"I don't like the lasso eraser.
+It works. But the look isn't different from the lasso selecter. The Supernote lasso eraser uses
+a bunch of little x's. Can we do something similar."* Phase 42 stated the gap it left — *"both
+lassoes get the same dashed trail (the daemon distinguished the lasso eraser's x-stream; this
+path does not)"* — and this phase closes it with the daemon's own answer: the lasso eraser's
+open loop is a stream of small x-marks, the lasso's stays the dash.
+
+**Design (built as written)**
+- **`LassoTrailChrome`** (core, `canvas`): the one statement of both trails — 2 px black,
+  aliased; the lasso's 12/8 dash; the lasso eraser's x-marks every 10 px of arc length with
+  5 px arms (16 px on the first walk — the user asked for them closer) (the committed `CROSS` style's rule at chrome size). The base view's window trail
+  reads it too, and draws the x-stream for `Tool.LASSO_ERASER` where it drew the dash — so the
+  generic engine and Onyx's window trail (if it ever paints one) agree with Supernote.
+- **`TrailSweep(period, crosses)`**: with `crosses` a segment carries the centres of the marks
+  that fall on it (`marks`, x/y pairs) instead of a phase to dash from — the first point
+  carries one, then one every pitch of arc length, and a mark exactly on a join belongs to the
+  segment that reached it (inclusive reach, the next segment starts past what is laid). The
+  pitch continues across joins as the dash phase did.
+- **`RattaPaperView`**: `beginTrail` latches `contactTrailCrosses` off the tool with the other
+  contact latches; `onLassoTrailExtended` builds the sweep for the latched kind, skips a stretch
+  with no mark on it (nothing to post), pads the rect by the arm rather than half the width,
+  and draws each mark as two aliased lines (butt caps) or the dash as before (round caps, the
+  phase set per segment). `wipeTrail` is unchanged — the union rect covers the marks.
+- Tests: `TrailSweepTest` + 3 (piecewise marks equal the whole path's, none doubled at a join;
+  the first point's mark and a dashed sweep's none; a short stretch carries none and the next
+  catches up). No JVM test of the window draw, as before.
+
+**Gate:** the user's Nomad walk in Notesprout SN (`:sn-screen` → 0.1.57): the lasso eraser's
+loop shows x's under the pen on every writing face, the lasso's loop still dashes, both wipe
+clean at pen-up, the erase itself unchanged.
+
+### Phase 44 — The erase narrow phase stops being quadratic (post-v0.1.0)
+**Status:** ✅ Complete 2026-09-22 — walked on the user's Nomad in Notesprout SN (arc 49 P4, "Tests pass") · **Publishes:** 0.1.59 · branch `panel-ink` (on top of Phase 43); `panel-ink` stays unmerged on the user's word.
+Opened by a crash on the user's Nomad during Notesprout SN arc 49's P4 walk: *"I had just drawn a
+very long squiggly white line over a bunch of writing. And was trying to undo it when that
+happened."* The ANR trace (`/data/anr`, via a bugreport — the crash buffer had nothing) put the
+main thread in `EraseHitTest.hitStrokeIds` → `Geometry.polylineWithinDistance` →
+`distanceSegmentToSegment`, called from `recognizeGesture` at the squiggle's pen-up: the
+scribble-shaped stroke was being hit-tested against the page, **every sweep segment against every
+segment of every stroke whose bounds it touched** — thousands of samples × hundreds of strokes ×
+hundreds of points, on the main thread, 15 s, and the system killed the process. Not the undo,
+not P4's code: the same walk with a black pen would have done it, the white pen only invited a
+scribble over writing.
+
+**Design (built as written)**
+- **`PolylineIndex(points, distance)`** (core, `geometry`): the sweep polyline's segments in a
+  uniform grid (cell = max(2 × tolerance, 24 px), doubled until ≤ 16 384 cells; CSR buckets in
+  flat `IntArray`s, no boxing), each segment in every cell its tolerance-inflated bounds cover.
+  `withinDistanceOf(a)` walks the other polyline's segments, visits only the cells each one's
+  bounds cover, stamps each candidate once per query segment, and measures the survivors with the
+  exact `distanceSegmentToSegment` — **the pairwise answer for every input** (the grid decides
+  what to skip, never what to hit), stopping at the first hit.
+- **`EraseHitTest.hitStrokeIds`** builds the index once per sweep and asks it per candidate
+  stroke, after the same broad phase. Every caller — the scribble gesture, the point eraser's
+  `eraseAlong`, the lasso eraser's drain — gets it; `Geometry.polylineWithinDistance` stays for
+  its tests and as the reference.
+- Tests: `PolylineIndexTest` + 4 — the pairwise rules on empty / single-point inputs; a crossing
+  with no sample near the other polyline still hits and a 10 px parallel still misses; **600
+  random polyline pairs answer exactly as the pairwise test**, twice on one index; and the
+  walk's own shape — a 4 000-sample page-wide scribble against 300 strokes of 300 points —
+  finishes in bounded time (~0.3 s on the JVM, where the pairwise walk is ~360 M pairs) with the
+  pairwise answer stroke for stroke.
+
+**Gate:** the user's Nomad walk in Notesprout SN (`:sn-screen` → 0.1.59): a long squiggle over a
+page of writing at pen-up erases at once, no hang; the point eraser and the lasso eraser
+unchanged.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.

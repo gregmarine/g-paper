@@ -279,6 +279,28 @@ interface PaperView {
     var pageMode: PageMode
 
     /**
+     * Whether a **stroke** page may be painted onto the panel by the engine itself, where
+     * an engine can (Phase 42, 0.1.56 — Supernote's direct path; every other engine ignores
+     * it). Off by default, so a host that never sets it has the engine exactly as before.
+     *
+     * On Supernote a raster page has previewed by painting `/dev/ebc` directly since 0.1.41,
+     * with the ink daemon disabled across it; a stroke page stayed the daemon's because that
+     * path flattens every live pixel against the page images and a stroke page has none.
+     * With this on, the flatten base is the **committed picture** — white, template, host
+     * content, the strokes — kept as a page image of its own, and the live pen, the point
+     * eraser and the lasso's trail all go through the panel the way the raster tools do:
+     * nothing changes at pen-up, an erased stroke vanishes under the tip, and the glass
+     * shows a blue-noise dither of the page (the export keeps its true greys). Where the
+     * panel refuses to open the page stays the daemon's with every law intact, so a host
+     * may set this unconditionally.
+     *
+     * Set it with the page's other properties, before content; flipping it under ink is
+     * legal but re-renders the page. No effect in [PageMode.RASTER], which is direct
+     * already.
+     */
+    var directInk: Boolean
+
+    /**
      * Replace [layer]'s page image with a copy of [bitmap] and re-render — the raster twin
      * of [loadStrokes]. Null is a blank layer. The image is page-space: its top-left is
      * the page's, and it is expected to be the page's size ([setPageSize]); a different

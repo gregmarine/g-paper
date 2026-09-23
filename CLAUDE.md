@@ -196,6 +196,33 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   union is large **or** when there are more than `DITHER_MAX_SETPIXELS_RECTS` (8) of them,
   because a scribble's sixty-four small `setPixels` calls were 651 ms of pen-up with not
   one of them slow enough to log.
+- **A stroke page can go direct too — the flatten base it lacked is the committed picture
+  (Phase 42, 0.1.56, `PaperView.directInk`).** Stroke pages stayed the daemon's through
+  Phases 28–41 for one stated reason, *"nothing to flatten against"* — never latency. With
+  the host's opt-in the engine keeps the committed picture (white, template, host content,
+  strokes) as a view-sized image of its own, and **every read that took the graphite image
+  takes it instead** (`flattenBase`): the live flatten, the display dither, a rect presented
+  from the display bytes all run unchanged on a different base. Four rules follow. (1) **The
+  image is kept current by the change, never by the redraw**: the base funnels every mutation
+  through one `redrawCommitted()` that does not say why, so each path with a rect lays it
+  first — a mark composites its live layer in by the raster bake's own integer `SRC_OVER`
+  (`bakeAfterCommit(stroke)`), an erased / undone / redone stroke re-renders its bounds
+  (`onCommittedStrokesChanged`) — and marks `CommittedCache` current; a redraw that finds it
+  stale rebuilds the whole page through the same deferred coalescer a raster load uses. **A
+  stale mark beats a current one made before the same redraw**: a host's
+  `notifyContentChanged` landing mid-erase-sweep must still cost a whole rebuild, or the
+  object it removed stays in the picture. (2) **The window records the dither of the image**,
+  as on a raster page, or the compositor's rewrite would melt every dot into grey a beat
+  after pen-up; covers and `renderToBitmap` stay the vector, true greys. (3) **Where the
+  engine is the painter it must respect what the daemon respected**: every panel post is cut
+  around the host's exclusion rects (`PanelClip`), because a segment's padded rect up to a
+  bar writes page pixels over the bar. (4) **Chrome the daemon drew and the base does not is
+  the engine's to draw** — the lasso trail (the user's decision 2) is painted segment by
+  segment with its dash phase carried across the joins (`TrailSweep`) and wiped by
+  re-presenting the picture under it. The pen family only previews live there (the styles
+  whose segments join exactly); the pencil on a stroke page would be a second derivation of
+  its grain and is not offered by the faces this is for. Off by default; inert on every
+  other engine; the daemon with every law intact wherever the panel refuses.
 - **Where a preview is exact, the BAKE should be the preview — not a second rendering of
   it (Phase 29, 0.1.43).** The direct path painted every fleck of a mark onto the panel and
   then, at pen-up, ran `GraphiteGrain.of` and `drawPoints` over the whole stroke again to

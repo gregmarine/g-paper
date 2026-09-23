@@ -1,6 +1,6 @@
 # g-paper Public API
 
-> The guided tour of the host-facing surface, as of **v0.1.55**. The authoritative surface
+> The guided tour of the host-facing surface, as of **v0.1.56**. The authoritative surface
 > is the code in `gpaper-core/src/main/java/com/symmetricalpalmtree/gpaper/core/` (KDoc
 > included); this document must be kept in step with it. All three engines are live and
 > device-verified: generic Canvas, BOOX (`gpaper-onyx`), Supernote (`gpaper-ratta`) —
@@ -29,6 +29,7 @@ changes into its own storage, keyed by stroke id.
 | Data model | `Stroke`, `StrokePoint`, `StrokeStyle`, `Bounds`, `Selection`, `SelectionMove`, `OrientedBox` — pure Kotlin, zero Android deps |
 | Tools | `Tool` — `NONE` / `PEN` / `ERASER` / `LASSO` / `LASSO_ERASER` (0.1.28) |
 | Page mode (0.1.25) | `PageMode` — `STROKE` (default) / `RASTER`; `pageMode`, `loadPageRaster`, `getPageRaster`, `copyPageRaster`; `RasterPatch`, `readPageRaster`, `swapPageRaster` (0.1.29); `RasterLayer` — `GRAPHITE` / `INK` (0.1.39), a first parameter on all five and on both raster callbacks |
+| Direct ink (0.1.56) | `directInk` — a host opt-in, false by default: on Supernote with the panel driver open a **stroke** page is painted by the engine itself, as a raster page has been since 0.1.41; inert everywhere else |
 | Transform mode (0.1.27) | `beginTransform` / `endTransform` / `setTransformAspectLocked`, `transformingContentId`, `transformBox`; `OrientedBox`; `TransformGeometry` + `TransformGrab` (pure) |
 | Events | `PaperListener` (all default no-op), `RawInputListener` + `RawInputEvent` |
 | Host content | `ContentRenderer`, `ContentLayer`, `HitTarget` |
@@ -268,15 +269,42 @@ The constant the one-tone daemon forced on the bake — the pressure 0.5 above �
 the hand's own pressure on this path; it still applies wherever the daemon is what previews.
 (The upright bake of 0.1.35 stays on both paths: the panel could show a leaned lead now, but
 the artist's Manta walk kept the Supernote pencil upright.) **Stroke-mode pages are
-unchanged**, on the firmware path exactly as before, and so is every page on every other
-engine. Hosts need nothing new: no call, no flag, no dependency — `gpaper-ratta` still adds
-none, and the small native library it carries for those syscalls ships inside the AAR
-(arm64, the whole Supernote fleet). Where the driver is unavailable — refused, an unexpected
+the daemon's unless the host opts in** (`directInk`, below), and every page on every other
+engine is untouched. Hosts need nothing new for a raster page: no call, no flag, no
+dependency — `gpaper-ratta` still adds none, and the small native library it carries for
+those syscalls ships inside the AAR (arm64, the whole Supernote fleet). Where the driver is unavailable — refused, an unexpected
 geometry, a stripped `.so` — the page keeps the firmware preview it had, and two logcat lines
 say which behaviour is in force (`GPaperRatta`: `panel: direct …` / `panel: needle …` for the
 session, `direct: pencil+pen+rubber` for the page). Known edges: a mark laid over a
 *template* line previews over white and darkens a little at the bake, and the template itself
 is not dithered with the page.
+
+**A stroke page goes through the same panel when the host asks (0.1.56, Phase 42 — "Ink on
+the panel").** `paper.directInk = true`, set with the page's other properties, and on Supernote
+with the panel open a **stroke** page is painted by the engine exactly as a raster page is: the
+daemon is disabled across it, the live pen goes into the panel segment by segment, the point
+eraser's batches re-present their rect as the tip crosses (an erased stroke vanishes under the
+tip, not at the sweep's end), and the lasso's trail is painted by the engine — the lasso's dash
+with its phase carried across segments, the lasso eraser's x-stream with its pitch carried the
+same way (0.1.57, the daemon's own two trails), wiped at pen-up by re-presenting the picture
+under it — since the daemon that drew it is off. The flatten base a stroke page lacks is the **committed
+picture**: white, template, host content and strokes, drawn by the engine into an image of the
+view's size (ARGB, about 10 MB on a Nomad page) and kept current by every change — a mark
+composites its live layer in over its runs by the same integer `SRC_OVER` the raster bake
+uses, so the page holds the pixels the panel showed and nothing moves at pen-up; an erased,
+undone or redone stroke re-renders its rect; a load, a template or the host's own content
+rebuilds the whole page, deferred and coalesced so the page-swap law's five calls cost one
+rebuild. **The window records the dither of that image**, as a raster page's does, so the
+compositor's rewrite lands on the pixels already there; every post is cut around the host's
+exclusion rects, as the daemon's disable areas were; covers and `renderToBitmap` keep the
+true greys. What does not change: the pen family only previews live (`PEN`, `BRUSH`,
+`CALLIGRAPHY` — the styles whose segments join exactly; the pencil and the rest appear at
+pen-up), selection chrome, the drag layer and transform mode stay the window's, `releaseRender`
+is a no-op there, and where the panel refuses to open the page is the daemon's with every law
+intact — so a host may set the flag unconditionally. The log line is `direct: ink+eraser+trail
+(stroke page)`; the whole-page render logs `committed: whole page WxH rendered in N ms`. No
+page-turn refresh is issued (the user's decision, as on the sketch face). Off by default, and
+inert on every other engine.
 
 The images are a layer *over* the paper (white + template still draw under them), so the
 eraser clears to transparent rather than painting white. Format is ARGB_8888; about
@@ -381,7 +409,9 @@ growing while the bake goes on laying the width you asked for.
 Ratta codes with no `StrokeStyle`: 12 is broken firmware-side (never armed), 6/7/9/13
 render nothing, 0/5/8/11 are redundant solid variants of `NEEDLE`, 17–31 alias `INK`.
 The lasso gestures' trail chrome stays engine-internal (the engines arm trail styles
-themselves during selection), but both trail *appearances* are host-usable pen types:
+themselves during selection — `LassoTrailChrome`: the lasso's dash, the lasso eraser's
+x-stream, on every engine that paints its own trail), but both trail *appearances* are
+host-usable pen types:
 `DASH` (native live on both platforms) and `CROSS` (native live on Ratta, approximated
 live on Onyx, exact when baked — each module implements whatever comes closest).
 
