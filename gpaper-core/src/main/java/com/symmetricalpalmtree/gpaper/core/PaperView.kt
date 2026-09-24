@@ -109,6 +109,13 @@ interface PaperView {
     var smudgeRadius: Float
 
     /**
+     * Reach of the **stylus** smudge ([Tool.SMUDGE], 0.1.60), in px around each sample of
+     * the nib's sweep — a stump, not a fingertip. The same [rasterSmudging] does the
+     * blending; only the reach differs from [smudgeRadius].
+     */
+    var smudgeToolRadius: Float
+
+    /**
      * How a finger smudges graphite on a raster page (0.1.54): the pull toward the
      * neighbourhood mean per batch, the neighbourhood's spread, the feathered edge, and
      * the little that is carried off. Ignored in stroke mode. See [RasterSmudging].

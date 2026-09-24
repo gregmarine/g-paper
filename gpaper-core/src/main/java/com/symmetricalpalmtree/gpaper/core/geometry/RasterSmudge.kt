@@ -55,10 +55,32 @@ import kotlin.math.roundToInt
  * the Nomad hung 12 s on one event (an ANR that closed the face). See
  * `CanvasPaperView.smudgeAlong` for the thinning and chunking on the engine side.
  *
+ * **The smear follows the hand (0.1.60).** The neighbourhood is a box **turned to the
+ * batch's direction of travel** — [RasterSmudging.spread] px to either side along it and
+ * [RasterSmudging.across] px to either side across it ([lineMean]) — so graphite is
+ * pushed the way the finger goes: a rub left and right runs a vertical hatch together
+ * and a rub up and down along its lines only smears each line along itself. The
+ * direction is the sweep's **principal axis** ([axis]) — the structure tensor of its
+ * segments, so a batch that turns back on itself still reads as one line of travel
+ * rather than a net displacement of nothing — and a batch with no travel (a dwell, a
+ * single sample) falls back to the plain square box of 0.1.54. The axis is **quantized
+ * to the lattice's four** — 0°, 45°, 90°, 135° ([quantizeAxis]) — so the mean can run
+ * **separably** as two running sums along lattice lines ([lineMean]): along the axis,
+ * then across it. A first cut gathered a precomputed offset list per pixel and cost the
+ * Nomad two to three seconds an event at `across` 4; this is O(n) whatever the reach,
+ * and a hand cannot tell a 30° streak from a 45° one under a fingertip. **The smear is
+ * one-sided (0.1.60, the user's third walk):** along the axis a pixel is pulled toward the
+ * mean of what lies *behind* it in the direction of travel, never ahead, the corridor is
+ * clipped behind the sweep's first sample, and a batch with no net travel does nothing —
+ * so the nib landing on a mark smudges nothing until it moves, and then only the way it
+ * moves: "if the smudge stroke is only down, the smudge effect should only go down".
+ * The first cut blurred a square around the landing sample and reached back past it.
+ *
  * The caller hands over the pixels of a rect **padded by [RasterSmudging.spread]** around
  * the corridor, so the mean at the corridor's edge sees the true neighbours beyond it;
- * only pixels inside the corridor's own rect are written back. The blur is a separable
- * box on running sums — O(n) in the padded area, whatever the spread.
+ * only pixels inside the corridor's own rect are written back. The square blur is a
+ * separable box on running sums — O(n) in the padded area, whatever the spread — and so
+ * is the oriented one, two line passes per plane.
  */
 object RasterSmudge {
 
@@ -77,6 +99,8 @@ object RasterSmudge {
         internal var b = IntArray(0)
         internal var tmp = IntArray(0)
         internal var cov = FloatArray(0)
+        /** One lattice line's indices for [lineMean] — `max(width, height)` long. */
+        internal var line = IntArray(0)
         internal var lutGamma = 0f
         internal val lut = IntArray(256)
         internal fun ensure(n: Int) {
@@ -84,6 +108,7 @@ object RasterSmudge {
                 a = IntArray(n); t = IntArray(n); r = IntArray(n); g = IntArray(n); b = IntArray(n)
                 tmp = IntArray(n); cov = FloatArray(n)
             }
+            if (line.size < n) line = IntArray(n)
         }
         /** `alpha^gamma`, scaled to [TONE_SCALE], one entry per alpha. */
         internal fun toneLut(gamma: Float): IntArray {
@@ -113,6 +138,121 @@ object RasterSmudge {
         fun reset() { alpha = 0f; r = 0f; g = 0f; b = 0f }
     }
 
+    /**
+     * The sweep's principal axis as a unit vector, or null when it has no direction — a
+     * single sample, or less than [RasterRub.MIN_TRAVEL_PX] of travel in all. It is the
+     * eigenvector of the segments' structure tensor (Σdx², Σdxdy, Σdy²), so a batch that
+     * runs out and back along one line still answers that line, where a first-to-last
+     * displacement would answer nothing. Sign is meaningless: the kernel is symmetric.
+     */
+    fun axis(sweep: List<StrokePoint>): FloatArray? {
+        if (sweep.size < 2) return null
+        var sxx = 0.0; var sxy = 0.0; var syy = 0.0; var len = 0f
+        for (i in 1 until sweep.size) {
+            val dx = (sweep[i].x - sweep[i - 1].x).toDouble()
+            val dy = (sweep[i].y - sweep[i - 1].y).toDouble()
+            sxx += dx * dx; sxy += dx * dy; syy += dy * dy
+            len += kotlin.math.sqrt(dx * dx + dy * dy).toFloat()
+        }
+        if (len < RasterRub.MIN_TRAVEL_PX) return null
+        // The larger eigenvalue's eigenvector of [[sxx, sxy], [sxy, syy]].
+        val half = (sxx + syy) / 2.0
+        val diff = (sxx - syy) / 2.0
+        val root = kotlin.math.sqrt(diff * diff + sxy * sxy)
+        val lambda = half + root
+        var ux: Double; var uy: Double
+        if (kotlin.math.abs(sxy) > 1e-9) { ux = lambda - syy; uy = sxy }
+        else if (sxx >= syy) { ux = 1.0; uy = 0.0 }
+        else { ux = 0.0; uy = 1.0 }
+        val n = kotlin.math.sqrt(ux * ux + uy * uy)
+        if (n < 1e-12) return null
+        return floatArrayOf((ux / n).toFloat(), (uy / n).toFloat())
+    }
+
+    /**
+     * The nearest of the four lattice axes to ([ux], [uy]) — 0°, 45°, 90° or 135° — as a
+     * unit step `(sx, sy)` in `{(1,0), (1,1), (0,1), (1,-1)}`. The smear is separable only
+     * along lines the lattice can walk, and a hand cannot tell a 30° streak from a 45°
+     * one under a fingertip; a general gather cost 117 samples a pixel at the defaults and
+     * two seconds an event on the Nomad.
+     */
+    fun quantizeAxis(ux: Float, uy: Float): IntArray {
+        // Fold to the upper half-plane (the axis has no sign), then pick by angle.
+        val x = if (uy < 0f) -ux else ux
+        val y = if (uy < 0f) -uy else uy
+        val angle = Math.toDegrees(kotlin.math.atan2(y.toDouble(), x.toDouble()))   // 0..180
+        return when {
+            angle < 22.5 || angle >= 157.5 -> intArrayOf(1, 0)
+            angle < 67.5 -> intArrayOf(1, 1)
+            angle < 112.5 -> intArrayOf(0, 1)
+            else -> intArrayOf(1, -1)
+        }
+    }
+
+    /**
+     * In-place mean of [plane] over a window of [before] samples back and [after] samples
+     * on **along the lattice line** of step ([sx], [sy]) through each pixel, on a [width] ×
+     * [height] plane — a running sum per line, clipped at the plane's edge and divided by what it
+     * covered, as [boxBlur] is. Every pixel lies on exactly one line of each step, so the
+     * cost is O(n) whatever [half]. [tmp] is scratch of at least `width × height`;
+     * [line] is scratch of at least `max(width, height)`.
+     */
+    internal fun lineMean(plane: IntArray, tmp: IntArray, line: IntArray, width: Int, height: Int, sx: Int, sy: Int, before: Int, after: Int) {
+        if (before <= 0 && after <= 0) return
+        fun walk(x0: Int, y0: Int) {
+            var n = 0
+            var x = x0; var y = y0
+            while (x in 0 until width && y in 0 until height) { line[n++] = y * width + x; x += sx; y += sy }
+            if (n == 0) return
+            var sum = 0; var count = 0
+            val prime = min(after, n - 1)
+            for (i in 0..prime) { sum += plane[line[i]]; count++ }
+            for (i in 0 until n) {
+                tmp[line[i]] = (sum + count / 2) / count
+                val add = i + after + 1
+                if (add < n) { sum += plane[line[add]]; count++ }
+                val drop = i - before
+                if (drop >= 0) { sum -= plane[line[drop]]; count-- }
+            }
+        }
+        when {
+            sx == 1 && sy == 0 -> for (y in 0 until height) walk(0, y)
+            sx == 0 && sy == 1 -> for (x in 0 until width) walk(x, 0)
+            sx == 1 && sy == 1 -> { for (x in 0 until width) walk(x, 0); for (y in 1 until height) walk(0, y) }
+            else -> { for (x in 0 until width) walk(x, height - 1); for (y in 0 until height - 1) walk(0, y) }
+        }
+        System.arraycopy(tmp, 0, plane, 0, width * height)
+    }
+
+    /**
+     * The oriented mean, separably and **one-sided**: along the quantized axis each pixel
+     * is pulled toward the mean of the `2 × along` px **behind it** in the direction of
+     * travel — what the nib has dragged up to it — and nothing ahead, so graphite only
+     * ever moves the way the hand goes and nothing spills back past where the nib came
+     * from; then the symmetric mean across it ([across] px to either side). [forward] says
+     * whether travel runs with the canonical step or against it. On a diagonal the
+     * lattice step is √2 px, so the sample counts are scaled to keep the reach in px.
+     */
+    internal fun orientedMean(plane: IntArray, scratch: Scratch, width: Int, height: Int, axis: IntArray, forward: Boolean, along: Int, across: Int) {
+        val diagonal = axis[0] != 0 && axis[1] != 0
+        val scale = if (diagonal) 0.70710677f else 1f
+        val a = (2 * along * scale).roundToInt()
+        val c = (across * scale).roundToInt()
+        if (forward) lineMean(plane, scratch.tmp, scratch.line, width, height, axis[0], axis[1], a, 0)
+        else lineMean(plane, scratch.tmp, scratch.line, width, height, axis[0], axis[1], 0, a)
+        // The perpendicular step: (sx, sy) → (-sy, sx), folded to the four canonical steps.
+        val px = -axis[1]; val py = axis[0]
+        val (qx, qy) = if (px < 0 || (px == 0 && py < 0)) -px to -py else px to py
+        lineMean(plane, scratch.tmp, scratch.line, width, height, qx, qy, c, c)
+    }
+
+    /**
+     * The sweep's net travel as a unit vector, or null under [RasterRub.MIN_TRAVEL_PX] —
+     * the sign the axis lacks. A batch that turns back within itself still reads by where
+     * it ended up; the pass reset on reversal takes care of the rest.
+     */
+    fun heading(sweep: List<StrokePoint>): FloatArray? = RasterRub.direction(sweep)
+
     /** The sweep's length in px. */
     fun travel(sweep: List<StrokePoint>): Float {
         var d = 0f
@@ -133,11 +273,19 @@ object RasterSmudge {
     fun coverageField(
         cov: FloatArray, left: Int, top: Int, width: Int, height: Int,
         sweep: List<StrokePoint>, radius: Float, feather: Float,
+        /** With a heading (unit vector), nothing **behind the sweep's first sample** is
+         *  covered: the smudge reaches only where the nib is going, never back past where
+         *  it came from (the cap the rubber has behind its landing is the rubber's alone). */
+        heading: FloatArray? = null,
     ) {
         if (sweep.isEmpty() || radius <= 0f) return
         val core = radius * (1f - feather)
         val band = radius - core
         val n = if (sweep.size == 1) 1 else sweep.size - 1
+        val hx = heading?.get(0) ?: 0f
+        val hy = heading?.get(1) ?: 0f
+        val ox = sweep[0].x
+        val oy = sweep[0].y
         for (i in 0 until n) {
             val a = sweep[i]
             val b = if (sweep.size == 1) a else sweep[i + 1]
@@ -149,7 +297,9 @@ object RasterSmudge {
                 val py = y + 0.5f
                 val row = (y - top) * width
                 for (x in x0..x1) {
-                    val d = Geometry.distancePointToSegment(x + 0.5f, py, a.x, a.y, b.x, b.y)
+                    val px = x + 0.5f
+                    if (heading != null && (px - ox) * hx + (py - oy) * hy < 0f) continue
+                    val d = Geometry.distancePointToSegment(px, py, a.x, a.y, b.x, b.y)
                     if (d >= radius) continue
                     val c = if (d <= core || band <= 0f) 1f else (radius - d) / band
                     val k = row + (x - left)
@@ -192,6 +342,7 @@ object RasterSmudge {
         load: Load = Load(),
     ): Boolean {
         if (sweep.isEmpty() || smudging.strength <= 0f || width <= 0 || height <= 0) return false
+        val head = heading(sweep) ?: return false
         val n = width * height
         scratch.ensure(n)
         val pa = scratch.a; val pt = scratch.t; val pr = scratch.r; val pg = scratch.g; val pb = scratch.b
@@ -208,14 +359,21 @@ object RasterSmudge {
             pb[i] = (argb and 0xFF) * a
         }
         val s = smudging.spread
-        boxBlur(pa, scratch.tmp, width, height, s)
-        boxBlur(pt, scratch.tmp, width, height, s)
-        boxBlur(pr, scratch.tmp, width, height, s)
-        boxBlur(pg, scratch.tmp, width, height, s)
-        boxBlur(pb, scratch.tmp, width, height, s)
+        // The smear follows the hand — and only the hand: no travel, no smudge. The box is
+        // turned to the batch's line of travel, quantized to the lattice's four axes, run
+        // separably and one-sided (behind the nib only), and the corridor stops at the
+        // landing. A nib that has not moved yet does nothing at all.
+        val dir = axis(sweep) ?: return false
+        val axis = quantizeAxis(dir[0], dir[1])
+        val forward = axis[0] * head[0] + axis[1] * head[1] >= 0f
+        orientedMean(pa, scratch, width, height, axis, forward, s, smudging.across)
+        orientedMean(pt, scratch, width, height, axis, forward, s, smudging.across)
+        orientedMean(pr, scratch, width, height, axis, forward, s, smudging.across)
+        orientedMean(pg, scratch, width, height, axis, forward, s, smudging.across)
+        orientedMean(pb, scratch, width, height, axis, forward, s, smudging.across)
         val cov = scratch.cov
         java.util.Arrays.fill(cov, 0, n, 0f)
-        coverageField(cov, left, top, width, height, sweep, radius, smudging.feather)
+        coverageField(cov, left, top, width, height, sweep, radius, smudging.feather, head)
 
         val rowEnd = min(innerTop + innerHeight, top + height)
         val colEnd = min(innerLeft + innerWidth, left + width)

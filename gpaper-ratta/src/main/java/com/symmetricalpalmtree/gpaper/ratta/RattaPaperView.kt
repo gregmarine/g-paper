@@ -92,6 +92,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
         const val TAG = "GPaperRatta"
 
+        /** How long after the last smudge contact ends the window mirror is presented on the
+         *  direct path — long enough to ride out a chattering tip switch (~250 ms a contact). */
+        const val SMUDGE_MIRROR_DELAY_MS = 400L
+
         /** Floor for the firmware eraser EMR size (`radius * 50`, min 400 — PoC-validated). */
         const val ERASER_EMR_MIN = 400
 
@@ -335,10 +339,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     // ── Tool & pen configuration → firmware ──────────────────────────────────
 
     /** Modes whose visuals are entirely app-drawn — the firmware must paint nothing
-     *  anywhere: the NONE tool, and the whole of a selection drag-move contact (the
-     *  drag layer is app-drawn; a firmware dash trail under it would be stray ink). */
+     *  anywhere: the NONE tool, the stylus smudge (0.1.60 — the nib moves graphite the
+     *  app posts itself; a needle under it would be stray ink), and the whole of a
+     *  selection drag-move contact (the drag layer is app-drawn; a firmware dash trail
+     *  under it would be stray ink). */
     private val firmwareInkSuppressed: Boolean
-        get() = tool == Tool.NONE || isSelectionDragActive
+        get() = tool == Tool.NONE || tool == Tool.SMUDGE || isSelectionDragActive
 
     override var tool: Tool
         get() = super.tool
@@ -2503,8 +2509,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * The finger smudge goes through the panel the way the rubber does (0.1.54): the blended
      * corridor is re-flattened and written straight into the driver per batch, so the artist
      * sees the hatch running together under the finger. A smudge does not settle what is
-     * waiting either. The screen offset is taken at [beginSmudge] — there is no stylus
-     * contact to take it at.
+     * waiting either. The screen offset is taken at [beginSmudge] — for the finger there is
+     * no stylus contact to take it at; under [Tool.SMUDGE] the contact took it already and
+     * this takes it again, the same answer.
      */
     override fun onRasterSmudgedBatch(rect: Rect) {
         if (!directRaster) return
@@ -2513,8 +2520,26 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
     override fun beginSmudge() {
         super.beginSmudge()
-        if (directRaster) getLocationOnScreen(contactScreenLoc)
+        if (directRaster) {
+            getLocationOnScreen(contactScreenLoc)
+            removeCallbacks(smudgeMirror)
+        }
     }
+
+    /**
+     * On the direct path the corridor is already on the panel batch by batch, so the window's
+     * mirror is not needed at every contact end — and a light rub's tip switch chatters, four
+     * contacts a second: a frame per contact was one of the two things behind a page going
+     * blank on the Nomad (Notesprout SN arc 50, walk 4). The mirror is posted once, a beat
+     * after the last contact ends, and every new contact pushes it back.
+     */
+    override fun onSmudgeEnded() {
+        if (!directRaster) { super.onSmudgeEnded(); return }
+        removeCallbacks(smudgeMirror)
+        postDelayed(smudgeMirror, SMUDGE_MIRROR_DELAY_MS)
+    }
+
+    private val smudgeMirror = Runnable { finalizeEraseRedraw() }
 
     override fun onRasterErasedBatch(rect: Rect) {
         if (!directRaster) return
@@ -3114,6 +3139,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun onDetachedFromWindow() {
         overlayClearArmed = false
         removeCallbacks(overlayClearRunnable)
+        removeCallbacks(smudgeMirror)
         releasePanel()
         if (firmware && inkOwner === this) {
             releaseFirmwareOverlay()
@@ -3159,6 +3185,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun release() {
         overlayClearArmed = false
         removeCallbacks(overlayClearRunnable)
+        removeCallbacks(smudgeMirror)
         releasePanel()
         if (firmware && inkOwner === this) {
             releaseFirmwareOverlay()

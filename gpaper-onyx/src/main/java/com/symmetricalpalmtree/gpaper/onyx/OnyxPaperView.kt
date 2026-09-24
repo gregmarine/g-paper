@@ -342,7 +342,9 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 touchHelper.setRawDrawingRenderEnabled(false)
                 invalidate()
             }
-            Tool.NONE -> {
+            // The stylus smudge (0.1.60) is app-drawn like NONE: no raw pipeline under it,
+            // so its MotionEvents reach the base's sweep.
+            Tool.NONE, Tool.SMUDGE -> {
                 touchHelper.setEraserRawDrawingEnabled(false, 0)
                 touchHelper.setRawDrawingEnabled(false)
                 touchHelper.setRawDrawingRenderEnabled(false)

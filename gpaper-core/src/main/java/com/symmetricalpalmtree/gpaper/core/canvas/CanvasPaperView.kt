@@ -143,6 +143,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         /** Default reach of the finger smudge in px (0.1.54) — about a fingertip at 300 ppi. */
         const val DEFAULT_SMUDGE_RADIUS_PX = 32f
 
+        /** The stylus smudge's reach ([Tool.SMUDGE], 0.1.60): a blending stump, half the fingertip. */
+        const val DEFAULT_SMUDGE_TOOL_RADIUS_PX = 16f
+
         /** A smudge sample nearer than this to the last kept one says nothing new. */
         const val SMUDGE_THIN_PX = 2f
 
@@ -177,7 +180,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     /** What the current stylus contact is doing; latched at ACTION_DOWN. */
-    private enum class GestureMode { NONE, DRAW, ERASE, LASSO, DRAG, OBSERVE }
+    private enum class GestureMode { NONE, DRAW, ERASE, LASSO, DRAG, OBSERVE, SMUDGE }
 
     // ── Stroke model ─────────────────────────────────────────────────────────
 
@@ -522,6 +525,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     override var eraserRadius: Float = DEFAULT_ERASER_RADIUS_PX
     override var rasterRubbing: RasterRubbing = RasterRubbing()
     override var smudgeRadius: Float = DEFAULT_SMUDGE_RADIUS_PX
+    override var smudgeToolRadius: Float = DEFAULT_SMUDGE_TOOL_RADIUS_PX
     override var rasterSmudging: RasterSmudging = RasterSmudging()
 
     override var pageMode: PageMode = PageMode.STROKE
@@ -1230,6 +1234,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                         onLassoTrailExtended(lassoPoints)
                         GestureMode.LASSO
                     }
+                    // The stylus smudge (0.1.60): the finger smudge's sweep, driven from here.
+                    tool == Tool.SMUDGE -> GestureMode.SMUDGE
                     else -> GestureMode.DRAW
                 }
                 dispatchRaw(event, toolType)
@@ -1242,6 +1248,11 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                     GestureMode.ERASE -> {
                         lastEraserPoint = null
                         eraseAlong(listOf(event.strokePointAt(-1)))
+                    }
+                    GestureMode.SMUDGE -> {
+                        beginSmudge()
+                        smudgeReach = smudgeToolRadius
+                        smudgeAlong(listOf(event.strokePointAt(-1)))
                     }
                     else -> Unit
                 }
@@ -1256,6 +1267,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                         if (rendersLiveStrokes) invalidate()
                     }
                     GestureMode.ERASE -> eraseAlong(newPoints)
+                    GestureMode.SMUDGE -> smudgeAlong(newPoints)
                     GestureMode.LASSO -> {
                         lassoPoints.addAll(newPoints)
                         onLassoTrailExtended(lassoPoints)
@@ -1286,6 +1298,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                         if (!cancelled) eraseAlong(listOf(event.strokePointAt(-1)))
                         finalizeEraseRedraw()
                         if (!cancelled) paperListener?.onPenLifted()
+                    }
+                    GestureMode.SMUDGE -> {
+                        if (!cancelled) smudgeAlong(listOf(event.strokePointAt(-1)))
+                        // endSmudge fires onPenLifted itself — a cancelled sweep has still
+                        // moved pixels, and the host's entry has to close either way.
+                        endSmudge()
                     }
                     GestureMode.LASSO -> {
                         lassoCapturing = false
@@ -2181,9 +2199,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     // ── The finger smudge (0.1.54) ───────────────────────────────────────────
 
+    /** The reach of the smudge in progress: [smudgeRadius] for the host's finger, [smudgeToolRadius]
+     *  for the nib under [Tool.SMUDGE] (set right after [beginSmudge] by the stylus path). */
+    private var smudgeReach = DEFAULT_SMUDGE_RADIUS_PX
+
     override fun beginSmudge() {
         endActiveTransform()
         smudging = true
+        smudgeReach = smudgeRadius
         lastSmudgePoint = null
         rasterErasePending = null
         dropSmudgePass()
@@ -2249,14 +2272,17 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         lastSmudgePoint = points.last()
         if (pageMode != PageMode.RASTER) return
         val target = graphiteRaster ?: return
-        val dirty = RasterErase.batchRect(sweep, smudgeRadius, target.width, target.height)
+        val dirty = RasterErase.batchRect(sweep, smudgeReach, target.width, target.height)
             ?.toRectOut() ?: return
         val pass = smudgePassFor(target.width, target.height)
         RasterRub.direction(sweep)?.let { next ->
             if (RasterRub.isReversal(smudgeDirection, next)) dropSmudgePass()
             smudgeDirection = next
         }
-        val spread = rasterSmudging.spread
+        // A batch with no net travel smudges nothing (0.1.60) — chain the sample and go.
+        if (RasterSmudge.heading(sweep) == null) return
+        // The one-sided smear reaches 2 × spread behind a pixel: pad the read by that.
+        val spread = rasterSmudging.spread * 2
         val read = Rect(dirty).apply {
             inset(-spread, -spread)
             if (!intersect(0, 0, target.width, target.height)) return
@@ -2271,7 +2297,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             innerLeft = dirty.left, innerTop = dirty.top,
             innerWidth = dirty.width(), innerHeight = dirty.height(),
             pageWidth = target.width, pass = pass,
-            sweep = sweep, radius = smudgeRadius, smudging = rasterSmudging, scratch = smudgeScratch,
+            sweep = sweep, radius = smudgeReach, smudging = rasterSmudging, scratch = smudgeScratch,
             load = smudgeLoad,
         )
         smudgePassRect = smudgePassRect?.apply { union(dirty) } ?: Rect(dirty)
@@ -2291,9 +2317,18 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (!smudging) return
         smudging = false
         lastSmudgePoint = null
-        finalizeEraseRedraw()
+        onSmudgeEnded()
         paperListener?.onPenLifted()
     }
+
+    /**
+     * The smudge contact is over and the window has to catch up with the pixels — the
+     * eraser's end-of-sweep redraw, by default. An engine that paints the panel itself may
+     * defer and coalesce it: a light rub with the stylus makes the tip switch chatter, four
+     * contacts a second, and a window frame per contact on the Supernote's direct path was
+     * one of the two things behind a page going blank there (Notesprout SN arc 50, walk 4).
+     */
+    protected open fun onSmudgeEnded() = finalizeEraseRedraw()
 
     /**
      * One batch of a finger smudge has just landed in the graphite image over [rect] —
