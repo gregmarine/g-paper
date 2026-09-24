@@ -3322,7 +3322,7 @@ it along itself, a diagonal rub follows the hand; the stylus under Smudge blends
 at half its reach and leaves no needle mark.
 
 ### Phase 46 — The sheet under the raster page (post-v0.1.0)
-**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.61 (branch `sheet`).
+**Status:** ✅ Complete + FROZEN 2026-09-24 on the user's Nomad hand walks through NSE · Sketch (arc 51 "Guides": a grid and a reference photo under the sketch, every tool over both, the export the rasters alone — 0 colour pixels) · **Publishes:** 0.1.61 · `sheet` merged to `main` (`--no-ff`, 677ce17) and deleted 2026-09-24.
 Notesprout SN's sketch face wants a tracing/layout guide under the sketch — a grid of lines or
 dots, a semi-transparent reference photo — that the artist draws over and that is never
 exported. Phase 13 left room for exactly this ("a textured sheet sit under a raster page
