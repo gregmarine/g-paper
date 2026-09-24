@@ -284,6 +284,41 @@ class DitherFlattenTest {
                 )
             }
         }
+        // Phase 46: the same band with a sheet under it — mostly transparent, some
+        // opaque, some part-covered — against the per-pixel answer with the same sheet,
+        // settled and not.
+        val sheet = IntArray(w * h) {
+            when (next() % 4) {
+                0 -> 0xFF000000.toInt() or (next() and 0xFFFFFF)
+                1 -> ((next() and 0xFF) shl 24) or (next() and 0xFFFFFF)
+                else -> 0
+            }
+        }
+        for (settled in listOf(true, false)) {
+            val withSheet = ByteArray(offset + stride * h)
+            DitherFlatten.band(
+                graphite, true, ink, true, x0, y0, w, h, withSheet, offset, stride, ON, OFF,
+                settled, sheet, true,
+            )
+            val sheetIgnored = ByteArray(offset + stride * h)
+            DitherFlatten.band(
+                graphite, true, ink, true, x0, y0, w, h, sheetIgnored, offset, stride, ON, OFF,
+                settled, sheet, false,
+            )
+            for (y in 0 until h) {
+                for (x in 0 until w) {
+                    val i = y * w + x
+                    val expected = DitherFlatten.coverage(
+                        graphite[i], 0, 0, ink[i], 0, 0, x0 + x, y0 + y, settled, sheet[i],
+                    )
+                    assertEquals("sheet pixel ($x, $y) settled=$settled", expected.toByte(), withSheet[offset + y * stride + x])
+                    val bare = DitherFlatten.coverage(
+                        graphite[i], 0, 0, ink[i], 0, 0, x0 + x, y0 + y, settled,
+                    )
+                    assertEquals("hasSheet=false ($x, $y) settled=$settled", bare.toByte(), sheetIgnored[offset + y * stride + x])
+                }
+            }
+        }
     }
 
     @Test
@@ -388,6 +423,11 @@ class DitherFlattenTest {
         // And a band whose pixels are all transparent is the same answer as no band.
         DitherFlatten.band(blank, true, blank, true, 0, 0, w, h, out, 0, w, ON, OFF)
         assertTrue(out.all { it == OFF })
+        // An absent sheet is not read either (Phase 46), and a transparent one is bare paper.
+        DitherFlatten.band(blank, true, blank, true, 0, 0, w, h, out, 0, w, ON, OFF, true, poison, false)
+        assertTrue(out.all { it == OFF })
+        DitherFlatten.band(poison, false, poison, false, 0, 0, w, h, out, 0, w, ON, OFF, true, blank, true)
+        assertTrue(out.all { it == OFF })
     }
 
     @Test
@@ -414,6 +454,133 @@ class DitherFlattenTest {
             top = bottom
         }
         assertTrue(whole.contentEquals(banded))
+        // And with a sheet under it (Phase 46): a grey ramp, half of it part-transparent.
+        val sheet = IntArray(w * h) { ((if (it % 3 == 0) 0x80 else 0xFF) shl 24) or ((it * 5 and 0xFF) * 0x010101) }
+        val sparse = IntArray(w * h) { if (it % 4 == 0) graphite[it] else 0 }
+        for (settled in listOf(false, true)) {
+            val wholeS = ByteArray(w * h)
+            DitherFlatten.band(sparse, true, ink, false, 5, 9, w, h, wholeS, 0, w, ON, OFF, settled, sheet, true)
+            val bandedS = ByteArray(w * h)
+            var t = 0
+            while (t < h) {
+                val b = minOf(t + 7, h)
+                val rows = b - t
+                val g = IntArray(w * rows)
+                val sh = IntArray(w * rows)
+                System.arraycopy(sparse, t * w, g, 0, w * rows)
+                System.arraycopy(sheet, t * w, sh, 0, w * rows)
+                DitherFlatten.band(g, true, ink, false, 5, 9 + t, w, rows, bandedS, t * w, w, ON, OFF, settled, sh, true)
+                t = b
+            }
+            assertTrue("settled=$settled", wholeS.contentEquals(bandedS))
+        }
+    }
+
+    // ── The sheet under the raster page (Phase 46) ──────────────────────────
+
+    private val greys = intArrayOf(0, 0xFF000000.toInt(), 0xFF808080.toInt(), 0x80000000.toInt(), 0xFFFFFFFF.toInt(), 0x40C0C0C0)
+    private val points = listOf(0 to 0, 7 to 5, 63 to 63, 511 to 200, 1403 to 1871)
+
+    @Test
+    fun `a transparent sheet and a white sheet are no sheet at all`() {
+        // The sheet must not move a single pinned answer: transparent is nothing, and
+        // opaque white is the paper it lies on.
+        for (sheet in intArrayOf(0, white, 0x00123456, 0x80FFFFFF.toInt())) {
+            for (g in greys) for (k in greys) {
+                assertEquals(DitherFlatten.luma(g, k), DitherFlatten.luma(sheet, g, k))
+                for ((x, y) in points) for (settled in listOf(true, false)) {
+                    assertEquals(
+                        DitherFlatten.coverage(g, 0, 0, k, 0, 0, x, y, settled),
+                        DitherFlatten.coverage(g, 0, 0, k, 0, 0, x, y, settled, sheet),
+                    )
+                }
+                // Live layers too: the six-argument luma and black.
+                assertEquals(
+                    DitherFlatten.luma(g, 37, black, k, 0, 0),
+                    DitherFlatten.luma(g, 37, black, k, 0, 0, sheet),
+                )
+            }
+            val w = 64
+            val h = 8
+            val graphite = IntArray(w * h) { greys[it % greys.size] }
+            val ink = IntArray(w * h) { greys[(it / 3) % greys.size] }
+            val sh = IntArray(w * h) { sheet }
+            for (settled in listOf(true, false)) {
+                val without = ByteArray(w * h)
+                DitherFlatten.band(graphite, true, ink, true, 3, 4, w, h, without, 0, w, ON, OFF, settled)
+                val with = ByteArray(w * h)
+                DitherFlatten.band(graphite, true, ink, true, 3, 4, w, h, with, 0, w, ON, OFF, settled, sh, true)
+                assertTrue("sheet=${Integer.toHexString(sheet)} settled=$settled", without.contentEquals(with))
+            }
+        }
+    }
+
+    @Test
+    fun `an opaque black sheet is black everywhere`() {
+        for ((x, y) in points) for (settled in listOf(true, false)) {
+            assertEquals(0, DitherFlatten.luma(black, transparent, transparent))
+            assertEquals(255, DitherFlatten.coverage(transparent, 0, 0, transparent, 0, 0, x, y, settled, black))
+            assertTrue(DitherFlatten.black(transparent, 0, 0, transparent, 0, 0, x, y, black))
+        }
+        val w = 64
+        val h = 8
+        val none = IntArray(0)
+        val sheet = IntArray(w * h) { black }
+        for (settled in listOf(true, false)) {
+            val out = ByteArray(w * h)
+            DitherFlatten.band(none, false, none, false, 0, 0, w, h, out, 0, w, ON, OFF, settled, sheet, true)
+            assertTrue(out.all { it == ON })
+        }
+    }
+
+    @Test
+    fun `a grey sheet dithers as its grey and is never a settled tone`() {
+        val grey = 0xFF808080.toInt()
+        for (y in 0 until 64) for (x in 0 until 64) {
+            val want = if (Dither.black(0x80, x, y)) 255 else 0
+            // Settled or not, the sheet alone is not a mark: it dithers.
+            assertEquals(want, DitherFlatten.coverage(transparent, 0, 0, transparent, 0, 0, x, y, true, grey))
+            assertEquals(want, DitherFlatten.coverage(transparent, 0, 0, transparent, 0, 0, x, y, false, grey))
+        }
+        // Half-alpha black over white paper is the same over() the graphite uses: mid grey.
+        val half = DitherFlatten.luma(0x80000000.toInt(), transparent, transparent)
+        assertEquals((255 * (255 - 0x80)) / 255, half)
+        assertEquals(DitherFlatten.luma(0x80000000.toInt(), transparent), half)
+    }
+
+    @Test
+    fun `ink covers the sheet, and a white pen covers it whole`() {
+        val sheet = 0xFF303030.toInt()
+        assertEquals(0, DitherFlatten.luma(sheet, transparent, black))
+        assertEquals(255, DitherFlatten.luma(sheet, transparent, white))
+        assertEquals(0x80, DitherFlatten.luma(sheet, transparent, 0xFF808080.toInt()))
+        for ((x, y) in points) {
+            // A white pen over a black sheet: blank paper on the glass.
+            assertEquals(0, DitherFlatten.coverage(transparent, 0, 0, white, 0, 0, x, y, false, black))
+            assertEquals(0, DitherFlatten.coverage(transparent, 0, 0, white, 0, 0, x, y, true, black))
+            // A live white pen too.
+            assertTrue(!DitherFlatten.black(transparent, 0, 0, transparent, 255, white, x, y, black))
+        }
+        // Half-transparent ink blends over the sheet, not over white.
+        assertEquals(0x30 * (255 - 0x80) / 255, DitherFlatten.luma(sheet, transparent, 0x80000000.toInt()))
+    }
+
+    @Test
+    fun `graphite lies over the sheet and under the ink`() {
+        val sheet = 0xFFC0C0C0.toInt()
+        // Opaque graphite hides the sheet; the ink hides both.
+        assertEquals(0x40, DitherFlatten.luma(sheet, 0xFF404040.toInt(), transparent))
+        assertEquals(0x80, DitherFlatten.luma(sheet, 0xFF404040.toInt(), 0xFF808080.toInt()))
+        // Part-covered graphite blends over the sheet's grey, not over white.
+        val g = 0x80000000.toInt()
+        assertEquals(0xC0 * (255 - 0x80) / 255, DitherFlatten.luma(sheet, g, transparent))
+        // A live fleck lands over the sheet exactly as the baked one does.
+        for ((x, y) in points) for (a in intArrayOf(1, 64, 200, 255)) {
+            assertEquals(
+                DitherFlatten.black(transparent, a, black, transparent, 0, 0, x, y, sheet),
+                DitherFlatten.black(DitherFlatten.srcOver(transparent, black, a), 0, 0, transparent, 0, 0, x, y, sheet),
+            )
+        }
     }
 
     /**

@@ -2157,7 +2157,9 @@ map, and pencils are a later phase. Grain comparable: 1–1.5 px dots, ~1500 per
 at mid tones, both merging as shades darken. Test counts at the freeze: core 264 · ratta 45.
 `probe-ebc/` stays in the tree as the measurement door and its README as the reference. Futures,
 each a fresh decision: a pencil library (Atelier's 4H/2H/HB/2B/4B/6B/8B as the base), live rubbing
-through the panel, the ink pen through the panel, the template dithered with the page, the
+through the panel, the ink pen through the panel, the template dithered with the page (**partly
+answered by Phase 46's sheet**, a display-only underlay flattened with the page on the panel;
+the template itself still is not), the
 provisional 50 px start replaced by a landing-free grain. 0.1.41 to mavenLocal by the user's hand;
 merge on the user's word.
 
@@ -3318,6 +3320,49 @@ carried load.
 Smudge button): a left-right rub over a vertical hatch runs it together, an up-down rub streaks
 it along itself, a diagonal rub follows the hand; the stylus under Smudge blends like the finger
 at half its reach and leaves no needle mark.
+
+### Phase 46 — The sheet under the raster page (post-v0.1.0)
+**Status:** 🧪 Awaiting device verification · **Publishes:** 0.1.61 (branch `sheet`).
+Notesprout SN's sketch face wants a tracing/layout guide under the sketch — a grid of lines or
+dots, a semi-transparent reference photo — that the artist draws over and that is never
+exported. Phase 13 left room for exactly this ("a textured sheet sit under a raster page
+later").
+- **`PaperView.setSheet(bitmap?)`**: a page-sized ARGB bitmap with alpha, held by reference,
+  read 1:1 from the page origin. Null clears; sticky across page loads; dropped on a
+  `pageMode` change and on `release()`; a no-op in `PageMode.STROKE`. **Not a wider
+  `setTemplate`** — the template's contract includes `renderToBitmap`; the sheet's is the
+  opposite.
+- **Core** (`CanvasPaperView`): drawn in `drawRasterLayers` only when `forDisplay`, before the
+  graphite blit — so `renderToBitmap` and Ratta's `renderCommittedPage` exclude it by
+  construction. `getPageRaster`, `eraseRasterAlong`, `smudgeChunk` name the page images only
+  and never see it. `setSheet` fires `onRasterPixelsChanged(null)` then `redrawCommitted()`, a
+  load's own order. `sheetFor()` is the device engines' read-only door (null on a stroke page).
+  Onyx: `setSheet` through `epdRepaintHandoff`, as `setTemplate`.
+- **Ratta** (`DitherFlatten`): a third input, exact integer arithmetic, white → sheet →
+  graphite → ink, all `SRC_OVER` on unpremultiplied ARGB; the graphite step is now the general
+  blend, integer-identical over white, so no sheet and a white or transparent sheet are
+  bit-identical to 0.1.60. The sheet is **never coverage** (the settled tone keys on the page
+  images; `band`'s settled branch gained the same gate). `RattaPaperView` reads it through
+  `sheetFor()` — never `flattenBase` — into `toneAndPost` (the live half under the nib) and
+  `ditherBand` (the display half); the window shows it dithered with the page for free. A
+  sheet keeps a blank page from being "gone" (it rebuilds like a load) — **except inside
+  `clearForContentSwap`**, where the dither is still dropped so the old page holds on the panel
+  until the new one lands (a deviation from the brief's plain `sheetFor() == null` test, which
+  would have scheduled a rebuild of blank-page-plus-sheet between the swap and the load).
+  `setSheet` releases the firmware overlay first, as `setTemplate`.
+- **Demo**: a raster-only `Sheet` cycler — none → a centred light-grey (#aaaaaa, 2 px) grid
+  every quarter of the width → a generated stand-in photo at 25 % alpha — so `Dump` can prove
+  the export has no sheet.
+- Tests: `DitherFlattenTest` + 5 — transparent and white sheets are no sheet (luma, coverage,
+  band); an opaque black sheet is black everywhere; a grey sheet dithers as its grey, settled
+  or not; ink covers the sheet and a white pen covers it whole; graphite over the sheet and
+  under the ink — and the random band, the absent-layer and the banding tests extended with a
+  sheet. Core 317 · ratta 105 (each run twice, debug + release).
+
+**Gate:** the user's Nomad walk through NSE · Sketch (`:sn-screen` → 0.1.61, the sketch face's
+grid / reference photo): the sheet shows under pencil, pen, rubber and smudge on the glass,
+rubbing lifts graphite and never the sheet, a white pen covers it, a page turn keeps it, and
+an export, a cover and a save carry no trace of it.
 
 ## Standing Open Questions (ask as they become relevant)
 

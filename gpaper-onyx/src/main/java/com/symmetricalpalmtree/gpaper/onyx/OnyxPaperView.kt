@@ -926,6 +926,8 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
 
     override fun setTemplate(bitmap: Bitmap?) = epdRepaintHandoff { super.setTemplate(bitmap) }
 
+    override fun setSheet(bitmap: Bitmap?) = epdRepaintHandoff { super.setSheet(bitmap) }
+
     override fun setPageSize(width: Int, height: Int) =
         epdRepaintHandoff { super.setPageSize(width, height) }
 

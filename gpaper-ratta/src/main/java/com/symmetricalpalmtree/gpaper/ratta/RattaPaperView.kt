@@ -1100,10 +1100,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private val contactScreenLoc = IntArray(2)
 
     /** Flatten/dither scratch, grown as rects demand: the two page images' pixels over the
-     *  rect, the batch's own pixels, and the levels handed to the panel. */
+     *  rect, the sheet's under them (Phase 46), the batch's own pixels, and the levels
+     *  handed to the panel. */
     private var tonePix = IntArray(0)
     private var toneGraphite = IntArray(0)
     private var toneInk = IntArray(0)
+    private var toneSheet = IntArray(0)
     private var toneLevels = ByteArray(0)
     private val toneRect = Rect()
     private val toneScreenRect = Rect()
@@ -1355,6 +1357,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         ensureToneScratch(n)
         readRaster(RasterLayer.GRAPHITE, rect, toneGraphite)
         readRaster(RasterLayer.INK, rect, toneInk)
+        readSheet(rect, toneSheet)
         // A live layer is read only where the rect is certainly inside it. An inking
         // contact's rects always are (both bounds calls clip to the layer); a rubbing
         // sweep's come from the *page*, which may be larger than the view, and during one
@@ -1382,6 +1385,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     rect.left + x,
                     pageY,
                     settled,
+                    toneSheet[row + x],
                 )
                 toneLevels[row + x] = LEVEL_OF_COVERAGE[coverage]
             }
@@ -1423,11 +1427,19 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * early return: it is a page-sized bitmap that never gets allocated. The array is
      * zeroed either way, so a caller may read it without asking.
      */
-    private fun readRaster(layer: RasterLayer, rect: Rect, into: IntArray): Boolean {
+    private fun readRaster(layer: RasterLayer, rect: Rect, into: IntArray): Boolean =
+        readPixels(flattenBase(layer), rect, into)
+
+    /** [readRaster] for the sheet under a raster page (Phase 46) — through [sheetFor], never
+     *  [flattenBase], so a direct stroke page never reads one. */
+    private fun readSheet(rect: Rect, into: IntArray): Boolean = readPixels(sheetFor(), rect, into)
+
+    /** [readRaster]'s body for any image — zero-filled first, false when there is none. */
+    private fun readPixels(bitmap: Bitmap?, rect: Rect, into: IntArray): Boolean {
         val w = rect.width()
         val h = rect.height()
         java.util.Arrays.fill(into, 0, w * h, 0)
-        val bitmap = flattenBase(layer) ?: return false
+        if (bitmap == null) return false
         val left = rect.left.coerceAtLeast(0)
         val top = rect.top.coerceAtLeast(0)
         val right = rect.right.coerceAtMost(bitmap.width)
@@ -1448,8 +1460,16 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * flag instead. The fill stays for a layer whose image does not cover the whole band —
      * a page smaller than the view — because those pixels really are blank paper.
      */
-    private fun readRasterBand(layer: RasterLayer, rect: Rect, into: IntArray): Boolean {
-        val bitmap = flattenBase(layer) ?: return false
+    private fun readRasterBand(layer: RasterLayer, rect: Rect, into: IntArray): Boolean =
+        readPixelsBand(flattenBase(layer), rect, into)
+
+    /** [readRasterBand] for the sheet (Phase 46) — through [sheetFor], as [readSheet]. */
+    private fun readSheetBand(rect: Rect, into: IntArray): Boolean =
+        readPixelsBand(sheetFor(), rect, into)
+
+    /** [readRasterBand]'s body for any image — [into] untouched when there is none. */
+    private fun readPixelsBand(bitmap: Bitmap?, rect: Rect, into: IntArray): Boolean {
+        if (bitmap == null) return false
         val w = rect.width()
         val h = rect.height()
         val left = rect.left.coerceAtLeast(0)
@@ -1469,6 +1489,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (tonePix.size < n) tonePix = IntArray(n)
         if (toneGraphite.size < n) toneGraphite = IntArray(n)
         if (toneInk.size < n) toneInk = IntArray(n)
+        if (toneSheet.size < n) toneSheet = IntArray(n)
         if (toneLevels.size < n) toneLevels = ByteArray(n)
     }
 
@@ -1549,6 +1570,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  small-rect path hands `setPixels`. */
     private var bandGraphite = IntArray(0)
     private var bandInk = IntArray(0)
+    private var bandSheet = IntArray(0)
     private var bandOut = IntArray(0)
     private val bandRect = Rect()
 
@@ -1719,6 +1741,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * is what the panel was painted with under the nib and after the settle. Anywhere else — a cover, an export, the host's own data — it is the
      * base's two blits and the artist's true greys. The dither is drawn with a black paint
      * because an `ALPHA_8` bitmap takes its colour from the paint.
+     *
+     * **The sheet ([setSheet], Phase 46) needs no path of its own here**: on the glass it is
+     * a third input to the same dither, so it shows dithered with the page; elsewhere the
+     * base draws it for display and never for an export. The dither's zero byte still lets
+     * the template show through in the window while the panel shows [LEVEL_WHITE] there —
+     * the template is not flattened with the page, the sheet is (the gap is unchanged).
      */
     override fun drawRasterLayers(canvas: Canvas, forDisplay: Boolean) {
         if (!forDisplay || !ditherDisplayed) {
@@ -1743,6 +1771,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * *going* (both images dropped) the bitmap is let go rather than cleared, so a content
      * swap holds the old pixels on the panel until the new page lands, which is the same
      * courtesy the base extends to the page images themselves.
+     *
+     * **A sheet keeps a page from being gone** (Phase 46): a sheet set on a blank page is
+     * still a page to show, so it rebuilds like a load. Except inside a content swap
+     * ([swappingContent]), where the page is going whatever lies under it — the old pixels
+     * hold on the panel until the new page lands, sheet or no sheet.
      */
     override fun onRasterPixelsChanged(rect: Rect?) {
         if (!ditherDisplayed) return
@@ -1751,7 +1784,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // waiting (Phase 37): only the host's ask settles now.
         if (rect == null) pendingRuns.clear()
         if (rect == null) {
-            if (rasterFor(RasterLayer.GRAPHITE) == null && rasterFor(RasterLayer.INK) == null) {
+            val gone = rasterFor(RasterLayer.GRAPHITE) == null &&
+                rasterFor(RasterLayer.INK) == null &&
+                (swappingContent || sheetFor() == null)
+            if (gone) {
                 ditherCoalescer.onPageGone()
                 removeCallbacks(ditherRebuild)
                 dropDither()
@@ -2119,10 +2155,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         bandRect.set(area.left, top, area.right, bottom)
         val hasGraphite = readRasterBand(RasterLayer.GRAPHITE, bandRect, bandGraphite)
         val hasInk = readRasterBand(RasterLayer.INK, bandRect, bandInk)
+        val hasSheet = readSheetBand(bandRect, bandSheet)
         DitherFlatten.band(
             bandGraphite, hasGraphite, bandInk, hasInk,
             area.left, top, area.width(), bottom - top,
             out, offset, stride, DITHER_ON, DITHER_OFF, settled,
+            bandSheet, hasSheet,
         )
     }
 
@@ -2130,6 +2168,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (bandGraphite.size < n) {
             bandGraphite = IntArray(n)
             bandInk = IntArray(n)
+            bandSheet = IntArray(n)
             bandOut = IntArray(n)
         }
     }
@@ -3001,12 +3040,29 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // Bake + release FIRST (or the outgoing page's live overlay ink survives onto
         // the incoming page); the pixels then stay until the next loadStrokes repaints.
         releaseFirmwareOverlay()
-        super.clearForContentSwap()
+        swappingContent = true
+        try {
+            super.clearForContentSwap()
+        } finally {
+            swappingContent = false
+        }
     }
+
+    /** True only inside [clearForContentSwap]'s own whole-page news, which drops the dither
+     *  even with a sheet set — see [onRasterPixelsChanged] (Phase 46). */
+    private var swappingContent = false
 
     override fun setTemplate(bitmap: Bitmap?) {
         releaseFirmwareOverlay()
         super.setTemplate(bitmap)
+    }
+
+    /** As [setTemplate]: the overlay goes first. The base then announces the whole page
+     *  ([onRasterPixelsChanged] null), so the dither is rebuilt with the sheet under it and
+     *  presented once, through the same coalescer a page load uses (Phase 46). */
+    override fun setSheet(bitmap: Bitmap?) {
+        releaseFirmwareOverlay()
+        super.setSheet(bitmap)
     }
 
     // addStrokes / removeStrokes / setPageSize / notifyContentChanged need no override:

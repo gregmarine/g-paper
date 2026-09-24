@@ -278,7 +278,9 @@ geometry, a stripped `.so` — the page keeps the firmware preview it had, and t
 say which behaviour is in force (`GPaperRatta`: `panel: direct …` / `panel: needle …` for the
 session, `direct: pencil+pen+rubber` for the page). Known edges: a mark laid over a
 *template* line previews over white and darkens a little at the bake, and the template itself
-is not dithered with the page.
+is not dithered with the page. **The sheet is** (`setSheet`, 0.1.61): it is a third input to
+the same flatten, under the graphite, so a mark over a sheet previews over the sheet and
+nothing moves at the bake.
 
 **A stroke page goes through the same panel when the host asks (0.1.56, Phase 42 — "Ink on
 the panel").** `paper.directInk = true`, set with the page's other properties, and on Supernote
@@ -307,8 +309,9 @@ intact — so a host may set the flag unconditionally. The log line is `direct: 
 page-turn refresh is issued (the user's decision, as on the sketch face). Off by default, and
 inert on every other engine.
 
-The images are a layer *over* the paper (white + template still draw under them), so the
-eraser clears to transparent rather than painting white. Format is ARGB_8888; about
+The images are a layer *over* the paper (white + template [+ the sheet, on display — see
+`setSheet`] still draw under them), so the eraser clears to transparent rather than painting
+white. Format is ARGB_8888; about
 18 MB at a 1860 × 2480 page — and each layer is allocated **lazily, on its first mark**, so
 a pencil-only page costs exactly what it always did and the second bitmap is the price of
 the first stroke made with a pen.
@@ -326,6 +329,15 @@ the load/add/remove calls (patterns in [host-responsibilities.md](host-responsib
   device's surface size). The template stretches into **this rect, not the view**, so
   ink/template registration survives moving data between different-sized screens.
   `0×0` = stretch-to-view (default). Sticky until the next call.
+- `setSheet(bitmap?)` (0.1.61) — a **display-only underlay for a raster page**: a grid, a
+  reference photo to trace. Page-sized ARGB with alpha, read 1:1 from the page origin (never
+  stretched), drawn over white and the template and **under** both page images, on the window
+  and on Supernote's direct panel path alike (there it is a third band of the dither flatten:
+  white → sheet → graphite → ink). **Never** in `renderToBitmap()`, never in `getPageRaster`,
+  never touched by the rubber or a smudge — it is what the page lies on, not the page. Held by
+  reference (keep it alive and unchanged while set); null clears; sticky across page loads,
+  dropped on a `pageMode` change and on `release()`. A no-op on a stroke page. Not a wider
+  `setTemplate`: the template is exported with the page, the sheet never is.
 
 ## Host content extension point
 
@@ -767,7 +779,8 @@ guard, visibility handling, leaked-pin healing), but three hooks need the host:
 | `onDestroy` | `release()` — final teardown, idempotent |
 
 `renderToBitmap()` renders template + committed content to a fresh bitmap (thumbnails/
-covers), safe while the overlay is live; null before layout.
+covers), safe while the overlay is live; null before layout. A raster page's sheet
+(`setSheet`, 0.1.61) is never in it.
 
 ## Engine selection
 

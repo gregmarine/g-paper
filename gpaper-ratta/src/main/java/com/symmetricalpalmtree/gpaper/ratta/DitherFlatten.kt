@@ -24,6 +24,14 @@ import com.symmetricalpalmtree.gpaper.core.geometry.Dither
  * through `DARKEN`). The display half simply passes live alphas of zero, because by then the
  * mark is in the image it belongs to.
  *
+ * **Since Phase 46 there is a third input under both: the sheet** (`PaperView.setSheet`), a
+ * display-only underlay the host lays under a raster page — a grid, a reference photo. The
+ * order is white → sheet → graphite → ink, every step `SRC_OVER` on unpremultiplied ARGB.
+ * It is an argument defaulting to transparent everywhere, and a transparent or white sheet
+ * is bit-identical to none, so every answer given before it existed stands. It is never
+ * *coverage*: the settled tone keys on the two page images only, because the sheet is not
+ * a mark.
+ *
  * **Since Phase 29 the bake is here too** ([srcOver]). The live layer is composited into
  * the page image with the very arithmetic the live flatten applied to it, so the mirror is
  * a property of one function rather than of two that happen to agree: what the panel was
@@ -59,7 +67,9 @@ internal object DitherFlatten {
         ink: Int,
         liveInk: Int,
         inkColor: Int,
+        sheet: Int = 0,
     ): Int = luma(
+        sheet,
         srcOver(graphite, graphiteColor, liveGraphite),
         srcOver(ink, inkColor, liveInk),
     )
@@ -77,15 +87,34 @@ internal object DitherFlatten {
      * Phase 29: a live blend beside an over-white blend, agreeing to within a part in 255,
      * which is a dot flipped wherever that part fell across a dither threshold.)
      */
-    fun luma(graphite: Int, ink: Int): Int {
+    fun luma(graphite: Int, ink: Int): Int = luma(0, graphite, ink)
+
+    /**
+     * The grey (0…255) the page shows with a [sheet] under both images (Phase 46): white
+     * paper, the sheet over it, the graphite image over that, the ink image on top. The
+     * graphite step is the general `SRC_OVER` — over white it is the integer the two-image
+     * form always gave, so a transparent or white sheet changes nothing.
+     */
+    fun luma(sheet: Int, graphite: Int, ink: Int): Int {
         var r = 255
         var g = 255
         var b = 255
+        val sa = sheet ushr 24
+        if (sa != 0) {
+            r = over(sheet ushr 16 and 0xFF, sa)
+            g = over(sheet ushr 8 and 0xFF, sa)
+            b = over(sheet and 0xFF, sa)
+        }
         val ga = graphite ushr 24
-        if (ga != 0) {
-            r = over(graphite ushr 16 and 0xFF, ga)
-            g = over(graphite ushr 8 and 0xFF, ga)
-            b = over(graphite and 0xFF, ga)
+        if (ga == 255) {
+            r = graphite ushr 16 and 0xFF
+            g = graphite ushr 8 and 0xFF
+            b = graphite and 0xFF
+        } else if (ga != 0) {
+            val inv = 255 - ga
+            r = ((graphite ushr 16 and 0xFF) * ga + r * inv) / 255
+            g = ((graphite ushr 8 and 0xFF) * ga + g * inv) / 255
+            b = ((graphite and 0xFF) * ga + b * inv) / 255
         }
         val ia = ink ushr 24
         if (ia == 255) {
@@ -122,7 +151,8 @@ internal object DitherFlatten {
         inkColor: Int,
         x: Int,
         y: Int,
-    ): Boolean = Dither.black(luma(graphite, liveGraphite, graphiteColor, ink, liveInk, inkColor), x, y)
+        sheet: Int = 0,
+    ): Boolean = Dither.black(luma(graphite, liveGraphite, graphiteColor, ink, liveInk, inkColor, sheet), x, y)
 
     /** [black] with a live layer on the **graphite** side only. */
     fun black(graphite: Int, liveAlpha: Int, liveColor: Int, ink: Int, x: Int, y: Int): Boolean =
@@ -148,6 +178,9 @@ internal object DitherFlatten {
      *   with the correct tone"); the caller settles it, in tone, at the next thing that is
      *   not a mark: a tool or pen change, a page swap, an undo, a rub, or its own chrome
      *   about to open (`settleDisplay`).
+     *
+     * A [sheet] (Phase 46) lies under both images and is never coverage: where only the
+     * sheet shows, the pixel dithers, settled or not.
      */
     fun coverage(
         graphite: Int,
@@ -159,10 +192,11 @@ internal object DitherFlatten {
         x: Int,
         y: Int,
         settled: Boolean = true,
+        sheet: Int = 0,
     ): Int {
         val g = srcOver(graphite, graphiteColor, liveGraphite)
         val k = srcOver(ink, inkColor, liveInk)
-        val grey = luma(g, k)
+        val grey = luma(sheet, g, k)
         if (settled && liveInk == 0 && liveGraphite == 0 && ((k or g) ushr 24) != 0) return 255 - grey
         return if (Dither.black(grey, x, y)) 255 else 0
     }
@@ -257,6 +291,10 @@ internal object DitherFlatten {
      * page-sized buffer (a whole-page rebuild filling the bitmap's own rows) or a
      * standalone `w × h` block (a rect).
      *
+     * [sheet] (Phase 46) is the display-only underlay over the same band, read only when
+     * [hasSheet]; it goes under both images and, as in [coverage], never counts as a mark
+     * for the settled tone.
+     *
      * There is **no live layer** here, deliberately: this is the display half, where a
      * mark is already in the graphite image. The live half stays on [black] — it works a
      * fleck's rect at a time, where none of this bookkeeping would pay for itself.
@@ -276,6 +314,8 @@ internal object DitherFlatten {
         inked: Byte,
         blank: Byte,
         settled: Boolean = true,
+        sheet: IntArray = EMPTY,
+        hasSheet: Boolean = false,
     ) {
         if (w <= 0 || h <= 0) return
         val n = w * h
@@ -284,7 +324,8 @@ internal object DitherFlatten {
         // compare per pixel and it buys the whole flatten.
         val g = hasGraphite && anyInk(graphite, n)
         val k = hasInk && anyInk(ink, n)
-        if (!g && !k) {
+        val s = hasSheet && anyInk(sheet, n)
+        if (!g && !k && !s) {
             for (y in 0 until h) {
                 val at = outOffset + y * outStride
                 out.fill(blank, at, at + w)
@@ -306,9 +347,11 @@ internal object DitherFlatten {
             while (x < w) {
                 val gp = if (g) graphite[src + x] else 0
                 val kp = if (k) ink[src + x] else 0
+                val sp = if (s) sheet[src + x] else 0
                 // Opaque white with nothing over it — most of a committed stroke page,
                 // whose base image is opaque everywhere (Phase 42) — is paper, and paper
-                // dithers blank by construction; say so without the flatten.
+                // dithers blank by construction; say so without the flatten. (It covers a
+                // sheet too — opaque graphite hides whatever lies under it.)
                 if (gp == OPAQUE_WHITE && kp == 0) {
                     out[dst + x] = blank
                     x++
@@ -316,22 +359,34 @@ internal object DitherFlatten {
                     continue
                 }
                 var grey = 255
-                if ((gp or kp) ushr 24 != 0) {
-                    // White paper, the graphite image over it, the ink image OVER that —
-                    // [luma]'s own order, written out so nothing is called here.
+                if ((gp or kp or sp) ushr 24 != 0) {
+                    // White paper, the sheet over it, the graphite image over that, the ink
+                    // image OVER all — [luma]'s own order, written out so nothing is called
+                    // here.
                     var r = 255
                     var gg = 255
                     var b = 255
+                    val sa = sp ushr 24
+                    if (sa == 255) {
+                        r = sp ushr 16 and 0xFF
+                        gg = sp ushr 8 and 0xFF
+                        b = sp and 0xFF
+                    } else if (sa != 0) {
+                        val inv = 255 * (255 - sa)
+                        r = ((sp ushr 16 and 0xFF) * sa + inv) / 255
+                        gg = ((sp ushr 8 and 0xFF) * sa + inv) / 255
+                        b = ((sp and 0xFF) * sa + inv) / 255
+                    }
                     val ga = gp ushr 24
                     if (ga == 255) {
                         r = gp ushr 16 and 0xFF
                         gg = gp ushr 8 and 0xFF
                         b = gp and 0xFF
                     } else if (ga != 0) {
-                        val inv = 255 * (255 - ga)
-                        r = ((gp ushr 16 and 0xFF) * ga + inv) / 255
-                        gg = ((gp ushr 8 and 0xFF) * ga + inv) / 255
-                        b = ((gp and 0xFF) * ga + inv) / 255
+                        val inv = 255 - ga
+                        r = ((gp ushr 16 and 0xFF) * ga + r * inv) / 255
+                        gg = ((gp ushr 8 and 0xFF) * ga + gg * inv) / 255
+                        b = ((gp and 0xFF) * ga + b * inv) / 255
                     }
                     val ia = kp ushr 24
                     if (ia == 255) {
@@ -346,14 +401,20 @@ internal object DitherFlatten {
                     }
                     grey = (LUMA_R * r + LUMA_G * gg + LUMA_B * b) shr 8
                 }
+                // Settled tone only where a page image covers — the sheet is never a mark
+                // ([coverage]'s gate). Without a sheet a pixel no image covers is grey 255,
+                // which dithers blank and tones to 0 alike, so this is the old answer.
                 out[dst + x] =
-                    if (settled) (255 - grey).toByte()
+                    if (settled && (gp or kp) ushr 24 != 0) (255 - grey).toByte()
                     else if (limit[grey] < cut[phase]) inked else blank
                 x++
                 phase = (phase + 1) and (BlueNoise64.SIZE - 1)
             }
         }
     }
+
+    /** The absent sheet — [band]'s default, never read. */
+    private val EMPTY = IntArray(0)
 
     /** Whether any pixel of [px]`[0, n)` has a non-zero alpha — see [band]. */
     private fun anyInk(px: IntArray, n: Int): Boolean {

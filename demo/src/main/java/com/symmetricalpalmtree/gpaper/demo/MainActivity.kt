@@ -685,6 +685,9 @@ class MainActivity : Activity() {
         resetRasterHistory()
         rasterMode = !rasterMode
         paper.pageMode = if (rasterMode) PageMode.RASTER else PageMode.STROKE
+        // A mode change drops the engine's sheet (0.1.61); the cycler starts over with it.
+        sheetIndex = 0
+        sheetButton.text = "Sheet: ${sheetNames[0]}"
         if (rasterMode) {
             strokeEraserRadiusPx = paper.eraserRadius
             applyRasterTool()
@@ -891,6 +894,78 @@ class MainActivity : Activity() {
         refreshStatus()
     }
 
+    // ── The sheet under the raster page (0.1.61) ─────────────────────────────
+
+    private val sheetNames = arrayOf("none", "grid", "photo")
+    private var sheetIndex = 0
+    private lateinit var sheetButton: TextView
+
+    /**
+     * Step the raster page's sheet: none → a grid → a stand-in photo at 25 % alpha. It is
+     * here so a walk can see the sheet under pencil, pen, rubber and smudge — and so `Dump`
+     * (`renderToBitmap`) can prove it is never in the export. The "photo" is generated, not
+     * bundled: a soft radial ramp with a few discs, enough tone to trace over.
+     */
+    private fun cycleSheet() {
+        if (!rasterMode) return
+        val v = paper.asView()
+        val w = v.width
+        val h = v.height
+        if (w <= 0 || h <= 0) return
+        sheetIndex = (sheetIndex + 1) % sheetNames.size
+        paper.setSheet(
+            when (sheetIndex) {
+                1 -> gridSheet(w, h)
+                2 -> photoSheet(w, h)
+                else -> null
+            },
+        )
+        sheetButton.text = "Sheet: ${sheetNames[sheetIndex]}"
+        lastEvent = "sheet: ${sheetNames[sheetIndex]}"
+        refreshStatus()
+    }
+
+    /** Light-grey 2 px lines every quarter of the width, centred on the page. */
+    private fun gridSheet(w: Int, h: Int): Bitmap {
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint().apply { color = 0xFFAAAAAA.toInt(); strokeWidth = 2f }
+        val step = w / 4f
+        val cx = w / 2f
+        val cy = h / 2f
+        var k = 0
+        while (cx - k * step >= 0f || cy - k * step >= 0f) {
+            for (x in floatArrayOf(cx - k * step, cx + k * step)) canvas.drawLine(x, 0f, x, h.toFloat(), paint)
+            for (y in floatArrayOf(cy - k * step, cy + k * step)) canvas.drawLine(0f, y, w.toFloat(), y, paint)
+            k++
+        }
+        return out
+    }
+
+    /** A generated stand-in for a reference photo, fit to the page at 25 % alpha. */
+    private fun photoSheet(w: Int, h: Int): Bitmap {
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint().apply { isAntiAlias = true }
+        val r = maxOf(w, h).toFloat()
+        paint.shader = android.graphics.RadialGradient(
+            w * 0.35f, h * 0.3f, r * 0.8f, Color.WHITE, Color.BLACK, android.graphics.Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), paint)
+        paint.shader = null
+        paint.color = Color.DKGRAY
+        canvas.drawCircle(w * 0.62f, h * 0.58f, w * 0.18f, paint)
+        paint.color = Color.LTGRAY
+        canvas.drawCircle(w * 0.3f, h * 0.72f, w * 0.1f, paint)
+        paint.color = Color.BLACK
+        canvas.drawRect(w * 0.1f, h * 0.1f, w * 0.25f, h * 0.2f, paint)
+        // 25 % alpha over the whole image: the sheet is read with its alpha.
+        val faded = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        Canvas(faded).drawBitmap(out, 0f, 0f, Paint().apply { alpha = 64 })
+        out.recycle()
+        return faded
+    }
+
     // ── Toolbar ──────────────────────────────────────────────────────────────
 
     private lateinit var penButton: TextView
@@ -1021,6 +1096,7 @@ class MainActivity : Activity() {
         val redoButton = toolbarButton("Redo") { rasterRedo() }
         val swapPageButton = toolbarButton("Swap pg") { swapWholePage() }
         val dumpButton = toolbarButton("Dump") { dumpFlatten() }
+        sheetButton = toolbarButton("Sheet: ${sheetNames[0]}") { cycleSheet() }
 
         // The gel pen (0.1.39): a toggle, not a third entry in a style cycler — the raster
         // page has two tools and the question on a walk is only which one is in the hand.
@@ -1070,10 +1146,10 @@ class MainActivity : Activity() {
         )
         rasterOnlyButtons += listOf(
             rasterPenButton, shadeButton, leadButton, undoButton, redoButton, swapPageButton,
-            dumpButton,
+            dumpButton, sheetButton,
         )
 
-        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, smartLassoButton, scribbleButton, clearButton, transformButton, lockButton, directButton, rasterButton, rasterPenButton, shadeButton, leadButton, undoButton, redoButton, swapPageButton, dumpButton, notesButton)) {
+        for (b in listOf(penButton, eraserButton, lassoButton, styleButton, widthButton, colorButton, smartLassoButton, scribbleButton, clearButton, transformButton, lockButton, directButton, rasterButton, rasterPenButton, shadeButton, leadButton, undoButton, redoButton, swapPageButton, dumpButton, sheetButton, notesButton)) {
             bar.addView(b, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginEnd = dp(6) })

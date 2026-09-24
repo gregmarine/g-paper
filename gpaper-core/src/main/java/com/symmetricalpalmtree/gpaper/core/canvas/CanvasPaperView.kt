@@ -195,6 +195,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private val committedNode = RenderNode("gpaper-committed")
     private val scratchPaint = Paint()
     private var templateBitmap: Bitmap? = null
+    /** The raster page's display-only underlay ([setSheet], Phase 46) — the host's bitmap,
+     *  held by reference as the template is; null on a stroke page. */
+    private var sheetBitmap: Bitmap? = null
     private var pageWidth = 0
     private var pageHeight = 0
 
@@ -535,6 +538,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             // (open — device engines add their overlay release there) means the pixels on
             // the panel hold until the host loads what the new mode understands, so a
             // book opened in either mode turns its first page as quietly as any other.
+            // The sheet belongs to a raster page and goes with the mode (Phase 46).
+            sheetBitmap = null
             clearForContentSwap()
             field = value
         }
@@ -795,6 +800,13 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected fun rasterFor(layer: RasterLayer): Bitmap? = raster(layer)
 
     /**
+     * The sheet under the raster page ([setSheet], Phase 46) for a device engine that
+     * flattens the page itself — **read-only**, and null on a stroke page whatever was set,
+     * so an engine flattening a stroke page against its own base never reads it.
+     */
+    protected fun sheetFor(): Bitmap? = if (pageMode == PageMode.RASTER) sheetBitmap else null
+
+    /**
      * [layer]'s page image **to write into**, allocated if this is its first mark — the
      * twin of [rasterFor] for the one engine that lays a mark itself
      * ([bakeCapturedStroke], Phase 29).
@@ -1047,6 +1059,15 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         redrawCommitted()
     }
 
+    override fun setSheet(bitmap: Bitmap?) {
+        if (pageMode != PageMode.RASTER) return
+        sheetBitmap = bitmap
+        // The page as seen changed everywhere, so a panel's second image of it is wrong
+        // everywhere: the same whole-page news a load gives, then the one redraw.
+        onRasterPixelsChanged(null)
+        redrawCommitted()
+    }
+
     override fun setPageSize(width: Int, height: Int) {
         pageWidth = width
         pageHeight = height
@@ -1154,6 +1175,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         modelChanged()
         contentRenderers.clear()
         templateBitmap = null
+        sheetBitmap = null
         dropRasters()
         committedNode.discardDisplayList()
     }
@@ -1565,8 +1587,13 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * keeps that confined to the glass: false is a cover, an export, the host's own data,
      * and there the page is drawn exactly as it is stored. An engine overriding this must
      * honour that, or an artist's pencil page would export as a screen of dots.
+     *
+     * **The sheet ([setSheet], Phase 46) is drawn here and only for display** — under both
+     * images, over the paper and the template — so it is never in [renderToBitmap] by
+     * construction. An engine overriding this must keep it out of the false branch too.
      */
     protected open fun drawRasterLayers(canvas: Canvas, forDisplay: Boolean) {
+        if (forDisplay) sheetBitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
         graphiteRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
         inkRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
     }

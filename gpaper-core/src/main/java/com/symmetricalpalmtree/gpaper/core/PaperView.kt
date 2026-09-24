@@ -410,6 +410,23 @@ interface PaperView {
     fun setTemplate(bitmap: Bitmap?)
 
     /**
+     * A display-only underlay for a raster page (Phase 46, 0.1.61) — a grid to lay a drawing
+     * out on, a reference photo to trace: page-sized ARGB with alpha, drawn over white (and
+     * the template) and **under** both page images, on the window and on Supernote's panel
+     * alike. Never in [renderToBitmap], never in [getPageRaster], never touched by a rub or
+     * a smudge — it is not the page, it is what the page lies on.
+     *
+     * Read 1:1 from the page origin, never stretched. Held by reference, so the host keeps
+     * it alive and unchanged while it is set. Null clears. Sticky across page loads until the
+     * next call; dropped when [pageMode] changes and on [release]. A no-op in
+     * [PageMode.STROKE].
+     *
+     * Not a wider [setTemplate]: the template is part of the page a host exports; this is
+     * the opposite.
+     */
+    fun setSheet(bitmap: Bitmap?)
+
+    /**
      * The page-coordinate rect (anchored top-left) that content was authored in — i.e.
      * the surface size of the device the data was created on. The template stretches
      * into this rect, not the view, so ink and template stay registered when data
