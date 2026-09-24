@@ -3284,7 +3284,7 @@ page of writing at pen-up erases at once, no hang; the point eraser and the lass
 unchanged.
 
 ### Phase 45 — The smear follows the hand, and a stylus smudge tool (post-v0.1.0)
-**Status:** 🔧 Built 2026-09-22, tests green (core + ratta 809, `RasterSmudgeTest` 19); awaiting the user's Nomad walk in Notesprout SN (arc 50 "Stump") · **Publishes:** 0.1.60 · branch `smudge-tool` (off `main`).
+**Status:** ✅ COMPLETE + FROZEN 2026-09-23 on the user's six Nomad walks in Notesprout SN (arc 50 "Stump" — *"we have nailed the smudge"*); `smudge-tool` **merged to `main` 2026-09-23 (`--no-ff`, 46ec218) and deleted** · **Publishes:** 0.1.60 (republished four times on the walks: `across` 2 → 4 + `loss` 0; the gathered kernel → separable on the lattice's four axes after 2–3 s an event; one-sided + travel-gated; the deferred smudge mirror).
 The user, on the finger smudge: *"does it push graphite around based on the direction of the
 finger movement? … If we can do that, let's give it a try. And let's also add a smudge toolbar
 button to implement the ability to also do this with the stylus. Finger smudge would always be
