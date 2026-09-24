@@ -59,6 +59,19 @@ the Ratta 0…31 pen-code sweep recorded in Notesprout's `app/src/debug/AndroidM
   before-image as a `RasterPatch`, and `swapPageRaster` puts it back and leaves the array holding
   what was there — one entry serves redo, no second copy of an 18 MB page mid-undo, and on Onyx
   only the patched region is refreshed. The swap runs row by row through one reused buffer.
+- **The sheet is what the page lies on, never the page (Phase 46, 0.1.61, `setSheet`).** The
+  "textured sheet under a raster page" Phase 13 left room for: a host bitmap (grid, reference
+  photo) drawn over white and the template and **under** both page images — on the window via
+  `drawRasterLayers(forDisplay = true)` only, and on Supernote's direct path as a third input
+  to `DitherFlatten` (white → sheet → graphite → ink, integer `SRC_OVER`; bit-identical to
+  0.1.60 with no sheet or a white one). It is **never** in `renderToBitmap`, `getPageRaster`,
+  a save, a bake, a rub or a smudge — those name `graphiteRaster` / `inkRaster` and must go on
+  naming only them — and it is **never coverage** for the settled tone. A no-op on a stroke
+  page (`sheetFor()` is null there, so a direct stroke page's `flattenBase` never reads it).
+  **Why not the template:** the template is part of the page a host exports; the sheet is the
+  opposite, and widening `setTemplate` would have made every existing template export-less or
+  every sheet exported. A content swap still drops the dither with a sheet set — the old page
+  holds on the panel until the new one lands.
 - **A mark announces itself as RUNS, not as a box — and a change the host made itself is not
   announced at all (Phase 20, 0.1.33).** A raster host's before-image costs the *announced*
   area, never the ink's, so one rect per mark made a corner-to-corner hairline cost the whole
