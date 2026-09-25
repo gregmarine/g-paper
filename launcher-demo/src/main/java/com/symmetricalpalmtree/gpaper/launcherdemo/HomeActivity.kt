@@ -64,6 +64,7 @@ class HomeActivity : Activity() {
 
     private val firmware = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
+            if (BarService.running) return
             when (i.action) {
                 REFRESH -> { refreshSeen = true; say("firmware: refresh (swipe up)") }
                 MENU_STATE -> {
@@ -122,7 +123,7 @@ class HomeActivity : Activity() {
         }
         root.addView(menu, FrameLayout.LayoutParams(520, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END))
         setContentView(root)
-        say("home up — pid ${android.os.Process.myPid()}")
+        say("home up — pid ${android.os.Process.myPid()} — bar service ${if (BarService.running) "RUNNING (owns the bars)" else "off"}")
     }
 
     private fun button(label: String, onTap: () -> Unit) = Button(this).apply {
@@ -150,7 +151,7 @@ class HomeActivity : Activity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) {
+        if (hasFocus && !BarService.running) {
             // The launcher's own app-changed handler re-enables the bars around now; land after it.
             main.postDelayed({ lock(true) }, 300)
             main.postDelayed({ lock(true) }, 1200)
@@ -158,7 +159,7 @@ class HomeActivity : Activity() {
     }
 
     override fun onPause() {
-        lock(false) // the next app gets the firmware menu back at once, not on the next switch
+        if (!BarService.running) lock(false) // the next app gets the firmware menu back at once, not on the next switch
         super.onPause()
     }
 
@@ -177,6 +178,7 @@ class HomeActivity : Activity() {
         if (code !in 290..292 && code !in 300..301 && code !in 309..310 && code != KeyEvent.KEYCODE_MENU) {
             return super.dispatchKeyEvent(event)
         }
+        if (BarService.running) return true // the service owns the bars
         if (!lockedOnce) lock(true) // first bar touch after a switch: make sure the firmware menu is shut
         if (code == RIGHT_FIRST) {
             when (event.action) {

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="bar_service_description">Owns the Supernote side bars system-wide: reads the bar keys in every app, keeps the firmware side menu shut, and shows the launcher demo\'s own menu on a right-bar swipe down.</string>
+</resources>
