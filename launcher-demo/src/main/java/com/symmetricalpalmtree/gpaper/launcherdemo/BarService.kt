@@ -145,7 +145,8 @@ class BarService : AccessibilityService() {
             })
             addView(row("Notesprout Dev") { launch(NOTESPROUT_DEV) })
             addView(row("Home") { startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) })
-            addView(row("Ratta home") { startActivity(Intent().setComponent(ComponentName("com.ratta.supernote.background", "com.ratta.supernote.background.MainActivity")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) })
+            // Ratta's HOME activity is only a boot screen that re-opens the last app; the visible "home" is Notes.
+            addView(row("Supernote Notes") { launch("com.ratta.supernote.note") })
             addView(row("Close") { })
         }
         root.addView(panel, FrameLayout.LayoutParams(520, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END))

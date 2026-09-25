@@ -118,7 +118,7 @@ class HomeActivity : Activity() {
             })
             addView(menuRow("Notesprout Dev") { launch(NOTESPROUT_DEV) })
             addView(menuRow("Slide probe") { launch("com.symmetricalpalmtree.gpaper.probeslide") })
-            addView(menuRow("Ratta home") { launchComponent("com.ratta.supernote.background", "com.ratta.supernote.background.MainActivity") })
+            addView(menuRow("Supernote Notes") { launch("com.ratta.supernote.note") })
             addView(menuRow("Close") { closeMenu() })
         }
         root.addView(menu, FrameLayout.LayoutParams(520, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END))

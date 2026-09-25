@@ -4,6 +4,7 @@
         <package android:name="com.ratta.supernote.launcher" />
         <package android:name="com.symmetricalpalmtree.notesproutsn.dev" />
         <package android:name="com.symmetricalpalmtree.notesproutsn" />
+        <package android:name="com.ratta.supernote.note" />
     </queries>
     <application
         android:label="Launcher demo"
