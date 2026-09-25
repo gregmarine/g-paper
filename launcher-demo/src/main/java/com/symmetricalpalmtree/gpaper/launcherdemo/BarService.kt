@@ -53,6 +53,7 @@ class BarService : AccessibilityService() {
     private var rightDownAt = 0L
     private var refreshSeen = false
     private var lastPackage: CharSequence? = null
+    private var userLaunched = false
     private var overlay: View? = null
 
     private val firmware = object : BroadcastReceiver() {
@@ -99,6 +100,16 @@ class BarService : AccessibilityService() {
         if (pkg != lastPackage) {
             lastPackage = pkg
             log("front: $pkg")
+            // Ratta's gesture service runs its own boot routine ~15 s after boot and pushes its
+            // "last package" (Notes by default) over whatever HOME is. Within the boot window,
+            // a Notes arrival the user did not ask for is that push: take the home back.
+            if (pkg == RATTA_NOTES && !userLaunched && android.os.SystemClock.elapsedRealtime() < BOOT_WINDOW_MS) {
+                log("boot push of Notes — returning to HOME")
+                main.postDelayed({
+                    startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+                }, 300)
+            }
             main.postDelayed({ lock(true) }, 300)
             main.postDelayed({ lock(true) }, 1200)
         }
@@ -173,6 +184,7 @@ class BarService : AccessibilityService() {
     }
 
     private fun launch(pkg: String) {
+        userLaunched = true
         val i = packageManager.getLaunchIntentForPackage(pkg)
         if (i == null) { log("launch: $pkg not installed"); return }
         log("launch: $pkg"); startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -210,6 +222,8 @@ class BarService : AccessibilityService() {
         private const val REFRESH = "com.ratta.supernote.launcher.flashscreen"
         private const val MENU_STATE = "com.ratta.supernote.launcher.slidebarstatusbarstate"
         private const val NOTESPROUT_DEV = "com.symmetricalpalmtree.notesproutsn.dev"
+        private const val RATTA_NOTES = "com.ratta.supernote.note"
+        private const val BOOT_WINDOW_MS = 180_000L
         private const val RIGHT_FIRST = 310
         private const val TAP_MS = 250L
         /** Observe only: the firmware must still see the swipe so its refresh tells us "up". */
