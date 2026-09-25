@@ -59,9 +59,14 @@ class BarService : AccessibilityService() {
         override fun onReceive(c: Context, i: Intent) {
             when (i.action) {
                 REFRESH -> { refreshSeen = true; log("firmware: refresh (swipe up)") }
+                // The firmware sends this for BOTH overlays: the side menu (our bar) and the
+                // pull-down status bar (a top-edge drag, KEYCODE_DRAG). Only a recent right-bar
+                // touch makes it a side-menu leak; the status bar is left alone.
                 MENU_STATE -> if (i.getBooleanExtra("show", false)) {
-                    log("firmware: side menu slipped through — locking and taking over")
-                    lock(true); main.postDelayed({ lock(true) }, 400); showMenu()
+                    if (android.os.SystemClock.uptimeMillis() - rightDownAt < 1500) {
+                        log("firmware: side menu slipped through — locking and taking over")
+                        lock(true); main.postDelayed({ lock(true) }, 400); showMenu()
+                    } else log("firmware: status bar shown — left alone")
                 }
             }
         }
