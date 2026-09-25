@@ -115,3 +115,12 @@ overlays are invisible to screencap — ink behavior is verified by eye on the p
 ## License
 
 MIT — see `LICENSE`.
+
+## Supernote side bars + home screen (`probe-slide`, `launcher-demo`)
+
+Two dependency-free apps from the 2026-09-24 survey of the Supernote's OS-level UI: `probe-slide`
+logs what the side bars send an app; `launcher-demo` is a HOME app whose accessibility service
+owns the bars and the side menu in every app on the device. The full write-up of how the bars
+are wired (a two-key keyboard per bar, `system_server` → Ratta's `GestureService`), every door
+an ordinary app has, the gesture vocabulary, the binder lock's lifetime and the fresh-boot
+sequence is `launcher-demo/README.md`.
