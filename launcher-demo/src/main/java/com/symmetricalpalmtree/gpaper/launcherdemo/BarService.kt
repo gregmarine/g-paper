@@ -42,7 +42,11 @@ class BarService : AccessibilityService() {
     private val main = Handler(Looper.getMainLooper())
     private var gesture: IBinder? = null
     private val conn = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName, service: IBinder) { gesture = service; log("binder connected"); lock(true) }
+        override fun onServiceConnected(name: ComponentName, service: IBinder) {
+            gesture = service; log("binder connected")
+            transact(5, 0) // the status bar is never ours — release it in case an earlier run left it shut
+            lock(true)
+        }
         override fun onServiceDisconnected(name: ComponentName) { gesture = null; log("binder gone") }
     }
 
@@ -180,11 +184,14 @@ class BarService : AccessibilityService() {
         finally { data.recycle(); reply.recycle() }
     }
 
+    // Only the side menu is ours; the pull-down status bar (KEYCODE_DRAG from the top edge)
+    // stays the firmware's, so its flag is never locked — and is unlocked on the way out in case
+    // an older build left it shut.
     private fun lock(on: Boolean) {
         if (gesture == null) return
         val a = transact(4, if (on) 1 else 0)
-        val b = transact(5, if (on) 1 else 0)
-        Log.d(TAG, "lock($on) → $a/$b")
+        if (!on) transact(5, 0)
+        Log.d(TAG, "lock($on) → $a")
     }
 
     private fun log(line: String) = Log.d(TAG, line)
