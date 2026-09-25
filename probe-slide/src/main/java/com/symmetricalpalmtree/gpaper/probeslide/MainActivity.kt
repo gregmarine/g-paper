@@ -5,6 +5,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import android.view.MotionEvent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -44,6 +47,7 @@ class MainActivity : Activity() {
 
     // Burst summary per bar: code -> count, flushed after a quiet period.
     private val burst = HashMap<Int, Int>()
+    private val order = ArrayList<Int>()
     private var burstStart = 0L
     private val flush = Runnable { flushBurst() }
 
@@ -101,6 +105,38 @@ class MainActivity : Activity() {
         say("pid ${android.os.Process.myPid()} — ${packageName}")
     }
 
+    // The launcher tells the world what it decided: the side menu shown/hidden, or a refresh.
+    private val decided = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            when (i.action) {
+                "com.ratta.supernote.launcher.slidebarstatusbarstate" ->
+                    say("launcher decided: side menu/status bar show=${i.getBooleanExtra("show", false)} from=${i.getStringExtra("from")}")
+                "com.ratta.supernote.launcher.flashscreen" -> say("launcher decided: REFRESH swipe")
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        registerReceiver(decided, IntentFilter().apply {
+            addAction("com.ratta.supernote.launcher.slidebarstatusbarstate")
+            addAction("com.ratta.supernote.launcher.flashscreen")
+        })
+    }
+
+    override fun onStop() { unregisterReceiver(decided); super.onStop() }
+
+    // Any touch from a device other than the main panel is the strip talking.
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        val dev = ev.device?.name ?: "dev${ev.deviceId}"
+        if (dev != "pt_mt" && ev.actionMasked != MotionEvent.ACTION_MOVE) {
+            say("touch [$dev] ${MotionEvent.actionToString(ev.actionMasked)} x=${ev.x.toInt()} y=${ev.y.toInt()} src=0x${Integer.toHexString(ev.source)}")
+        } else if (dev != "pt_mt") {
+            Log.d(TAG, "touch [$dev] MOVE x=${ev.x.toInt()} y=${ev.y.toInt()}")
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onDestroy() {
         // Never leave the device locked: undo both doors on the way out.
         runCatching { lockBinder(false) }
@@ -127,6 +163,7 @@ class MainActivity : Activity() {
         if (code in 300..301 || code in 309..310) {
             if (burst.isEmpty()) burstStart = System.currentTimeMillis()
             burst[code] = (burst[code] ?: 0) + 1
+            if (event.action == KeyEvent.ACTION_DOWN) order.add(code)
             main.removeCallbacks(flush)
             main.postDelayed(flush, 400)
         } else {
@@ -140,8 +177,11 @@ class MainActivity : Activity() {
         val bar = if (burst.keys.any { it >= 309 }) "BAR-B (309/310)" else "BAR-A (300/301)"
         val parts = burst.entries.sortedBy { it.key }.joinToString(" ") { "${it.key}×${it.value}" }
         val ms = System.currentTimeMillis() - burstStart
-        say("slide on $bar: $parts events over ~${ms}ms")
-        burst.clear()
+        // Run-length of the down codes in the order they came: 310×3 309×1 …
+        val seq = StringBuilder(); var i = 0
+        while (i < order.size) { var j = i; while (j < order.size && order[j] == order[i]) j++; seq.append("${order[i]}×${j - i} "); i = j }
+        say("slide on $bar: $parts over ~${ms}ms  order: ${seq.toString().trim()}")
+        burst.clear(); order.clear()
     }
 
     // ---- door 2a: the broadcast the Notes app uses ------------------------------
