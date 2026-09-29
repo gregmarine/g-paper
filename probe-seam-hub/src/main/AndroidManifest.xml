@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <permission
+        android:name="com.symmetricalpalmtree.gpaper.probeseam.BIND"
+        android:protectionLevel="signature" />
+    <application android:label="Seam probe hub">
+        <service
+            android:name=".HubService"
+            android:exported="true"
+            android:permission="com.symmetricalpalmtree.gpaper.probeseam.BIND" />
+    </application>
+</manifest>
