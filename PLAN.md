@@ -3365,14 +3365,20 @@ rubbing lifts graphite and never the sheet, a white pen covers it, a page turn k
 an export, a cover and a save carry no trace of it.
 
 ### Phase 49 — A lost lift is a lift (post-v0.1.0)
-**Status:** ✅ Code complete 2026-10-03 · **Publishes:** 0.1.64 · **Gate:** the user's Nomad walk through Soil's Notesprout (the palm landing mid-stroke; every stroke stays), with the `touch:` trace read if one still goes.
+**Status:** ✅ Code complete 2026-10-03 · **Publishes:** 0.1.65 (0.1.64 regressed, see below) · **Gate:** the user's Nomad walk through Soil's Notesprout (the palm landing mid-stroke; every stroke stays), with the `touch:` trace read if one still goes.
 With 0.1.63 installed a stroke was lost again, and this time the window's log showed nothing at
 the pen's lift at all: a finger landed 230 ms after the pen, the pen's lift was seen by the
-system 60 ms later, and no up, pointer-up or cancel reached the engine — the pen's pointer had
-simply vanished from the shared stream. The next contact's `activePoints.clear()` took the mark.
+system 60 ms later, and no up, pointer-up or cancel reached the engine — the pen's gesture had
+ended at the source. The next contact's `activePoints.clear()` took the mark.
 - **Core** (`CanvasPaperView.endLostDraw`, `drawInProgress`): a draw contact still in progress
-  is ended as a lift when a finger's event arrives, and before a new stylus `ACTION_DOWN` is
-  handled; a tap-sized one is dropped. The base calls it at both entries.
+  is ended as a lift; a tap-sized one is dropped. Called before a new stylus `ACTION_DOWN` is
+  handled, and when a **cancel carried by a finger's pointer** arrives — the 0.1.64 trace showed
+  that is how the system's cancel of the pen's gesture reaches the window (`ACTION_CANCEL
+  pointers=[finger#0]` the moment the palm lands, then the finger's own `ACTION_DOWN`).
+- **0.1.64 regressed**: it also ended the draw on a finger's down, move and up. The pen's own
+  stream keeps coming while a hand rests on the glass (two streams, each pointer id 0, on this
+  device), so every later stroke was cut to a fragment at the hand's first move. A whole word
+  went. 0.1.65 ends a draw on a finger's cancel only.
 - **Ratta** (`RattaPaperView`): calls `endLostDraw` at `ACTION_DOWN` **before** its own contact
   bookkeeping, so the old mark bakes under the old contact's live layer; and `traceTouch` logs
   every non-move event and every multi-pointer event the window received (action, action

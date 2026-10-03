@@ -114,8 +114,10 @@ the panel alone. A cancel at a tap-sized contact still commits nothing.
 
 **A lost lift is a lift (0.1.64).** The third shape of the same finding: the pen's pointer can
 vanish from the shared stream when a palm lands, with no up and no cancel at all. A draw contact
-still in progress is therefore ended as a lift (`endLostDraw`) the moment a finger's event
-arrives, or the next pen contact begins; device engines call it before their own bookkeeping for
+still in progress is therefore ended as a lift (`endLostDraw`) when a cancel carried by a
+finger's pointer arrives (the system cancelling the pen's gesture), or the next pen contact
+begins — never on a finger's down, move or up, since the pen's own stream keeps coming while a
+hand rests on the glass (0.1.65); device engines call it before their own bookkeeping for
 the new contact, so the old mark bakes under the old contact's state. The Ratta engine also logs
 every contact boundary the window received (`touch:` lines), the record to read when a stroke is
 lost.

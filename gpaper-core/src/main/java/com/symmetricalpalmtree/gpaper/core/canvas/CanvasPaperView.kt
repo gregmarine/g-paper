@@ -1209,9 +1209,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         val toolType = event.getToolType(0)
         val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS ||
             toolType == MotionEvent.TOOL_TYPE_ERASER
-        // A finger's event arriving while a draw contact is in progress means the pen's
-        // pointer vanished from the stream (Phase 49): the mark is ended as a lift first.
-        if (!isStylus && gestureMode == GestureMode.DRAW) endLostDraw()
+        // A cancel carried by a finger's pointer while a draw contact is in progress is the
+        // system cancelling the pen's gesture as the palm lands (Phase 49, 0.1.65): the mark
+        // is ended as a lift. A finger's down, move or up is NOT that — on the same device the
+        // pen's own stream keeps coming while a hand rests on the glass, and ending the draw
+        // on those cut every later stroke to a fragment (the 0.1.64 regression).
+        if (!isStylus && event.actionMasked == MotionEvent.ACTION_CANCEL && gestureMode == GestureMode.DRAW) endLostDraw()
         // Stylus-only, with one narrow exception: while a selection is active in lasso
         // mode, a single finger may drag it or dismiss it (see handleFingerSelection).
         // Every other finger (and mouse) event passes through to the host untouched.
@@ -1711,11 +1714,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     protected val drawInProgress: Boolean get() = gestureMode == GestureMode.DRAW
 
     /**
-     * End a draw contact whose lift never arrived (Phase 49): on a Supernote the pen's pointer
-     * can vanish from the shared touch stream when a palm lands, with no up and no cancel, and
-     * the next event is a finger's, or the next pen contact. The mark is committed exactly as a
-     * lift would commit it; a tap-sized one is dropped. Device engines call it before their own
-     * contact bookkeeping for a new contact, so the old mark bakes under the old contact's state.
+     * End a draw contact whose lift never arrived (Phase 49): on a Supernote a palm landing
+     * mid-stroke ends the pen's gesture, and what the window sees of it is a cancel carried by
+     * the finger's pointer, or nothing at all until the next pen contact. The mark is committed
+     * exactly as a lift would commit it; a tap-sized one is dropped. Device engines call it
+     * before their own contact bookkeeping for a new contact, so the old mark bakes under the
+     * old contact's state.
      */
     protected fun endLostDraw() {
         if (gestureMode != GestureMode.DRAW) return
