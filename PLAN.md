@@ -3364,6 +3364,21 @@ grid / reference photo): the sheet shows under pencil, pen, rubber and smudge on
 rubbing lifts graphite and never the sheet, a white pen covers it, a page turn keeps it, and
 an export, a cover and a save carry no trace of it.
 
+### Phase 49 — A lost lift is a lift (post-v0.1.0)
+**Status:** ✅ Code complete 2026-10-03 · **Publishes:** 0.1.64 · **Gate:** the user's Nomad walk through Soil's Notesprout (the palm landing mid-stroke; every stroke stays), with the `touch:` trace read if one still goes.
+With 0.1.63 installed a stroke was lost again, and this time the window's log showed nothing at
+the pen's lift at all: a finger landed 230 ms after the pen, the pen's lift was seen by the
+system 60 ms later, and no up, pointer-up or cancel reached the engine — the pen's pointer had
+simply vanished from the shared stream. The next contact's `activePoints.clear()` took the mark.
+- **Core** (`CanvasPaperView.endLostDraw`, `drawInProgress`): a draw contact still in progress
+  is ended as a lift when a finger's event arrives, and before a new stylus `ACTION_DOWN` is
+  handled; a tap-sized one is dropped. The base calls it at both entries.
+- **Ratta** (`RattaPaperView`): calls `endLostDraw` at `ACTION_DOWN` **before** its own contact
+  bookkeeping, so the old mark bakes under the old contact's live layer; and `traceTouch` logs
+  every non-move event and every multi-pointer event the window received (action, action
+  index, each pointer's tool and id, flags).
+- **Docs:** architecture.md § input.
+
 ### Phase 48 — A cancelled mark is kept (post-v0.1.0)
 **Status:** ✅ Code complete 2026-10-03 · **Publishes:** 0.1.63 · **Gate:** the user's Nomad walk through Soil's Notesprout (write with the heel of the hand landing mid-stroke; every stroke stays and undoes).
 Phase 47 was half the Supernote finding. With 0.1.62 installed a stroke still vanished when the

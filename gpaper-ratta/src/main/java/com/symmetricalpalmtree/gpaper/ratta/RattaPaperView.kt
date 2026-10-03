@@ -726,6 +726,21 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /** A stroke of this contact was committed (Phase 48): a cancel after it has nothing to wipe. */
     private var contactCommitted = false
 
+    /** One line per contact boundary: the action, which pointer it names, and every pointer's tool. */
+    private fun traceTouch(event: MotionEvent) {
+        val action = MotionEvent.actionToString(event.actionMasked)
+        val pointers = (0 until event.pointerCount).joinToString(",") { i ->
+            val t = when (event.getToolType(i)) {
+                MotionEvent.TOOL_TYPE_STYLUS -> "stylus"
+                MotionEvent.TOOL_TYPE_ERASER -> "eraser"
+                MotionEvent.TOOL_TYPE_FINGER -> "finger"
+                else -> "other"
+            }
+            "$t#${event.getPointerId(i)}"
+        }
+        Log.i(TAG, "touch: $action index=${event.actionIndex} pointers=[$pointers] flags=${event.flags}")
+    }
+
     override fun bakeAfterCommit(stroke: Stroke) {
         contactCommitted = true
         if (!firmware || !directStroke) {
@@ -2871,6 +2886,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         // The pen among fingers (Phase 47): a mixed event is narrowed to the pen's pointer
         // before this engine's own bookkeeping, which reads pointer 0 like the base.
         stylusOnly(event)?.let { only -> try { return onTouchEvent(only) } finally { only.recycle() } }
+        // Every contact boundary, as the window received it (Phase 49): the one record of what
+        // the shared pen-and-hand stream delivered when a stroke is lost.
+        if (event.actionMasked != MotionEvent.ACTION_MOVE || event.pointerCount > 1) traceTouch(event)
         // Correct the digitizer offset before ANY consumer — writing, erasing and
         // hit-tests must all agree on where the pen physically is.
         compensateRegistration(event)
@@ -2880,6 +2898,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (isStylus && firmware) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    // The last draw never ended (Phase 49): its mark bakes under its own
+                    // contact state, before this contact's is set up below.
+                    if (drawInProgress) endLostDraw()
                     // No-hover backstop for the pen-approach re-arm (too late for this
                     // stroke's paint, but heals the session for the rest).
                     rearmOnPenApproach()

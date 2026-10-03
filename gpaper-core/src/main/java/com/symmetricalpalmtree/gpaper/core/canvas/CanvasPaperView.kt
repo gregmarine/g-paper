@@ -1209,6 +1209,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         val toolType = event.getToolType(0)
         val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS ||
             toolType == MotionEvent.TOOL_TYPE_ERASER
+        // A finger's event arriving while a draw contact is in progress means the pen's
+        // pointer vanished from the stream (Phase 49): the mark is ended as a lift first.
+        if (!isStylus && gestureMode == GestureMode.DRAW) endLostDraw()
         // Stylus-only, with one narrow exception: while a selection is active in lasso
         // mode, a single finger may drag it or dismiss it (see handleFingerSelection).
         // Every other finger (and mouse) event passes through to the host untouched.
@@ -1216,6 +1219,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // A new contact while the last draw never ended (Phase 49): its mark first.
+                if (gestureMode == GestureMode.DRAW) endLostDraw()
                 // Host chrome zones never start ink; let the platform route the event.
                 // The stylus is still physically on the glass, though — pulse the gate
                 // tail so a resting palm can't pass host palm-gates during the press.
@@ -1701,6 +1706,30 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     /** Returns false when a recognizer consumed the stroke (see [commitCapturedStroke]). */
     /** A cancelled draw contact with at least this many points is committed, not dropped (Phase 48). */
     protected val CANCEL_COMMIT_MIN_POINTS: Int get() = 2
+
+    /** Whether a draw contact is in progress: points captured and no lift seen yet (Phase 49). */
+    protected val drawInProgress: Boolean get() = gestureMode == GestureMode.DRAW
+
+    /**
+     * End a draw contact whose lift never arrived (Phase 49): on a Supernote the pen's pointer
+     * can vanish from the shared touch stream when a palm lands, with no up and no cancel, and
+     * the next event is a finger's, or the next pen contact. The mark is committed exactly as a
+     * lift would commit it; a tap-sized one is dropped. Device engines call it before their own
+     * contact bookkeeping for a new contact, so the old mark bakes under the old contact's state.
+     */
+    protected fun endLostDraw() {
+        if (gestureMode != GestureMode.DRAW) return
+        android.util.Log.i("GPaper", "lost draw: ending a contact whose lift never arrived (${activePoints.size} points)")
+        markPenUp()
+        if (activePoints.size < CANCEL_COMMIT_MIN_POINTS) {
+            activePoints.clear()
+            if (rendersLiveStrokes) invalidate()
+        } else if (commitActiveStroke()) {
+            paperListener?.onPenLifted()
+        }
+        gestureMode = GestureMode.NONE
+        lastEraserPoint = null
+    }
 
     private fun commitActiveStroke(): Boolean {
         if (activePoints.isEmpty()) return true

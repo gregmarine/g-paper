@@ -112,6 +112,14 @@ real mark is on the glass (`CANCEL_COMMIT_MIN_POINTS`, two points) now commits i
 lift would; the Ratta engine remembers that the contact committed (`contactCommitted`) and leaves
 the panel alone. A cancel at a tap-sized contact still commits nothing.
 
+**A lost lift is a lift (0.1.64).** The third shape of the same finding: the pen's pointer can
+vanish from the shared stream when a palm lands, with no up and no cancel at all. A draw contact
+still in progress is therefore ended as a lift (`endLostDraw`) the moment a finger's event
+arrives, or the next pen contact begins; device engines call it before their own bookkeeping for
+the new contact, so the old mark bakes under the old contact's state. The Ratta engine also logs
+every contact boundary the window received (`touch:` lines), the record to read when a stroke is
+lost.
+
 ## The Onyx engine (BOOX)
 
 Live ink is painted by the firmware through the Onyx SDK's raw-drawing pipeline
