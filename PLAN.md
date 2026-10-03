@@ -3457,3 +3457,15 @@ split); every draw's lift or cancel with its point count; every commit (id, poin
 tool, mode) and every gesture consumption (scribble hits, smart-lasso contents); the exclusion
 rects as set; hover enter and exit; the bake; a cancel's drop of the live preview or wipe of
 the overlay. The log is read against the page the person wrote; what is found decides the fix.
+
+### Phase 50 / 0.1.67 — the trace comes out; an interrupted contact commits as ink only
+
+The writing test found its cause outside the engine (Soil's accessibility key filter let a palm
+on the Supernote's edge strip cancel the pen's stream; fixed in Soil), so the per-event trace of
+0.1.66 goes; the contact-boundary `touch:` line of 0.1.64 stays, in its richer form. One
+behaviour change: a contact ended by a cancel (Phase 48) or by a lost lift (Phase 49) is never a
+completed gesture — it commits as ink only, as an exclusion-rect fragment does, never as a
+scribble erase or a smart lasso. Phases 47–49 reviewed against the five pages: 47 (the stylus
+among fingers) is right on the hardware; 48 keeps what the person drew wherever a cancel does
+arrive; 49's next-contact end turns a silent drop of the old contact's points (the DRAW `DOWN`
+cleared them) into a committed stub, and its finger-cancel end is moot but harmless. All kept.

@@ -1093,7 +1093,6 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun setExclusionRects(rects: List<Rect>) {
         exclusionRects = rects.map { Rect(it) }
-        Log.i(TAG, "trace: exclusion rects = ${rects.joinToString { it.toShortString() }}")
     }
 
     override fun releaseRender() {
@@ -1233,7 +1232,6 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 // hardware with hover reporting the hover stream keeps the gate closed
                 // for the rest of the press.)
                 if (exclusionRects.any { it.contains(event.x.toInt(), event.y.toInt()) }) {
-                    Log.i(TAG, "trace: down refused at (${event.x.toInt()},${event.y.toInt()}) inside one of ${exclusionRects.size} exclusion rects")
                     markPenUp()
                     return false
                 }
@@ -1315,9 +1313,6 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 markPenUp()
                 dispatchRaw(event, toolType)
                 val cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL
-                if (gestureMode == GestureMode.DRAW) {
-                    Log.i(TAG, "trace: draw ${if (cancelled) "cancelled" else "lifted"} with ${activePoints.size} points at (${event.x.toInt()},${event.y.toInt()}) t=${event.eventTime}")
-                }
                 when (gestureMode) {
                     GestureMode.DRAW -> {
                         // A cancel that arrives once a real mark is on the glass (Phase 48:
@@ -1331,8 +1326,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                         } else {
                             if (!cancelled) appendDrawPoints(listOf(event.strokePointAt(-1)))
                             // A gesture-consumed stroke is chrome, not writing — the
-                            // reference contract: no onPenLifted for it.
-                            if (commitActiveStroke()) paperListener?.onPenLifted()
+                            // reference contract: no onPenLifted for it. An interrupted
+                            // contact (Phase 50) is never a completed gesture: it commits
+                            // as ink only, like an exclusion-rect fragment.
+                            if (commitActiveStroke(allowGestures = !cancelled)) paperListener?.onPenLifted()
                         }
                     }
                     GestureMode.ERASE -> {
@@ -1415,13 +1412,11 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         }
         when (event.actionMasked) {
             MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
-                if (event.actionMasked == MotionEvent.ACTION_HOVER_ENTER) Log.i(TAG, "trace: hover enter t=${event.eventTime}")
                 penHovering = true
                 penLastHoverMs = SystemClock.uptimeMillis()
                 dispatchRaw(event, toolType)
             }
             MotionEvent.ACTION_HOVER_EXIT -> {
-                Log.i(TAG, "trace: hover exit t=${event.eventTime}")
                 penHovering = false
                 penLastHoverMs = SystemClock.uptimeMillis()
                 dispatchRaw(event, toolType)
@@ -1735,18 +1730,18 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (activePoints.size < CANCEL_COMMIT_MIN_POINTS) {
             activePoints.clear()
             if (rendersLiveStrokes) invalidate()
-        } else if (commitActiveStroke()) {
+        } else if (commitActiveStroke(allowGestures = false)) {
             paperListener?.onPenLifted()
         }
         gestureMode = GestureMode.NONE
         lastEraserPoint = null
     }
 
-    private fun commitActiveStroke(): Boolean {
+    private fun commitActiveStroke(allowGestures: Boolean = true): Boolean {
         if (activePoints.isEmpty()) return true
         val points = activePoints.toList()
         activePoints.clear()
-        return commitCapturedStroke(points)
+        return commitCapturedStroke(points, allowGestures)
     }
 
     /**
@@ -1773,7 +1768,6 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (allowGestures && tool == Tool.PEN &&
             (smartLassoEnabled || scribbleEraseEnabled) && tryConsumeGesture(points)
         ) {
-            Log.i(TAG, "trace: ${points.size} points consumed as a gesture, no stroke")
             return false
         }
         val stroke = Stroke(
@@ -1783,7 +1777,6 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             width = penWidth,
             style = penStyle,
         )
-        Log.i(TAG, "trace: commit ${stroke.id} ${points.size} points fragment=${!allowGestures} tool=$tool mode=$pageMode")
         if (pageMode == PageMode.RASTER) {
             // The mark lands as pixels and the object is let go. Same stroke, same id
             // (the grain is seeded from it, exactly as the live preview was), same
@@ -1926,7 +1919,6 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 Log.i(TAG, "scribble candidate touched nothing — committed as ink")
                 return false
             }
-            Log.i(TAG, "trace: scribble-shaped ${points.size} points hit strokes=$hitIds content=$contentHits")
             val idSet = hitIds.toHashSet()
             // Parity with eraseAlong: a host-injected selection losing a stroke or a
             // content object no longer describes reality.
@@ -1966,7 +1958,6 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 Log.i(TAG, "smart-lasso candidate enclosed nothing — committed as ink")
                 return false
             }
-            Log.i(TAG, "trace: smart-lasso ${points.size} points enclosed strokes=${sel.strokeIds} content=${sel.contentIds}")
             // A live selection here can only be host-injected (setSelection while in
             // PEN) — dismiss it first so the host's callbacks pair up.
             if (selection != null) clearSelection()
@@ -2079,7 +2070,6 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         }
         for (p in points) {
             if (exclusionRects.any { it.contains(p.x.toInt(), p.y.toInt()) }) {
-                Log.i(TAG, "trace: draw point (${p.x.toInt()},${p.y.toInt()}) inside an exclusion rect; ${activePoints.size} points so far become a fragment")
                 // Mid-contact fragment — never a completed gesture (allowGestures off).
                 if (activePoints.size >= 2) {
                     commitCapturedStroke(activePoints.toList(), allowGestures = false)

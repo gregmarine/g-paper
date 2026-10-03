@@ -49,7 +49,7 @@ Android. `gpaper-onyx` brings the BOOX SDK's build baggage (see the
 
 ## Quickstart
 
-Publish to mavenLocal (0.1.66 is mavenLocal-only), add `mavenLocal()` to your repositories, then:
+Publish to mavenLocal (0.1.67 is mavenLocal-only), add `mavenLocal()` to your repositories, then:
 
 ```kotlin
 dependencies {
