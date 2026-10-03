@@ -96,6 +96,14 @@ Input is stylus-only. Finger events are never consumed (host gestures work above
 with one narrow exception: while a lasso selection is active, a single finger can drag it and a
 finger tap dismisses it, palm-gated.
 
+**The stylus among fingers (0.1.62).** On a Supernote the pen and a resting hand share one touch
+stream, so the pen can be a pointer other than 0 and its down and lift arrive as
+`ACTION_POINTER_DOWN` / `ACTION_POINTER_UP`. Every engine's `onTouchEvent` first narrows a
+multi-pointer event that holds a stylus pointer to that pointer alone (`MotionEvent.split`), so
+the engine sees the pen as if nothing else were on the glass; the fingers of such an event are
+dropped. Before this a stroke lifted under a landing palm was never committed and its live ink
+was wiped from the panel, with nothing to undo.
+
 ## The Onyx engine (BOOX)
 
 Live ink is painted by the firmware through the Onyx SDK's raw-drawing pipeline

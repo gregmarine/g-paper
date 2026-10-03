@@ -2863,6 +2863,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private var contactRubbing = false
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // The pen among fingers (Phase 47): a mixed event is narrowed to the pen's pointer
+        // before this engine's own bookkeeping, which reads pointer 0 like the base.
+        stylusOnly(event)?.let { only -> try { return onTouchEvent(only) } finally { only.recycle() } }
         // Correct the digitizer offset before ANY consumer — writing, erasing and
         // hit-tests must all agree on where the pen physically is.
         compensateRegistration(event)

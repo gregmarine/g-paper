@@ -778,6 +778,8 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     // ── MotionEvents ─────────────────────────────────────────────────────────
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // The pen among fingers (Phase 47): a mixed event is narrowed to the pen's pointer first.
+        stylusOnly(event)?.let { only -> try { return onTouchEvent(only) } finally { only.recycle() } }
         // Finger input never feeds the SDK pen pipeline — the base decides (selection
         // drag / dismiss-tap while a selection is active) or passes it to the host.
         val toolType = event.getToolType(0)

@@ -1205,6 +1205,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (released) return false
+        stylusOnly(event)?.let { only -> try { return onTouchEvent(only) } finally { only.recycle() } }
         val toolType = event.getToolType(0)
         val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS ||
             toolType == MotionEvent.TOOL_TYPE_ERASER
@@ -3147,6 +3148,56 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * (Phase 11). The Supernote engine overrides it; a renderer must look right without it.
      */
     protected open fun sampleAzimuth(rawTilt: Float, rawOrientation: Float): Float = 0f
+
+    /**
+     * **The stylus among fingers (Phase 47, 0.1.62).** On a Supernote the pen and a hand resting
+     * on the glass share one touch stream: with a finger already down the pen arrives as
+     * `ACTION_POINTER_DOWN`, and with a finger landing mid-stroke the pen's lift is
+     * `ACTION_POINTER_UP`, at a pointer index that is not 0. Every engine reads pointer 0 and
+     * handles `ACTION_DOWN`/`ACTION_UP` alone, so such a stroke was never committed and the
+     * panel's live ink for it was wiped — writing that vanished with nothing to undo.
+     *
+     * The answer is one narrowing at every engine's touch entry: a multi-pointer event that holds
+     * a stylus pointer is rebuilt as that pointer alone (`MotionEvent.split` is not public API):
+     * the pen's `POINTER_DOWN`/`POINTER_UP` become a plain `DOWN`/`UP`, a finger's become a
+     * `MOVE` of the pen, a cancel stays a cancel, and the history rides along. The engine then
+     * sees the pen as the only thing on the glass; the fingers of such an event are dropped, since
+     * with the pen down they are never input. An event with no stylus pointer, or with the stylus
+     * alone, is answered null and handled as it stands.
+     *
+     * The caller recycles what this returns.
+     */
+    protected fun stylusOnly(event: MotionEvent): MotionEvent? {
+        if (event.pointerCount < 2) return null
+        var index = -1
+        for (i in 0 until event.pointerCount) {
+            val t = event.getToolType(i)
+            if (t == MotionEvent.TOOL_TYPE_STYLUS || t == MotionEvent.TOOL_TYPE_ERASER) { index = i; break }
+        }
+        if (index < 0) return null
+        val action = when (event.actionMasked) {
+            MotionEvent.ACTION_POINTER_DOWN -> if (event.actionIndex == index) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_MOVE
+            MotionEvent.ACTION_POINTER_UP -> if (event.actionIndex == index) MotionEvent.ACTION_UP else MotionEvent.ACTION_MOVE
+            MotionEvent.ACTION_CANCEL -> MotionEvent.ACTION_CANCEL
+            else -> MotionEvent.ACTION_MOVE
+        }
+        val props = arrayOf(MotionEvent.PointerProperties().also { event.getPointerProperties(index, it) })
+        val history = event.historySize
+        fun coordsAt(h: Int): Array<MotionEvent.PointerCoords> = arrayOf(
+            MotionEvent.PointerCoords().also { if (h < 0) event.getPointerCoords(index, it) else event.getHistoricalPointerCoords(index, h, it) },
+        )
+        // Built from the oldest sample, the rest batched on in order, the current one last.
+        val only = MotionEvent.obtain(
+            event.downTime, if (history > 0) event.getHistoricalEventTime(0) else event.eventTime, action, 1,
+            props, coordsAt(if (history > 0) 0 else -1), event.metaState, event.buttonState,
+            event.xPrecision, event.yPrecision, event.deviceId, event.edgeFlags, event.source, event.flags,
+        )
+        if (history > 0) {
+            for (h in 1 until history) only.addBatch(event.getHistoricalEventTime(h), coordsAt(h), event.metaState)
+            only.addBatch(event.eventTime, coordsAt(-1), event.metaState)
+        }
+        return only
+    }
 
     /** Sample at [historyIndex] (−1 = the current sample) as a [StrokePoint]. */
     private fun MotionEvent.strokePointAt(historyIndex: Int): StrokePoint =

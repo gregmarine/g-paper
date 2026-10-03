@@ -3364,6 +3364,26 @@ grid / reference photo): the sheet shows under pencil, pen, rubber and smudge on
 rubbing lifts graphite and never the sheet, a white pen covers it, a page turn keeps it, and
 an export, a cover and a save carry no trace of it.
 
+### Phase 47 — The stylus among fingers (post-v0.1.0)
+**Status:** ✅ Code complete 2026-10-02 · **Publishes:** 0.1.62 · **Gate:** the user's Nomad walk through Soil's Notesprout (write with the heel of the hand on the glass and on the side bar; every stroke lands and undoes).
+Soil's Notesprout lost strokes on the Nomad, intermittently, with nothing to undo: a stroke
+written while the hand rested on the glass "didn't finish". The log paired every pen contact
+with its finished stroke and found the orphan: a finger landed (`toolType 1`, the heel of the
+hand near the side bar) while the pen was down, and the pen's lift then arrived as
+`ACTION_POINTER_UP` — on a Supernote the pen and the hand share one touch stream, so the pen
+was pointer 1. Every engine reads pointer 0 and handles `ACTION_DOWN`/`ACTION_UP` alone, so the
+lift was never seen, the stroke never committed, and the next contact's `activePoints.clear()`
+threw its points away while the Ratta engine wiped its live ink from the panel.
+- **Core** (`CanvasPaperView.stylusOnly`): a multi-pointer event that holds a stylus pointer is
+  `MotionEvent.split` down to that pointer, which turns the pen's `POINTER_DOWN`/`POINTER_UP`
+  into `DOWN`/`UP` and a finger's into a `MOVE` of the pen, history kept; the fingers of such
+  an event are dropped (with the pen down they are never input). An event with no stylus
+  pointer, or the stylus alone, is untouched. Every engine's `onTouchEvent` begins with it —
+  the base's, Ratta's (before `compensateRegistration` and its contact bookkeeping) and
+  Onyx's — by re-entering itself with the narrowed event and recycling it after.
+- No test: `MotionEvent` is Android, and the core suite stays JVM-only. The proof is the walk.
+- `docs/architecture.md` § the input model carries the rule.
+
 ## Standing Open Questions (ask as they become relevant)
 
 - ~~Pressure/tilt~~ **Decided (Phase 1):** capture both pressure and tilt in `StrokePoint`; rendering may ignore them initially.
