@@ -3443,3 +3443,17 @@ threw its points away while the Ratta engine wiped its live ink from the panel.
 - ~~Demo app visual language~~ **Decided (Phase 2):** e-ink-first minimal — black-on-white,
   flat 2px-bordered buttons (selected = solid black), no Material theming/deps; reads
   correctly on EPD panels in Phases 3/4 and on LCD alike.
+
+### Phase 50 / 0.1.66 — the writing-test trace (no behaviour change)
+
+Lost strokes while writing with a hand on the glass, in Soil's Notesprout on the Nomad, that
+Notesprout SN (0.1.61) never showed. 0.1.63–0.1.65 changed behaviour on a guess each time and
+made it worse, so this release changes nothing and records everything, `GPaperRatta`/`GPaperCore`
+lines prefixed `trace:` (the touch line keeps its `touch:` prefix): every touch event the
+window receives, MOVE included, with each pointer's tool, id and position, the event time,
+history size, flags, buttons and whether a draw is in progress; a mixed event before it is
+narrowed; a down refused by an exclusion rect; a draw point falling into one (the fragment
+split); every draw's lift or cancel with its point count; every commit (id, points, fragment,
+tool, mode) and every gesture consumption (scribble hits, smart-lasso contents); the exclusion
+rects as set; hover enter and exit; the bake; a cancel's drop of the live preview or wipe of
+the overlay. The log is read against the page the person wrote; what is found decides the fix.

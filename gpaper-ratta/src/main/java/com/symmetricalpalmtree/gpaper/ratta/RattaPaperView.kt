@@ -727,7 +727,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private var contactCommitted = false
 
     /** One line per contact boundary: the action, which pointer it names, and every pointer's tool. */
-    private fun traceTouch(event: MotionEvent) {
+    private fun traceTouch(event: MotionEvent, note: String = "") {
         val action = MotionEvent.actionToString(event.actionMasked)
         val pointers = (0 until event.pointerCount).joinToString(",") { i ->
             val t = when (event.getToolType(i)) {
@@ -736,12 +736,17 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 MotionEvent.TOOL_TYPE_FINGER -> "finger"
                 else -> "other"
             }
-            "$t#${event.getPointerId(i)}"
+            "$t#${event.getPointerId(i)}@(${event.getX(i).toInt()},${event.getY(i).toInt()})"
         }
-        Log.i(TAG, "touch: $action index=${event.actionIndex} pointers=[$pointers] flags=${event.flags}")
+        Log.i(
+            TAG,
+            "touch: $note$action index=${event.actionIndex} pointers=[$pointers] t=${event.eventTime} " +
+                "hist=${event.historySize} flags=${event.flags} buttons=${event.buttonState} draw=$drawInProgress",
+        )
     }
 
     override fun bakeAfterCommit(stroke: Stroke) {
+        Log.i(TAG, "trace: bake ${stroke.id} ${stroke.points.size} points direct=$contactDirect")
         contactCommitted = true
         if (!firmware || !directStroke) {
             bakeAfterCommit()
@@ -2885,10 +2890,13 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         // The pen among fingers (Phase 47): a mixed event is narrowed to the pen's pointer
         // before this engine's own bookkeeping, which reads pointer 0 like the base.
-        stylusOnly(event)?.let { only -> try { return onTouchEvent(only) } finally { only.recycle() } }
-        // Every contact boundary, as the window received it (Phase 49): the one record of what
-        // the shared pen-and-hand stream delivered when a stroke is lost.
-        if (event.actionMasked != MotionEvent.ACTION_MOVE || event.pointerCount > 1) traceTouch(event)
+        stylusOnly(event)?.let { only ->
+            traceTouch(event, "mixed ")
+            try { return onTouchEvent(only) } finally { only.recycle() }
+        }
+        // Every event, as the window received it (Phase 49, widened for the writing test): the
+        // one record of what the shared pen-and-hand stream delivered when a stroke is lost.
+        traceTouch(event)
         // Correct the digitizer offset before ANY consumer — writing, erasing and
         // hit-tests must all agree on where the pen physically is.
         compensateRegistration(event)
@@ -3007,8 +3015,12 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 // baked and presented (bakeAfterCommit), and so has a cancel the base
                 // committed (Phase 48); a cancel that committed nothing leaves graphite on
                 // the panel belonging to no stroke, which has to come back off.
-                if (event.actionMasked == MotionEvent.ACTION_CANCEL && !contactCommitted) dropLivePreview()
+                if (event.actionMasked == MotionEvent.ACTION_CANCEL && !contactCommitted) {
+                    Log.i(TAG, "trace: cancel with nothing committed; the live preview is dropped")
+                    dropLivePreview()
+                }
             } else if (contactInking && event.actionMasked == MotionEvent.ACTION_CANCEL && !contactCommitted) {
+                Log.i(TAG, "trace: cancel with nothing committed; the overlay ink is wiped")
                 // A cancelled draw contact commits nothing (the base dropped its
                 // points), but the firmware already painted the partial stroke —
                 // overlay ink corresponding to nothing in the model. Wipe it with the
