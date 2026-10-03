@@ -1307,11 +1307,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 val cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL
                 when (gestureMode) {
                     GestureMode.DRAW -> {
-                        if (cancelled) {
+                        // A cancel that arrives once a real mark is on the glass (Phase 48:
+                        // on a Supernote the system cancels the pen's stream when a palm
+                        // lands mid-stroke) commits the mark as a lift would — the person
+                        // drew it, and a kept stroke undoes where a dropped one is simply
+                        // gone. A cancel at a tap-sized contact still commits nothing.
+                        if (cancelled && activePoints.size < CANCEL_COMMIT_MIN_POINTS) {
                             activePoints.clear()
                             if (rendersLiveStrokes) invalidate()
                         } else {
-                            appendDrawPoints(listOf(event.strokePointAt(-1)))
+                            if (!cancelled) appendDrawPoints(listOf(event.strokePointAt(-1)))
                             // A gesture-consumed stroke is chrome, not writing — the
                             // reference contract: no onPenLifted for it.
                             if (commitActiveStroke()) paperListener?.onPenLifted()
@@ -1694,6 +1699,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     // ── Stroke commit & erase ────────────────────────────────────────────────
 
     /** Returns false when a recognizer consumed the stroke (see [commitCapturedStroke]). */
+    /** A cancelled draw contact with at least this many points is committed, not dropped (Phase 48). */
+    protected val CANCEL_COMMIT_MIN_POINTS: Int get() = 2
+
     private fun commitActiveStroke(): Boolean {
         if (activePoints.isEmpty()) return true
         val points = activePoints.toList()

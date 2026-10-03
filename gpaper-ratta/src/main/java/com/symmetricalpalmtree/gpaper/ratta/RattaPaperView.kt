@@ -723,7 +723,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * the whole-page render is not done here — the runs are the mark's ink, never its
      * bounding box (0.1.33's rule), and the redraw that follows finds the image current.
      */
+    /** A stroke of this contact was committed (Phase 48): a cancel after it has nothing to wipe. */
+    private var contactCommitted = false
+
     override fun bakeAfterCommit(stroke: Stroke) {
+        contactCommitted = true
         if (!firmware || !directStroke) {
             bakeAfterCommit()
             return
@@ -746,6 +750,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     override fun bakeAfterCommit() {
+        contactCommitted = true
         if (firmware && (contactDirect || directRaster)) {
             // A direct raster page has nothing to defer: the daemon is disabled across the
             // whole of it, so there is no overlay copy of any ink to keep showing and none
@@ -2908,6 +2913,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     }
                     contactLassoOutline = false
                     contactLassoDrag = false
+                    contactCommitted = false
                     contactInking = !contactErasing && tool == Tool.PEN && !firmwareInkSuppressed
                     // Latched like every other contact state: what previews this mark may
                     // not change under it half way through (a host arming the pen mid-stroke
@@ -2977,10 +2983,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 applyToolToFirmware()
             } else if (contactDirect) {
                 // No overlay ink to wipe — the daemon was off. A normal lift has already
-                // baked and presented (bakeAfterCommit); a cancel commits nothing, so the
-                // graphite on the panel belongs to no stroke and has to come back off.
-                if (event.actionMasked == MotionEvent.ACTION_CANCEL) dropLivePreview()
-            } else if (contactInking && event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                // baked and presented (bakeAfterCommit), and so has a cancel the base
+                // committed (Phase 48); a cancel that committed nothing leaves graphite on
+                // the panel belonging to no stroke, which has to come back off.
+                if (event.actionMasked == MotionEvent.ACTION_CANCEL && !contactCommitted) dropLivePreview()
+            } else if (contactInking && event.actionMasked == MotionEvent.ACTION_CANCEL && !contactCommitted) {
                 // A cancelled draw contact commits nothing (the base dropped its
                 // points), but the firmware already painted the partial stroke —
                 // overlay ink corresponding to nothing in the model. Wipe it with the

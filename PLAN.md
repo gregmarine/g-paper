@@ -3364,6 +3364,22 @@ grid / reference photo): the sheet shows under pencil, pen, rubber and smudge on
 rubbing lifts graphite and never the sheet, a white pen covers it, a page turn keeps it, and
 an export, a cover and a save carry no trace of it.
 
+### Phase 48 — A cancelled mark is kept (post-v0.1.0)
+**Status:** ✅ Code complete 2026-10-03 · **Publishes:** 0.1.63 · **Gate:** the user's Nomad walk through Soil's Notesprout (write with the heel of the hand landing mid-stroke; every stroke stays and undoes).
+Phase 47 was half the Supernote finding. With 0.1.62 installed a stroke still vanished when the
+palm landed mid-stroke: the log paired the pen's contact with no finished stroke again, a
+finger (`toolType 1`) landing 90 ms after the pen, and this time the pen's stream ended in
+`ACTION_CANCEL` — the system cancels the pen when a palm arrives, rather than reporting the lift
+as a pointer up. The base dropped the points on a cancel, the Ratta engine wiped the live ink
+from the panel, and the mark was gone with nothing to undo.
+- **Core** (`CanvasPaperView`, the DRAW arm of `ACTION_UP`/`ACTION_CANCEL`): a cancel that
+  arrives once a real mark is on the glass (`CANCEL_COMMIT_MIN_POINTS` = 2) commits it as a lift
+  would, `onPenLifted` included; a cancel at a tap-sized contact still commits nothing.
+- **Ratta** (`RattaPaperView.contactCommitted`): set by either `bakeAfterCommit`, reset at
+  contact start; a cancel after a commit neither drops the live preview nor releases the
+  gesture trace, since the panel already shows what the page now holds.
+- **Docs:** architecture.md § input.
+
 ### Phase 47 — The stylus among fingers (post-v0.1.0)
 **Status:** ✅ Code complete 2026-10-02 · **Publishes:** 0.1.62 · **Gate:** the user's Nomad walk through Soil's Notesprout (write with the heel of the hand on the glass and on the side bar; every stroke lands and undoes).
 Soil's Notesprout lost strokes on the Nomad, intermittently, with nothing to undo: a stroke

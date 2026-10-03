@@ -104,6 +104,14 @@ the engine sees the pen as if nothing else were on the glass; the fingers of suc
 dropped. Before this a stroke lifted under a landing palm was never committed and its live ink
 was wiped from the panel, with nothing to undo.
 
+**A cancelled mark is kept (0.1.63).** The other half of the same Supernote finding: when a palm
+lands mid-stroke the system may end the pen's stream with `ACTION_CANCEL` rather than a lift. The
+base used to drop the points on a cancel, and the Ratta engine wiped the live ink from the panel,
+so the mark the person had just drawn vanished with nothing to undo. A cancel that arrives once a
+real mark is on the glass (`CANCEL_COMMIT_MIN_POINTS`, two points) now commits it exactly as a
+lift would; the Ratta engine remembers that the contact committed (`contactCommitted`) and leaves
+the panel alone. A cancel at a tap-sized contact still commits nothing.
+
 ## The Onyx engine (BOOX)
 
 Live ink is painted by the firmware through the Onyx SDK's raw-drawing pipeline
