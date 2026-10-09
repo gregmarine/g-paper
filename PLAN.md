@@ -3491,3 +3491,14 @@ dab. Gate: Greg's Nomad walk through Sketchsprout (a marker over pencil and ink,
 darker, rubber and smudge leave it, undo takes it, export and cover carry it in tone, the
 glass shows it as a dither while drawing).
 
+### Phase 52 / 0.1.69 — the marker's ends stay flat
+
+Greg's first marker walk (Soil, 2026-10-08): a notch or a small fan at some strokes' ends. A
+butt-capped path with round joins ends however the hand's last samples wobble inside the width —
+a stub turning out of the join's disc is a V, a hook is a rounded end. Decision (Greg): keep the
+flat ends, trim the wobble. `MarkerTrim` (pure) drops the samples within half the width of either
+end; the renderer draws the trimmed path, so the bake and every engine agree. On the direct path
+the trimmed end changes as the stroke grows, so the live lay now **rewrites** its layer from where
+the end's zone began at the last lay (whole path drawn, the rect replaced) instead of
+max-merging — exact by construction, and simpler.
+

@@ -172,8 +172,11 @@ stroke bakes `SRC_OVER` at its own alpha into that image, so two marker strokes 
 where they cross, as two passes of a real marker are. The rubber and the smudge never read
 it: a marker comes off by undo alone (`readPageRaster(MARKER, …)` / `swapPageRaster`). On
 Supernote's direct path the marker previews live as a translucent dither, its live layer
-built by drawing the whole path so far and max-merging it, so the layer after any number of
-events is one `drawPath` of the polyline; a one-sample marker (a dab) appears at pen-up.
+built by drawing the whole path so far and rewriting the part that can have changed, so the
+layer after any number of events is one `drawPath` of the polyline; a one-sample marker (a dab)
+appears at pen-up. **The ends stay flat (0.1.69):** the samples within half the width of either
+end are dropped before the path is drawn (`MarkerTrim`), so a hand's wobble at the lift never
+shows as a notch or a fan — the end is one straight segment to the point the pen lifted at.
 `renderToBitmap()` includes it.
 
 **The un-layered calls mean graphite, and that is a promise, not a default.** Every raster

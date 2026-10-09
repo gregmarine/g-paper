@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import com.symmetricalpalmtree.gpaper.core.geometry.Geometry
 import com.symmetricalpalmtree.gpaper.core.geometry.GraphiteGrain
+import com.symmetricalpalmtree.gpaper.core.geometry.MarkerTrim
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import com.symmetricalpalmtree.gpaper.core.model.StrokeStyle
 
@@ -188,14 +189,17 @@ internal object StrokeRenderer {
         // the path self-overlaps.
         paint.color = withAlphaFactor(color, MARKER_ALPHA)
         paint.strokeCap = Paint.Cap.BUTT
+        val half = width / 2f
         if (points.size == 1) {
             val p = points[0]
-            val half = width / 2f
             paint.style = Paint.Style.FILL
             canvas.drawRect(p.x - half, p.y - half, p.x + half, p.y + half, paint)
             return
         }
-        canvas.drawPath(polylinePath(points), paint)
+        // The ends kept flat (0.1.69): the samples inside half the width of either end are
+        // dropped, so the butt cap sits on one straight segment rather than on a wobble —
+        // see [MarkerTrim].
+        canvas.drawPath(polylinePath(MarkerTrim.trim(points, half)), paint)
     }
 
     private fun drawDash(canvas: Canvas, points: List<StrokePoint>, width: Float, paint: Paint) {

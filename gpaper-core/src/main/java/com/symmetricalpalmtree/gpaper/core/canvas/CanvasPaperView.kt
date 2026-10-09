@@ -1884,8 +1884,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * Unlike [drawPenInk], [points] must be **the whole stroke so far**, never a segment:
      * a marker is one translucent coverage pass with butt ends, and two segments laid
      * `SRC_OVER` would be twice as dark where they join. The engine draws the whole path
-     * each time, clipped to the part that is new, and merges it into its live layer with
-     * a max rather than an over — see `RattaPaperView.extendLiveMarker`.
+     * each time, clipped to the part that can have changed, and writes it over its live
+     * layer there — see `RattaPaperView.extendLiveMarker`. The ends are trimmed here, by
+     * [com.symmetricalpalmtree.gpaper.core.geometry.MarkerTrim], for the live lay and the
+     * bake alike.
      */
     protected fun drawMarkerInk(canvas: Canvas, points: List<StrokePoint>, color: Int, width: Float) {
         StrokeRenderer.draw(canvas, points, color, width, StrokeStyle.MARKER, scratchPaint)
