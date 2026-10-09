@@ -11,20 +11,34 @@ import org.junit.Test
  * than a list of styles written out by hand — the same list the enum has, whatever it
  * grows into.
  *
- * The rule is the artist's, and it is one-sided on purpose: graphite is the pencil, and
- * **everything that is not a pencil is ink**, because ink is what the rubber must not
- * lift. A new textured style that ought to rub out would be a decision, and it would fail
- * here first.
+ * The rule is the artist's, and it is one-sided on purpose: graphite is the pencil, the
+ * marker is the marker (0.1.68 — translucent, so it needs an image of its own), and
+ * **everything else is ink**, because ink is what the rubber must not lift. A new textured
+ * style that ought to rub out would be a decision, and it would fail here first.
  */
 class RasterLayerTest {
 
     @Test
-    fun `the pencil is graphite and every other style is ink`() {
+    fun `the pencil is graphite, the marker is the marker, and every other style is ink`() {
         for (style in StrokeStyle.entries) {
-            val expected =
-                if (style == StrokeStyle.PENCIL) RasterLayer.GRAPHITE else RasterLayer.INK
+            val expected = when (style) {
+                StrokeStyle.PENCIL -> RasterLayer.GRAPHITE
+                StrokeStyle.MARKER -> RasterLayer.MARKER
+                else -> RasterLayer.INK
+            }
             assertEquals("$style routes to the wrong raster", expected, RasterLayer.of(style))
         }
+    }
+
+    @Test
+    fun `the marker is exactly one style`() {
+        val marker = StrokeStyle.entries.filter { RasterLayer.of(it) == RasterLayer.MARKER }
+        assertEquals(listOf(StrokeStyle.MARKER), marker)
+    }
+
+    @Test
+    fun `the enum's order is the flatten's order`() {
+        assertEquals(listOf(RasterLayer.GRAPHITE, RasterLayer.INK, RasterLayer.MARKER), RasterLayer.entries.toList())
     }
 
     @Test

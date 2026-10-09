@@ -133,8 +133,8 @@ interface PaperListener {
      *
      * **One contact announces exactly one layer**: a mark's runs are all its style's
      * layer, and a rubbing sweep is all [RasterLayer.GRAPHITE]. A [PaperView.loadStrokes]
-     * or [PaperView.clear] announces **both**, graphite first, whole-page — even when a
-     * layer is empty, because a host undoing a load needs the before-image of both.
+     * or [PaperView.clear] announces **every layer**, graphite first, whole-page — even
+     * when a layer is empty, because a host undoing a load needs the before-image of each.
      *
      * **A change the host made itself is not announced (0.1.33).**
      * [PaperView.loadPageRaster] and [PaperView.swapPageRaster] both replace page pixels

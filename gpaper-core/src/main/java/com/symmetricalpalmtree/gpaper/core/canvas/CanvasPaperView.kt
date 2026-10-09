@@ -244,8 +244,18 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     private var inkRaster: Bitmap? = null
 
     /**
-     * The flatten (0.1.39, reordered 0.1.44): the ink image goes **over** the graphite one —
-     * plain `SRC_OVER`, ink on top.
+     * The marker page image (0.1.68, Phase 51): the third twin, holding
+     * [StrokeStyle.MARKER] alone. Its own image because a marker is **translucent**: every
+     * stroke bakes at the renderer's 45 % and whatever is under it must stay visible
+     * through it, which a pixel shared with the opaque ink could not promise. Drawn over
+     * both the others; never read by the rubber or the smudge (the host's decision,
+     * 2026-10-08: a marker comes off by undo alone). Allocated only once a marker lands.
+     */
+    private var markerRaster: Bitmap? = null
+
+    /**
+     * The flatten (0.1.39, reordered 0.1.44, a third image 0.1.68): the ink image goes
+     * **over** the graphite one, and the marker image over both — plain `SRC_OVER`.
      *
      * 0.1.39–0.1.43 flattened with `DARKEN` (the darker of the two per channel) so the
      * pair had no top and no bottom. Phase 30 puts ink on top by the user's decision — *"a
@@ -576,8 +586,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             // held nothing" is a before-image like any other.
             val dirty = RasterDirty.wholePage(pageWidth, pageHeight)?.toRectOut()
             dirty?.let {
-                paperListener?.onRasterWillChange(RasterLayer.GRAPHITE, it)
-                paperListener?.onRasterWillChange(RasterLayer.INK, it)
+                for (layer in RasterLayer.entries) paperListener?.onRasterWillChange(layer, it)
             }
             dropRasters()
             // Silent on the engine seam: the whole page changed here, images and all, so
@@ -586,8 +595,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             onRasterPixelsChanged(null)
             redrawCommitted()
             dirty?.let {
-                paperListener?.onRasterChanged(RasterLayer.GRAPHITE, it)
-                paperListener?.onRasterChanged(RasterLayer.INK, it)
+                for (layer in RasterLayer.entries) paperListener?.onRasterChanged(layer, it)
             }
             return
         }
@@ -647,19 +655,17 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         strokeList.clear()
         modelChanged()
         if (pageMode == PageMode.RASTER) {
-            // Both layers go, and both are announced, graphite first — a page cleared
-            // to blank paper changed everything the artist can see.
+            // Every layer goes, and every one is announced, graphite first — a page
+            // cleared to blank paper changed everything the artist can see.
             val dirty = RasterDirty.wholePage(pageWidth, pageHeight)?.toRectOut()
             dirty?.let {
-                paperListener?.onRasterWillChange(RasterLayer.GRAPHITE, it)
-                paperListener?.onRasterWillChange(RasterLayer.INK, it)
+                for (layer in RasterLayer.entries) paperListener?.onRasterWillChange(layer, it)
             }
             dropRasters()
             onRasterPixelsChanged(null)
             redrawCommitted()
             dirty?.let {
-                paperListener?.onRasterChanged(RasterLayer.GRAPHITE, it)
-                paperListener?.onRasterChanged(RasterLayer.INK, it)
+                for (layer in RasterLayer.entries) paperListener?.onRasterChanged(layer, it)
             }
             return
         }
@@ -783,8 +789,11 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     /** [layer]'s page image as it stands, or null when nothing has landed on it yet. */
-    private fun raster(layer: RasterLayer): Bitmap? =
-        if (layer == RasterLayer.GRAPHITE) graphiteRaster else inkRaster
+    private fun raster(layer: RasterLayer): Bitmap? = when (layer) {
+        RasterLayer.GRAPHITE -> graphiteRaster
+        RasterLayer.INK -> inkRaster
+        RasterLayer.MARKER -> markerRaster
+    }
 
     /**
      * [layer]'s page image for a device engine that has to flatten the page itself —
@@ -836,7 +845,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * says so in the log rather than guessing a size the page will not turn out to be.
      *
      * Lazy per layer, not per page: a page drawn only in pencil never allocates the ink
-     * image, and the second bitmap is the price of the first mark made with a pen.
+     * image, the second bitmap is the price of the first mark made with a pen, and the
+     * third of the first made with a marker.
      */
     private fun ensureRaster(layer: RasterLayer): Bitmap? {
         raster(layer)?.let { return it }
@@ -850,6 +860,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         when (layer) {
             RasterLayer.GRAPHITE -> graphiteRaster = bitmap
             RasterLayer.INK -> inkRaster = bitmap
+            RasterLayer.MARKER -> markerRaster = bitmap
         }
         return bitmap
     }
@@ -859,13 +870,15 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         when (layer) {
             RasterLayer.GRAPHITE -> graphiteRaster = null
             RasterLayer.INK -> inkRaster = null
+            RasterLayer.MARKER -> markerRaster = null
         }
     }
 
-    /** Let go of the whole page: every call that drops one image drops both. */
+    /** Let go of the whole page: every call that drops one image drops them all. */
     private fun dropRasters() {
         graphiteRaster = null
         inkRaster = null
+        markerRaster = null
     }
 
     /**
@@ -883,7 +896,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      */
     private fun compositeIntoRaster(strokes: List<Stroke>, announce: List<Rect>?) {
         if (strokes.isEmpty()) return
-        val canvases = HashMap<RasterLayer, Canvas>(2)
+        val canvases = HashMap<RasterLayer, Canvas>(RasterLayer.entries.size)
         for (s in strokes) {
             val layer = RasterLayer.of(s.style)
             val canvas = canvases[layer] ?: run {
@@ -1590,11 +1603,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     /**
-     * Draw the raster page onto [canvas]: two blits where the stroke loop would run. The
+     * Draw the raster page onto [canvas]: three blits where the stroke loop would run. The
      * page images sit at the page origin, over the paper and under the host's
      * above-strokes content, exactly where the baked strokes would have been. The ink goes
      * on **over** the graphite — `SRC_OVER`, ink on top (Phase 30; see the note on
-     * [inkRaster]); a page with only one of them is one blit.
+     * [inkRaster]) — and the marker over both (Phase 51); a page with only one of them is
+     * one blit.
      *
      * **The seam exists because a panel may not be able to show the page as it is**
      * (Phase 28). Supernote's direct path shows the artist a *dither* of this same
@@ -1612,6 +1626,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         if (forDisplay) sheetBitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
         graphiteRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
         inkRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+        markerRaster?.let { canvas.drawBitmap(it, 0f, 0f, null) }
     }
 
     /**
@@ -1859,6 +1874,21 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      */
     protected fun drawPenInk(canvas: Canvas, points: List<StrokePoint>, color: Int, width: Float) {
         StrokeRenderer.draw(canvas, points, color, width, StrokeStyle.PEN, scratchPaint)
+    }
+
+    /**
+     * Lay a **marker** ([StrokeStyle.MARKER]) onto [canvas] for a device engine building
+     * the marker's live layer itself (Phase 51) — the one renderer the bake uses, so the
+     * live mark and the baked mark are the same pixels.
+     *
+     * Unlike [drawPenInk], [points] must be **the whole stroke so far**, never a segment:
+     * a marker is one translucent coverage pass with butt ends, and two segments laid
+     * `SRC_OVER` would be twice as dark where they join. The engine draws the whole path
+     * each time, clipped to the part that is new, and merges it into its live layer with
+     * a max rather than an over — see `RattaPaperView.extendLiveMarker`.
+     */
+    protected fun drawMarkerInk(canvas: Canvas, points: List<StrokePoint>, color: Int, width: Float) {
+        StrokeRenderer.draw(canvas, points, color, width, StrokeStyle.MARKER, scratchPaint)
     }
 
     // ── Pen-gesture recognizers (smart lasso / scribble erase) ───────────────
@@ -2224,10 +2254,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * A page that has never been drawn on has no image, and rubbing it is nothing.
      *
      * **The rubber rubs graphite and only graphite (0.1.39).** The ink image is never
-     * read, never allocated and never announced here — that is the whole of the artist's
-     * rule ("in the real world, ink is more permanent than pencil") in the one place it
-     * has to hold, and it is a property of which bitmap this method names rather than a
-     * test performed on pixels. Whether a firm rub should lift ink *a little* is a
+     * read, never allocated and never announced here, nor the marker image (0.1.68) —
+     * that is the whole of the artist's rule ("in the real world, ink is more permanent
+     * than pencil") in the one place it has to hold, and it is a property of which bitmap
+     * this method names rather than a test performed on pixels. Whether a firm rub should lift ink *a little* is a
      * decision nobody has made; until someone does, it lifts none.
      */
     private fun eraseRasterAlong(sweep: List<StrokePoint>) {
@@ -2312,7 +2342,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * so the mean at the corridor's edge sees its true neighbours; the write and every
      * announce are the corridor's own rect.
      *
-     * **A smudge moves graphite and only graphite.** The ink image is never named here.
+     * **A smudge moves graphite and only graphite.** The ink image is never named here,
+     * nor the marker's (0.1.68).
      */
     override fun smudgeAlong(points: List<StrokePoint>) {
         if (!smudging || points.isEmpty()) return

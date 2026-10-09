@@ -670,4 +670,143 @@ class DitherFlattenTest {
         }
         assertTrue(checked > 10000)
     }
+
+    // ── The marker, Phase 51 (0.1.68): a third image on top, translucent, a mark ──────
+
+    /** The renderer's 45 % of an opaque colour, as the live mask holds it. */
+    private val markerAlpha = 114
+
+    @Test
+    fun `no marker is the two-image answer`() {
+        val leads = listOf(transparent, black, white, 0xFF999999.toInt(), 0x80505050.toInt())
+        val inks = listOf(transparent, black, 0xFF777777.toInt(), 0x40FFFFFF)
+        val sheets = listOf(0, 0xFFCCCCCC.toInt(), 0x80000000.toInt())
+        val poison = IntArray(64 * 4) { 0xFF123456.toInt() }
+        for (s in sheets) for (g in leads) for (k in inks) {
+            assertEquals(DitherFlatten.luma(s, g, k), DitherFlatten.flatten(s, g, k, 0))
+            for (y in 0 until 4) for (x in 0 until 64) {
+                assertEquals(
+                    DitherFlatten.coverage(g, 0, black, k, 0, black, x, y, true, s),
+                    DitherFlatten.coverage(g, 0, black, k, 0, black, x, y, true, s, 0, black, 0),
+                )
+                assertEquals(
+                    DitherFlatten.black(g, 0, black, k, 0, black, x, y, s),
+                    DitherFlatten.black(g, 0, black, k, 0, black, x, y, s, 0, black, 0),
+                )
+            }
+            val graphite = IntArray(64 * 4) { g }
+            val ink = IntArray(64 * 4) { k }
+            val sheet = IntArray(64 * 4) { s }
+            val before = ByteArray(64 * 4)
+            val after = ByteArray(64 * 4)
+            DitherFlatten.band(graphite, true, ink, true, 0, 0, 64, 4, before, 0, 64, ON, OFF, true, sheet, true)
+            DitherFlatten.band(graphite, true, ink, true, 0, 0, 64, 4, after, 0, 64, ON, OFF, true, sheet, true, poison, false)
+            assertTrue(before.contentEquals(after))
+        }
+    }
+
+    @Test
+    fun `the marker lies over the ink and the graphite, and never hides them`() {
+        val liveBlack = 0x72000000.toInt()   // black at the marker's 114
+        // Black marker over white paper: 45 % of the way to black.
+        assertEquals(141, DitherFlatten.flatten(0, transparent, transparent, liveBlack))
+        // Over black ink nothing can get darker.
+        assertEquals(0, DitherFlatten.flatten(0, transparent, black, liveBlack))
+        // A grey marker over black ink lightens it by the marker's 45 %: 0x80 × 114 / 255.
+        val grey = 0x72808080.toInt()
+        val lifted = DitherFlatten.flatten(0, transparent, black, grey)
+        assertTrue("grey marker over black ink should lighten it a little, got $lifted", lifted in 50..60)
+        // Over a grey lead the lead still shows: darker than bare marker, lighter than black.
+        val lead = 0xFF999999.toInt()
+        val overLead = DitherFlatten.flatten(0, lead, transparent, liveBlack)
+        assertTrue(overLead < 141 && overLead > 0)
+        // An opaque marker pixel is its own colour, whatever lies under it.
+        assertEquals(DitherFlatten.luma(0, transparent, 0xFF808080.toInt()), DitherFlatten.flatten(0, black, black, 0xFF808080.toInt()))
+    }
+
+    @Test
+    fun `the live marker pixel and the baked marker pixel dither identically`() {
+        val leads = listOf(transparent, 0xFF505050.toInt(), 0x80999999.toInt())
+        val inks = listOf(transparent, black, 0x40FFFFFF)
+        val pages = listOf(transparent, 0x72000000.toInt(), 0x90808080.toInt())
+        val alphas = listOf(0, 1, 37, 114, 200, 255)
+        for (g in leads) for (k in inks) for (m in pages) for (a in alphas) {
+            val baked = DitherFlatten.srcOver(m, black, a)
+            assertEquals(
+                DitherFlatten.luma(g, 0, black, k, 0, black, 0, a, black, m),
+                DitherFlatten.luma(g, 0, black, k, 0, black, 0, 0, black, baked),
+            )
+            for (y in 0 until 8) for (x in 0 until 64) {
+                assertEquals(
+                    DitherFlatten.black(g, 0, black, k, 0, black, x, y, 0, a, black, m),
+                    DitherFlatten.black(g, 0, black, k, 0, black, x, y, 0, 0, black, baked),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `a live marker never touches the other two`() {
+        // A marker alpha with the marker image transparent is only the marker: the graphite
+        // and ink sides are read as they are, and the result is the flatten of the three.
+        val g = 0xFF999999.toInt()
+        val k = 0x80000000.toInt()
+        val expected = DitherFlatten.flatten(0, g, k, DitherFlatten.srcOver(0, black, markerAlpha))
+        assertEquals(expected, DitherFlatten.luma(g, 0, black, k, 0, black, 0, markerAlpha, black, 0))
+    }
+
+    @Test
+    fun `settled marker marks show their true tone, live ones dither`() {
+        val m = 0x72000000.toInt()
+        val settledTone = DitherFlatten.coverage(transparent, 0, black, transparent, 0, black, 3, 5, true, 0, 0, black, m)
+        assertEquals(255 - 141, settledTone)
+        var seen = HashSet<Int>()
+        for (y in 0 until 16) for (x in 0 until 64) {
+            seen.add(DitherFlatten.coverage(transparent, 0, black, transparent, 0, black, x, y, true, 0, markerAlpha, black, 0))
+        }
+        assertEquals(setOf(0, 255), seen)
+    }
+
+    @Test
+    fun `the band kernel is the per-pixel answer with a marker too`() {
+        val w = 64
+        val h = 6
+        val rnd = java.util.Random(51)
+        val graphite = IntArray(w * h) { if (rnd.nextInt(3) == 0) (rnd.nextInt(256) shl 24) or (rnd.nextInt(256) * 0x010101) else 0 }
+        val ink = IntArray(w * h) { if (rnd.nextInt(4) == 0) black else 0 }
+        val marker = IntArray(w * h) {
+            when (rnd.nextInt(5)) {
+                0 -> (markerAlpha shl 24)
+                1 -> (rnd.nextInt(115) shl 24) or (rnd.nextInt(256) * 0x010101)
+                2 -> 0xFF000000.toInt() or (rnd.nextInt(256) * 0x010101)
+                else -> 0
+            }
+        }
+        val sheet = IntArray(w * h) { if (rnd.nextInt(2) == 0) 0xFFCCCCCC.toInt() else 0 }
+        for (settled in listOf(true, false)) for (withSheet in listOf(false, true)) {
+            val out = ByteArray(w * h)
+            DitherFlatten.band(graphite, true, ink, true, 7, 3, w, h, out, 0, w, ON, OFF, settled, sheet, withSheet, marker, true)
+            for (y in 0 until h) for (x in 0 until w) {
+                val i = y * w + x
+                val expected = DitherFlatten.coverage(
+                    graphite[i], 0, black, ink[i], 0, black, 7 + x, 3 + y, settled,
+                    if (withSheet) sheet[i] else 0, 0, black, marker[i],
+                )
+                assertEquals("pixel $x,$y settled=$settled sheet=$withSheet", expected.toByte(), out[i])
+            }
+        }
+    }
+
+    @Test
+    fun `an absent marker is not read, and a marker over opaque white is not paper`() {
+        val w = 64
+        val poison = IntArray(w) { 0xFF000000.toInt() }
+        val out = ByteArray(w)
+        DitherFlatten.band(IntArray(w) { white }, true, IntArray(w), false, 0, 0, w, 1, out, 0, w, ON, OFF, true, marker = poison, hasMarker = false)
+        for (x in 0 until w) assertEquals(OFF, out[x])
+        // The opaque-white short cut must not swallow a marker lying over the white.
+        val marker = IntArray(w) { 0x72000000.toInt() }
+        DitherFlatten.band(IntArray(w) { white }, true, IntArray(w), false, 0, 0, w, 1, out, 0, w, ON, OFF, true, marker = marker, hasMarker = true)
+        for (x in 0 until w) assertEquals((255 - 141).toByte(), out[x])
+    }
 }

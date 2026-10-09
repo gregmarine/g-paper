@@ -537,7 +537,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * deviation: a log line rather than a public probe widened to serve one row of chrome).
      */
     private fun announceDirectPath() {
-        if (directRaster) Log.i(TAG, "direct: pencil+pen+rubber")
+        if (directRaster) Log.i(TAG, "direct: pencil+pen+marker+rubber")
         else if (directStroke) Log.i(TAG, "direct: ink+eraser+trail (stroke page)")
     }
 
@@ -599,16 +599,20 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      * make a segment drawn now join exactly with the segment drawn next, so the live layer
      * can be built up a MotionEvent at a time and then *be* the mark.
      *
-     * Nothing else can, and the others are not bent to fit: a `MARKER` is one translucent
-     * coverage pass over the whole path, a `DASH`'s pattern is a property of the whole
-     * path, a `CROSS`'s marks are sampled along it. Those still commit exactly as they
-     * always did (the base composites them) — they simply appear at pen-up, because on this
-     * page the daemon has nothing to preview them with. None of them is offered by SN, and
-     * bending a style's appearance to make it previewable would be the [StrokeStyle.PENCIL]
-     * mistake of Phase 11 all over again.
+     * **The marker can since Phase 51 (0.1.68)**, and not by bending it: a `MARKER` is one
+     * translucent coverage pass over the whole path with butt ends, so its live layer is
+     * built by drawing the *whole* path so far each time, clipped to what is new, and
+     * merging with a max rather than an over ([extendLiveMarker]) — the layer after any
+     * number of events is what one `drawPath` of the polyline gives. The others are not
+     * bent to fit: a `DASH`'s pattern is a property of the whole path, a `CROSS`'s marks
+     * are sampled along it. Those still commit exactly as they always did (the base
+     * composites them) — they simply appear at pen-up, because on this page the daemon has
+     * nothing to preview them with. None of them is offered by SN, and bending a style's
+     * appearance to make it previewable would be the [StrokeStyle.PENCIL] mistake of
+     * Phase 11 all over again.
      */
     private fun directStyle(style: StrokeStyle): Boolean = when (style) {
-        StrokeStyle.PENCIL, StrokeStyle.PEN, StrokeStyle.BRUSH, StrokeStyle.CALLIGRAPHY -> true
+        StrokeStyle.PENCIL, StrokeStyle.PEN, StrokeStyle.BRUSH, StrokeStyle.CALLIGRAPHY, StrokeStyle.MARKER -> true
         else -> false
     }
 
@@ -1040,6 +1044,11 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      */
     private var liveGraphite: ByteArray? = null
     private var liveInk: ByteArray? = null
+
+    /** The marker's live layer (Phase 51). Its bytes hold the marker's **translucent**
+     *  alpha (the renderer's 45 % of the colour's, at most 114), so the flatten and the bake
+     *  treat it exactly as they treat [liveInk] and the mirror needs no marker arithmetic. */
+    private var liveMarker: ByteArray? = null
     private var liveAlphaW = 0
     private var liveAlphaH = 0
 
@@ -1108,7 +1117,8 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private var contactPenColor: Int = Stroke.BLACK
 
     /**
-     * How many of the stroke's points are already in [liveInk].
+     * How many of the stroke's points are already in [liveInk] — or, for a marker, in
+     * [liveMarker] (Phase 51), where it counts the points the whole-path lay has covered.
      *
      * A count rather than an index, so "nothing new has arrived" is one comparison and can
      * never be confused with "the first point has not been drawn yet" — a re-announcement of
@@ -1129,6 +1139,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private var tonePix = IntArray(0)
     private var toneGraphite = IntArray(0)
     private var toneInk = IntArray(0)
+    private var toneMarker = IntArray(0)
     private var toneSheet = IntArray(0)
     private var toneLevels = ByteArray(0)
     private val toneRect = Rect()
@@ -1147,6 +1158,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         val mask = ensureLiveLayer(contactLayer) ?: return
         if (contactLayer == RasterLayer.INK) {
             extendLiveInk(points, mask)
+            return
+        }
+        if (contactLayer == RasterLayer.MARKER) {
+            extendLiveMarker(points, mask)
             return
         }
         liveEvents++
@@ -1251,6 +1266,39 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (dt > maxTone) maxTone = dt
     }
 
+    /**
+     * The marker's [extendLiveInk] (Phase 51): the **whole** path so far is drawn each time,
+     * clipped to the rect of what is new, and merged into [mask] with a **max** rather than
+     * an over.
+     *
+     * A marker is one translucent coverage pass with butt ends: two segments laid
+     * `SRC_OVER` would be 68 % where they join instead of 45 %, and a butt end laid at
+     * every event would leave a step at each. Drawing the path from its first point to
+     * its newest and taking the max is what makes the layer after *n* events bit-identical
+     * to one `drawPath` of the whole polyline: the extended path is a geometric superset of
+     * the previous one (the old end at the last vertex becomes interior, and the round
+     * join's wedge lies within half the width of that vertex, inside the new rect's pad),
+     * so inside the clip the new lay is never lighter than what is there and never darker
+     * than the one pass. Its cost is an O(n) path per event, pennies beside the grain
+     * sweep this path was built to escape. A single sample lays nothing — a dab is not a
+     * subset of any path, and [bakeCapturedStroke] hands a one-point marker to the base.
+     */
+    private fun extendLiveMarker(points: List<StrokePoint>, mask: ByteArray) {
+        if (points.size < 2) return
+        if (points.size <= laidInkCount) return
+        liveEvents++
+        val t0 = System.nanoTime()
+        val from = if (laidInkCount == 0) 0 else laidInkCount - 1
+        val rect = inkBounds(points.subList(from, points.size)) ?: run { laidInkCount = points.size; return }
+        layMarker(points, rect, mask)
+        laidInkCount = points.size
+        liveRect.union(rect)
+        toneAndPost(rect)
+        val dt = System.nanoTime() - t0
+        timeTone += dt
+        if (dt > maxTone) maxTone = dt
+    }
+
     /** The view-space rect a run of pen samples covers: the points' bounds pushed out by
      *  half the lead's width for the round cap, plus two px for the anti-aliased rim and
      *  the rounding out. Null when none of it is on screen. */
@@ -1332,8 +1380,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     /** The batch's alpha, composited `SRC_OVER` into the contact's live layer — the same
-     *  arithmetic a Canvas would do, on the one channel that matters. */
-    private fun mergeBatchIntoLive(scratch: Bitmap, rect: Rect, mask: ByteArray) {
+     *  arithmetic a Canvas would do, on the one channel that matters. With [union] the
+     *  merge is a **max** instead: the marker's whole-path lay (see [extendLiveMarker]). */
+    private fun mergeBatchIntoLive(scratch: Bitmap, rect: Rect, mask: ByteArray, union: Boolean = false) {
         val w = rect.width()
         val h = rect.height()
         ensureToneScratch(w * h)
@@ -1346,7 +1395,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 if (sa == 0) continue
                 val i = maskRow + x
                 val da = mask[i].toInt() and 0xFF
-                mask[i] = (sa + da * (255 - sa) / 255).toByte()
+                mask[i] = (if (union) maxOf(da, sa) else sa + da * (255 - sa) / 255).toByte()
             }
         }
     }
@@ -1381,6 +1430,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         ensureToneScratch(n)
         readRaster(RasterLayer.GRAPHITE, rect, toneGraphite)
         readRaster(RasterLayer.INK, rect, toneInk)
+        readRaster(RasterLayer.MARKER, rect, toneMarker)
         readSheet(rect, toneSheet)
         // A live layer is read only where the rect is certainly inside it. An inking
         // contact's rects always are (both bounds calls clip to the layer); a rubbing
@@ -1390,8 +1440,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             rect.right <= liveAlphaW && rect.bottom <= liveAlphaH
         val graphiteMask = if (onLayer) liveGraphite else null
         val inkMask = if (onLayer) liveInk else null
-        // The colours the two live layers were laid in: the lead's own, and the pen's. The
-        // dither is what turns either of them into dots.
+        val markerMask = if (onLayer) liveMarker else null
+        // The colours the live layers were laid in: the lead's own, and the pen's (the
+        // marker's too — its translucency is in its mask). The dither is what turns any of
+        // them into dots.
         val leadColor = contactInk.color
         val penInkColor = contactPenColor
         for (y in 0 until h) {
@@ -1410,6 +1462,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                     pageY,
                     settled,
                     toneSheet[row + x],
+                    if (markerMask == null) 0 else markerMask[maskRow + x].toInt() and 0xFF,
+                    penInkColor,
+                    toneMarker[row + x],
                 )
                 toneLevels[row + x] = LEVEL_OF_COVERAGE[coverage]
             }
@@ -1513,6 +1568,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (tonePix.size < n) tonePix = IntArray(n)
         if (toneGraphite.size < n) toneGraphite = IntArray(n)
         if (toneInk.size < n) toneInk = IntArray(n)
+        if (toneMarker.size < n) toneMarker = IntArray(n)
         if (toneSheet.size < n) toneSheet = IntArray(n)
         if (toneLevels.size < n) toneLevels = ByteArray(n)
     }
@@ -1533,18 +1589,23 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (liveAlphaW != w || liveAlphaH != h) {
             liveGraphite = null
             liveInk = null
+            liveMarker = null
             liveAlphaW = w
             liveAlphaH = h
         }
         return when (layer) {
             RasterLayer.GRAPHITE -> liveGraphite ?: ByteArray(w * h).also { liveGraphite = it }
             RasterLayer.INK -> liveInk ?: ByteArray(w * h).also { liveInk = it }
+            RasterLayer.MARKER -> liveMarker ?: ByteArray(w * h).also { liveMarker = it }
         }
     }
 
     /** [layer]'s live layer as it stands, or null when nothing has been laid on it. */
-    private fun liveLayer(layer: RasterLayer): ByteArray? =
-        if (layer == RasterLayer.GRAPHITE) liveGraphite else liveInk
+    private fun liveLayer(layer: RasterLayer): ByteArray? = when (layer) {
+        RasterLayer.GRAPHITE -> liveGraphite
+        RasterLayer.INK -> liveInk
+        RasterLayer.MARKER -> liveMarker
+    }
 
     /** The batch scratch, at least [w] × [h]. Grown, never shrunk, and capped at the view
      *  because nothing bigger can be drawn. */
@@ -1594,6 +1655,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
      *  small-rect path hands `setPixels`. */
     private var bandGraphite = IntArray(0)
     private var bandInk = IntArray(0)
+    private var bandMarker = IntArray(0)
     private var bandSheet = IntArray(0)
     private var bandOut = IntArray(0)
     private val bandRect = Rect()
@@ -1810,6 +1872,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (rect == null) {
             val gone = rasterFor(RasterLayer.GRAPHITE) == null &&
                 rasterFor(RasterLayer.INK) == null &&
+                rasterFor(RasterLayer.MARKER) == null &&
                 (swappingContent || sheetFor() == null)
             if (gone) {
                 ditherCoalescer.onPageGone()
@@ -2179,12 +2242,13 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         bandRect.set(area.left, top, area.right, bottom)
         val hasGraphite = readRasterBand(RasterLayer.GRAPHITE, bandRect, bandGraphite)
         val hasInk = readRasterBand(RasterLayer.INK, bandRect, bandInk)
+        val hasMarker = readRasterBand(RasterLayer.MARKER, bandRect, bandMarker)
         val hasSheet = readSheetBand(bandRect, bandSheet)
         DitherFlatten.band(
             bandGraphite, hasGraphite, bandInk, hasInk,
             area.left, top, area.width(), bottom - top,
             out, offset, stride, DITHER_ON, DITHER_OFF, settled,
-            bandSheet, hasSheet,
+            bandSheet, hasSheet, bandMarker, hasMarker,
         )
     }
 
@@ -2192,6 +2256,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (bandGraphite.size < n) {
             bandGraphite = IntArray(n)
             bandInk = IntArray(n)
+            bandMarker = IntArray(n)
             bandSheet = IntArray(n)
             bandOut = IntArray(n)
         }
@@ -2464,6 +2529,21 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
                 }
             }
             color = contactInk.color
+        } else if (layer == RasterLayer.MARKER) {
+            // A one-sample marker was never laid (a dab is no subset of a path): the base
+            // composites it as it always did.
+            if (stroke.points.size < 2) return false
+            // The tail the lift carried, through the whole-path lay — see extendLiveMarker.
+            if (stroke.points.size > laidInkCount) {
+                val from = if (laidInkCount == 0) 0 else laidInkCount - 1
+                inkBounds(stroke.points.subList(from, stroke.points.size))?.let { rect ->
+                    layMarker(stroke.points, rect, mask)
+                    liveRect.union(rect)
+                    toneAndPost(rect)
+                }
+                laidInkCount = stroke.points.size
+            }
+            color = contactPenColor
         } else {
             // Whatever of the stroke the last event did not reach — a pen-up carries the
             // final samples, and the segment from the last laid point to them is the only
@@ -2550,6 +2630,20 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         drawPenInk(canvas, points, contactPenColor, penWidth)
         canvas.restoreToCount(save)
         mergeBatchIntoLive(scratch, rect, mask)
+    }
+
+    /** Draw the **whole** marker path so far into the batch scratch, clipped to [rect], and
+     *  max-merge it into [mask] — [layInk]'s twin for the marker (see [extendLiveMarker]). */
+    private fun layMarker(points: List<StrokePoint>, rect: Rect, mask: ByteArray) {
+        val scratch = ensureBatch(rect.width(), rect.height()) ?: return
+        val canvas = batchCanvas ?: return
+        val save = canvas.save()
+        canvas.clipRect(0, 0, rect.width(), rect.height())
+        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
+        drawMarkerInk(canvas, points, contactPenColor, penWidth)
+        canvas.restoreToCount(save)
+        mergeBatchIntoLive(scratch, rect, mask, union = true)
     }
 
     /**
@@ -3184,6 +3278,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         panel.close()
         liveGraphite = null
         liveInk = null
+        liveMarker = null
         liveAlphaW = 0
         liveAlphaH = 0
         batchCanvas = null

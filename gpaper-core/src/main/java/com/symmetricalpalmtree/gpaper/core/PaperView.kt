@@ -30,10 +30,11 @@ import com.symmetricalpalmtree.gpaper.core.render.ContentRenderer
  *   [removeStrokes] (targeted undo/redo and paste), [ContentRenderer]s +
  *   [notifyContentChanged] for non-ink content.
  * - **Raster pages (0.1.25):** with [pageMode] = [PageMode.RASTER] the page is images
- *   rather than a list of strokes — **two of them since 0.1.39** ([RasterLayer]): graphite
- *   for the pencil, ink for everything else, seen as the ink drawn over the graphite,
+ *   rather than a list of strokes — **two of them since 0.1.39, three since 0.1.68**
+ *   ([RasterLayer]): graphite for the pencil, ink for everything else but the marker, the
+ *   marker's own on top, seen as the ink drawn over the graphite and the marker over both,
  *   because the rubber must lift graphite and leave ink and a pixel cannot say which tool
- *   laid it. Out: [PaperListener.onRasterWillChange] / [PaperListener.onRasterChanged]
+ *   laid it, and a translucent marker must show what is under it. Out: [PaperListener.onRasterWillChange] / [PaperListener.onRasterChanged]
  *   around every change, each naming its layer, plus [getPageRaster] / [copyPageRaster].
  *   In: [loadPageRaster]. Every raster call has a layered form and an un-layered one that
  *   means [RasterLayer.GRAPHITE], so a host written against 0.1.38 is unaffected — as are
@@ -577,8 +578,8 @@ interface PaperView {
      * for host thumbnails/covers. Independent of the screen state and safe to call
      * while the EPD overlay is live. Returns null if the view is not laid out yet.
      *
-     * On a raster page this is the **flatten**: both [RasterLayer]s, ink over graphite —
-     * the composite the panel shows — over the white and the template. It is the only
+     * On a raster page this is the **flatten**: every [RasterLayer], ink over graphite and
+     * the marker over both — the composite the panel shows — over the white and the template. It is the only
      * call that hands back the picture rather than a layer of it.
      */
     fun renderToBitmap(): Bitmap?

@@ -3469,3 +3469,25 @@ scribble erase or a smart lasso. Phases 47–49 reviewed against the five pages:
 among fingers) is right on the hardware; 48 keeps what the person drew wherever a cancel does
 arrive; 49's next-contact end turns a silent drop of the old contact's points (the DRAW `DOWN`
 cleared them) into a committed stub, and its finger-cancel end is moot but harmless. All kept.
+
+### Phase 51 / 0.1.68 — the marker's own raster (post-v0.1.0)
+
+Soil's Sketchsprout asked for a marker (Greg, 2026-10-08): translucent, over pencil and pen
+alike, two strokes darker where they cross, off by undo alone. `StrokeStyle.MARKER` existed
+(45 % alpha, butt ends) but landed on the ink image, where its translucency was only as good
+as the pixel it shared, and the direct path previewed it with the firmware's opaque needle.
+So: `RasterLayer.MARKER`, a third page image drawn over the other two everywhere the page is
+seen (`drawRasterLayers`, hence `renderToBitmap`); `RasterLayer.of(MARKER) = MARKER`; the
+rubber and the smudge name the graphite image and never see it; the un-layered calls still
+mean graphite. The direct path: `DitherFlatten` has one body, `flatten(sheet, graphite, ink,
+marker)` (a fourth `Int` on `luma` would clash with the live-graphite `luma`'s JVM signature),
+and every public form takes the marker as trailing defaults, so every answer before it is
+bit-identical; the marker is coverage, the sheet is not. The live preview draws the **whole**
+path so far each event, clipped to the new segment's rect, and **max-merges** it into a third
+live mask — the only way a translucent butt-ended pass can be built up an event at a time
+without a darker blob at every join — and the mask holds the translucent alpha, so the live
+flatten and the bake treat it as they treat ink. A one-sample marker is left to the base's
+dab. Gate: Greg's Nomad walk through Sketchsprout (a marker over pencil and ink, crossings
+darker, rubber and smudge leave it, undo takes it, export and cover carry it in tone, the
+glass shows it as a dither while drawing).
+
