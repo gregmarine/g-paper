@@ -676,6 +676,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         // Model drops now; pixels stay — no re-record, no invalidate. The next
         // loadStrokes() (or other content call) swaps the screen in one repaint.
         // Both page images go the same way: dropped, not erased (see [graphiteRaster]).
+        // An open contact ends first, on the page it was made on (0.1.70).
+        endLostContact()
         endActiveTransform()
         clearSelection()
         activePoints.clear()
@@ -715,7 +717,11 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun getPageRaster(layer: RasterLayer): Bitmap? {
         val src = raster(layer) ?: return null
+        // Bitmap.copy answers null when it cannot allocate — and null here means "blank",
+        // which a save would write as an empty layer over the artist's work. A copy that
+        // could not be taken is a failure, never a blank page.
         return src.copy(Bitmap.Config.ARGB_8888, false)
+            ?: throw IllegalStateException("could not copy the $layer page image (${src.width}×${src.height})")
     }
 
     override fun copyPageRaster(layer: RasterLayer, rect: Rect): Bitmap? {
@@ -733,15 +739,18 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun readPageRaster(layer: RasterLayer, rect: Rect): RasterPatch? {
         if (pageMode != PageMode.RASTER) return null
-        val w = rasterPageWidth
-        val h = rasterPageHeight
+        val src = raster(layer)
+        // Clipped to the image as well as the page, as copyPageRaster is: an image that
+        // is not (yet) the page's size must not have getPixels read past its edge.
+        val w = if (src != null) minOf(rasterPageWidth, src.width) else rasterPageWidth
+        val h = if (src != null) minOf(rasterPageHeight, src.height) else rasterPageHeight
         val clipped = Rect(rect)
         if (!clipped.intersect(0, 0, w, h) || clipped.isEmpty) return null
         val pixels = IntArray(clipped.width() * clipped.height())
         // A layer with no image yet is transparent everywhere, and a fresh IntArray is
         // exactly that: the before-image of the first mark is nothing, read for free —
         // which is also why the ink layer costs a pencil-only page nothing to read.
-        raster(layer)?.getPixels(
+        src?.getPixels(
             pixels, 0, clipped.width(), clipped.left, clipped.top, clipped.width(), clipped.height(),
         )
         return RasterPatch(clipped, pixels)
@@ -874,11 +883,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         }
     }
 
-    /** Let go of the whole page: every call that drops one image drops them all. */
+    /** Let go of the whole page: every call that drops one image drops them all — and the
+     *  rubber's and the smudge's pass masks with them, which belong to the old page. */
     private fun dropRasters() {
         graphiteRaster = null
         inkRaster = null
         markerRaster = null
+        dropRubPass()
+        dropSmudgePass()
     }
 
     /**
@@ -1235,8 +1247,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                // A new contact while the last draw never ended (Phase 49): its mark first.
-                if (gestureMode == GestureMode.DRAW) endLostDraw()
+                // A new contact while the last never ended (Phase 49; a rub or a smudge
+                // too since 0.1.70): its mark first, its entry closed.
+                endLostContact()
                 // Host chrome zones never start ink; let the platform route the event.
                 // The stylus is still physically on the glass, though — pulse the gate
                 // tail so a resting palm can't pass host palm-gates during the press.
@@ -1290,7 +1303,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                         if (rendersLiveStrokes) invalidate()
                     }
                     GestureMode.ERASE -> {
-                        lastEraserPoint = null
+                        // A fresh contact is a fresh pass (0.1.70): the last contact's
+                        // pass mask must not stop this one lifting the same pixels.
+                        beginEraseSweep()
                         eraseAlong(listOf(event.strokePointAt(-1)))
                     }
                     GestureMode.SMUDGE -> {
@@ -1750,6 +1765,35 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         }
         gestureMode = GestureMode.NONE
         lastEraserPoint = null
+    }
+
+    /**
+     * End whatever contact is still open because its lift never arrived (0.1.70): a draw as
+     * [endLostDraw] ends it; a rub gets its end-of-sweep redraw and its
+     * [PaperListener.onPenLifted], so the host's undo entry for it closes rather than
+     * swallowing the next contact's; a stylus smudge is ended by [endSmudge], which fires
+     * the lift itself. Nothing open, nothing done. Device engines call it where they called
+     * [endLostDraw], before their own bookkeeping for the next contact.
+     */
+    protected fun endLostContact() {
+        when (gestureMode) {
+            GestureMode.DRAW -> endLostDraw()
+            GestureMode.ERASE -> {
+                android.util.Log.i("GPaper", "lost erase: ending a contact whose lift never arrived")
+                markPenUp()
+                finalizeEraseRedraw()
+                paperListener?.onPenLifted()
+                gestureMode = GestureMode.NONE
+                lastEraserPoint = null
+            }
+            GestureMode.SMUDGE -> {
+                android.util.Log.i("GPaper", "lost smudge: ending a contact whose lift never arrived")
+                markPenUp()
+                endSmudge()
+                gestureMode = GestureMode.NONE
+            }
+            else -> Unit
+        }
     }
 
     private fun commitActiveStroke(allowGestures: Boolean = true): Boolean {
@@ -3131,7 +3175,12 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     private fun cancelActiveGesture() {
-        if (gestureMode == GestureMode.ERASE) finalizeEraseRedraw()
+        // A tool change (or a mode change) under an open contact (0.1.70): a mark the
+        // person drew is committed as a lost lift would commit it, never silently
+        // dropped; a rub or a stylus smudge is closed with its onPenLifted. A draw whose
+        // points a gesture already consumed (the smart lasso switching the tool from
+        // inside the commit) has none left and is just reset below.
+        if (gestureMode != GestureMode.DRAW || activePoints.isNotEmpty()) endLostContact()
         if (dragActive) lassoDragCancel()
         if (lassoCapturing) {
             lassoCapturing = false

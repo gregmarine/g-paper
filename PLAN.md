@@ -3502,3 +3502,34 @@ the trimmed end changes as the stroke grows, so the live lay now **rewrites** it
 the end's zone began at the last lay (whole path drawn, the rect replaced) instead of
 max-merging — exact by construction, and simpler.
 
+
+### Phase 53 / 0.1.70 — code review fixes
+
+A review of the engine for Soil (2026-10-08); no new behaviour asked for, each fix the smallest
+that keeps the decisions recorded above.
+
+- `getPageRaster` throws `IllegalStateException` when the copy cannot be allocated, rather than
+  answering null — null means blank, and a host saving it wrote an empty layer over the art.
+- The base's eraser contact starts a fresh sweep (`beginEraseSweep`), as Onyx's always did: the
+  last contact's rub pass mask no longer holds this one back. `dropRasters` drops both pass
+  masks, so neither survives a page swap.
+- A tool change, a mode change or `clearForContentSwap` under an open draw (a lost lift) commits
+  the mark as a lost lift does, rather than dropping it.
+- `endLostContact`: a lost lift ends a rub (end-of-sweep redraw + `onPenLifted`) and a stylus
+  smudge (`endSmudge`) as well as a draw, at the next contact and at the boundaries above — a
+  host's undo entry per contact no longer swallows the next one. Ratta calls it at its down.
+- `MarkerTrim.dab`: a scrub that never leaves a width-sized patch, or whose trimmed path is under
+  a pixel, is drawn as one dab at its middle, never a sliver or nothing.
+- `readPageRaster` clips to the layer's image as well as the page, as `copyPageRaster` does.
+- Ratta: a direct stroke-page fragment cut by an exclusion rect lays its unlaid tail before the
+  bake composites it (no gap on the panel); the marker's live lay rewrites from the first point
+  while the start's zone is open (`MarkerTrim.startUnsettled`); a lost lift's lasso trail and
+  uncommitted live mark are wiped at the next down, and a new preview or trail clears what the
+  last left in the mask.
+- Onyx: the stylus smudge reaches the base's sweep (it fell to the SDK path, which ignores it).
+- `EbcPanel.close` lets the fd and the mapping go on the display thread, after any drain in its
+  ioctl, so a blocked `DISPAREA` never lands on a reused fd number.
+- KDoc: `releasePanel` (the panel is re-opened at re-attach), the direct-stroke bake's KDoc back
+  on `bakeAfterCommit(stroke)`.
+
+888 tests (444 a variant; 7 new, `MarkerTrimTest`). Gate: Greg's Nomad walk through Soil.

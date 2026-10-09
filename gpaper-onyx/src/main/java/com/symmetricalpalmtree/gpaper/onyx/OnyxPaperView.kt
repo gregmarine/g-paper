@@ -791,8 +791,9 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         // and the base class observes it (gate tracking + raw passthrough). LASSO takes
         // the same route only as the no-pipeline fallback (raw dead → software trail);
         // with the pipeline live the raw callbacks drive the gesture and this path must
-        // not double-drive it.
-        if (tool == Tool.NONE || (capturesOutline && !isSetup)) return super.onTouchEvent(event)
+        // not double-drive it. SMUDGE runs with the raw path off as NONE does (0.1.60), so
+        // its sweep is the base's too — handed to the SDK it went nowhere (0.1.70).
+        if (tool == Tool.NONE || tool == Tool.SMUDGE || (capturesOutline && !isSetup)) return super.onTouchEvent(event)
 
         // PEN/ERASER/LASSO: the SDK owns the stylus. Keep the palm gate correct even if a
         // stylus event slips through (e.g. raw drawing momentarily disabled on focus

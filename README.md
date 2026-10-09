@@ -49,13 +49,13 @@ Android. `gpaper-onyx` brings the BOOX SDK's build baggage (see the
 
 ## Quickstart
 
-Publish to mavenLocal (0.1.69 is mavenLocal-only), add `mavenLocal()` to your repositories, then:
+Publish to mavenLocal (0.1.70 is mavenLocal-only), add `mavenLocal()` to your repositories, then:
 
 ```kotlin
 dependencies {
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-core:0.1.69")
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.69")  // only if you target BOOX
-    implementation("com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.69") // only if you target Supernote
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-core:0.1.70")
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-onyx:0.1.70")  // only if you target BOOX
+    implementation("com.symmetricalpalmtree.gpaper:gpaper-ratta:0.1.70") // only if you target Supernote
 }
 ```
 

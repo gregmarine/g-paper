@@ -63,6 +63,56 @@ object MarkerTrim {
         return out
     }
 
+    /**
+     * Where a marker too small to be a path is laid as one **dab** (0.1.70) — a square the
+     * marker's width, centred on the middle of the mark's bounds — or null when it is a path.
+     *
+     * Trimming both ends of a small scrub leaves the segment between its first and last
+     * points, which can be a sliver or nothing at all while the hand clearly made a mark. So
+     * a mark is a dab when it is one sample; when the whole of it lies in the two end zones
+     * and its ends are within [half] of each other (it never left a width-sized patch); or
+     * when what the trim leaves is under a pixel long. The renderer asks this before it
+     * trims, so the bake and every engine's live lay agree.
+     */
+    fun dab(points: List<StrokePoint>, half: Float): StrokePoint? {
+        if (points.isEmpty()) return null
+        if (points.size == 1) return points[0]
+        if (points.size >= 3 &&
+            stableIndex(points, half) < stableStartIndex(points, half) &&
+            dist2(points[0], points[points.size - 1]) < half * half
+        ) return centre(points)
+        if (length(trim(points, half)) < 1f) return centre(points)
+        return null
+    }
+
+    /**
+     * Whether the start's zone is still open: no sample but the newest has left it, so the
+     * trimmed path's first segment (and whether the mark is a [dab] at all) can still change
+     * as samples arrive. A live lay must then rewrite the mark from its first point.
+     */
+    fun startUnsettled(points: List<StrokePoint>, half: Float): Boolean =
+        points.size < 3 || stableStartIndex(points, half) >= stableIndex(points, half)
+
+    private fun centre(points: List<StrokePoint>): StrokePoint {
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+        for (p in points) {
+            if (p.x < minX) minX = p.x
+            if (p.x > maxX) maxX = p.x
+            if (p.y < minY) minY = p.y
+            if (p.y > maxY) maxY = p.y
+        }
+        return StrokePoint((minX + maxX) / 2f, (minY + maxY) / 2f)
+    }
+
+    private fun length(points: List<StrokePoint>): Float {
+        var total = 0f
+        for (i in 1 until points.size) total += kotlin.math.sqrt(dist2(points[i - 1], points[i]))
+        return total
+    }
+
     private fun dist2(a: StrokePoint, b: StrokePoint): Float {
         val dx = a.x - b.x
         val dy = a.y - b.y

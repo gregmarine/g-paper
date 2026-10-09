@@ -118,7 +118,11 @@ still in progress is therefore ended as a lift (`endLostDraw`) when a cancel car
 finger's pointer arrives (the system cancelling the pen's gesture), or the next pen contact
 begins — never on a finger's down, move or up, since the pen's own stream keeps coming while a
 hand rests on the glass (0.1.65); device engines call it before their own bookkeeping for
-the new contact, so the old mark bakes under the old contact's state. The Ratta engine also logs
+the new contact, so the old mark bakes under the old contact's state. Since 0.1.70 the same end
+covers every contact (`endLostContact`): a rub whose lift was lost gets its end-of-sweep redraw
+and its `onPenLifted`, a stylus smudge its `endSmudge`, so a host's undo entry per contact never
+swallows the next one; and a tool or mode change, or a `clearForContentSwap`, under an open draw
+commits the mark rather than dropping it. The Ratta engine also logs
 every contact boundary the window received (`touch:` lines), the record to read when a stroke is
 lost.
 

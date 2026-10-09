@@ -191,13 +191,25 @@ internal class EbcPanel {
             scheduled = false
             pending.setEmpty()
         }
-        handler?.removeCallbacksAndMessages(null)
+        // The fd and the mapping are let go **on the display thread**, after any drain
+        // already in its ioctl (0.1.70): closed here, a drain blocked in DISPAREA would come
+        // back to an fd number the process may already have handed to another open. The
+        // fields are cleared now, so nothing new reaches them; the thread then quits.
+        val oldFd = fd
+        val oldMap = map
+        val oldMapBytes = mapBytes
+        fd = -1
+        map = null
+        val release = Runnable {
+            oldMap?.let { EbcNative.munmap(it, oldMapBytes) }
+            if (oldFd >= 0) EbcNative.close(oldFd)
+        }
+        val h = handler
+        h?.removeCallbacksAndMessages(null)
+        if (h == null || !h.post(release)) release.run()
         thread?.quitSafely()
         thread = null
         handler = null
-        map?.let { EbcNative.munmap(it, mapBytes) }
-        map = null
-        closeFd()
         Log.i(TAG, "panel: closed")
     }
 

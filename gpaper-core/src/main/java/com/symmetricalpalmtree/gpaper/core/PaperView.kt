@@ -267,6 +267,11 @@ interface PaperView {
      * Drop the in-memory model WITHOUT repainting: the current pixels stay on screen
      * until the next [loadStrokes] swaps content in one refresh. Use for page
      * turns/content swaps instead of [clear] (which would double-flash EPD panels).
+     *
+     * A contact still open because its lift was lost is ended first, on the outgoing
+     * page (0.1.70): a draw commits as a lost lift commits it ([PaperListener.onStrokeCommitted]
+     * and [PaperListener.onPenLifted] fire inside this call), a rub or a stylus smudge
+     * fires its [PaperListener.onPenLifted].
      */
     fun clearForContentSwap()
 
@@ -340,7 +345,9 @@ interface PaperView {
      * is blank or the mode is [PageMode.STROKE]. The raster twin of [getStrokes], and like
      * it the host's save-all: a save encodes the copy off the main thread while the artist
      * keeps drawing into the live one, which is only sound because this is a copy. Main
-     * thread only; the copy costs about as long as a `memcpy` of the page.
+     * thread only; the copy costs about as long as a `memcpy` of the page. **Throws**
+     * (`IllegalStateException`, 0.1.70) when the copy cannot be allocated — null always
+     * means blank, so a failed copy is never mistaken for an empty layer and saved over one.
      *
      * This is one layer, not the picture. What the artist sees is the ink drawn over the
      * graphite (0.1.44; `DARKEN` before it), which is what [renderToBitmap] renders; a host saving a page it means to

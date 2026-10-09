@@ -190,8 +190,11 @@ internal object StrokeRenderer {
         paint.color = withAlphaFactor(color, MARKER_ALPHA)
         paint.strokeCap = Paint.Cap.BUTT
         val half = width / 2f
-        if (points.size == 1) {
-            val p = points[0]
+        // One sample, or a scrub too small to leave a path once its ends are trimmed
+        // (0.1.70): a dab, never a sliver or nothing — see [MarkerTrim.dab].
+        val dab = MarkerTrim.dab(points, half)
+        if (dab != null) {
+            val p = dab
             paint.style = Paint.Style.FILL
             canvas.drawRect(p.x - half, p.y - half, p.x + half, p.y + half, paint)
             return

@@ -716,18 +716,6 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
     // ── Deferred bake & overlay handoff ──────────────────────────────────────
 
-    /**
-     * A mark committed on a direct **stroke** page (Phase 42): lay it into [committedPage]
-     * over its runs, dither those runs, and let the window mirror — the raster path's
-     * shape, with the committed picture where the page images were.
-     *
-     * A contact this view previewed lays its live layer by the same integer `SRC_OVER`
-     * the raster bake uses ([compositeLiveInto]), so the page holds precisely the pixels
-     * the panel showed and the mirror is exact at the one moment it matters. A style this
-     * path did not preview is re-rendered from the vector over the same runs. Either way
-     * the whole-page render is not done here — the runs are the mark's ink, never its
-     * bounding box (0.1.33's rule), and the redraw that follows finds the image current.
-     */
     /** A stroke of this contact was committed (Phase 48): a cancel after it has nothing to wipe. */
     private var contactCommitted = false
 
@@ -750,6 +738,18 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         )
     }
 
+    /**
+     * A mark committed on a direct **stroke** page (Phase 42): lay it into [committedPage]
+     * over its runs, dither those runs, and let the window mirror — the raster path's
+     * shape, with the committed picture where the page images were.
+     *
+     * A contact this view previewed lays its live layer by the same integer `SRC_OVER`
+     * the raster bake uses ([compositeLiveInto]), so the page holds precisely the pixels
+     * the panel showed and the mirror is exact at the one moment it matters. A style this
+     * path did not preview is re-rendered from the vector over the same runs. Either way
+     * the whole-page render is not done here — the runs are the mark's ink, never its
+     * bounding box (0.1.33's rule), and the redraw that follows finds the image current.
+     */
     override fun bakeAfterCommit(stroke: Stroke) {
         contactCommitted = true
         if (!firmware || !directStroke) {
@@ -761,6 +761,10 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (page != null && runs.isNotEmpty()) {
             val mask = if (contactDirect) liveLayer(contactLayer) else null
             if (mask != null) {
+                // A fragment an exclusion rect cut off (or any commit the last event did
+                // not reach) carries samples the live layer never got: lay them first, or
+                // the panel and the window keep a gap the model does not have.
+                layInkTail(stroke.points, mask)
                 for (r in runs) compositeLiveInto(page, mask, r, contactPenColor)
             } else {
                 for (r in runs) renderCommittedPage(r)
@@ -1308,14 +1312,20 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
 
     /**
      * The rect a marker lay rewrites: the bounds of every sample from the earlier of the last
-     * laid point and where the end's trim zone began at the last lay, to the newest sample,
+     * laid point and where the end's trim zone began at the last lay, to the newest sample —
+     * from the first sample while the start's zone is open ([MarkerTrim.startUnsettled]) —
      * padded as [inkBounds] pads. Updates [markerStableIndex] for the next lay. Null when none
      * of it is on screen.
      */
     private fun markerLayRect(points: List<StrokePoint>): Rect? {
-        val stable = MarkerTrim.stableIndex(points, penWidth / 2f)
-        val from = minOf(if (laidInkCount == 0) 0 else laidInkCount - 1, markerStableIndex, stable)
-        markerStableIndex = stable
+        val half = penWidth / 2f
+        val stable = MarkerTrim.stableIndex(points, half)
+        // While the start's zone is still open (0.1.70) the mark's first segment — or its
+        // being a dab at all — can still move, so the lay rewrites it from the first point;
+        // and the next lay must too, since this one may have drawn there.
+        val unsettled = MarkerTrim.startUnsettled(points, half)
+        val from = if (unsettled) 0 else minOf(if (laidInkCount == 0) 0 else laidInkCount - 1, markerStableIndex, stable)
+        markerStableIndex = if (unsettled) 0 else stable
         return inkBounds(points.subList(from.coerceIn(0, points.size - 1), points.size))
     }
 
@@ -2336,6 +2346,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     /** A direct contact begins: nothing laid yet, nothing to clear, and the view's screen
      *  offset read once (the panel speaks screen coordinates). */
     private fun beginLivePreview() {
+        // Belt and braces (0.1.70): nothing a contact that never ended laid may stay in the
+        // mask this contact is about to be composited from.
+        liveLayer(contactLayer)?.let { clearMaskRect(it, liveRect) }
         liveEvents = 0
         laidFlecks = 0
         laidInkCount = 0
@@ -2411,6 +2424,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     private val trailPath = Path()
 
     private fun beginTrail() {
+        liveLayer(contactLayer)?.let { clearMaskRect(it, liveRect) }
         contactTrail = true
         contactTrailCrosses = tool == Tool.LASSO_ERASER
         trail = null
@@ -2573,21 +2587,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             }
             color = contactPenColor
         } else {
-            // Whatever of the stroke the last event did not reach — a pen-up carries the
-            // final samples, and the segment from the last laid point to them is the only
-            // part of the mark not yet on the panel.
-            if (stroke.points.size > laidInkCount) {
-                val from = if (laidInkCount == 0) 0 else laidInkCount - 1
-                val tail = stroke.points.subList(from, stroke.points.size)
-                inkBounds(tail)?.let { rect ->
-                    layInk(tail, rect, mask)
-                    liveRect.union(rect)
-                    // The final samples arrive with the lift itself, so this last stretch
-                    // is new to the panel too.
-                    toneAndPost(rect)
-                }
-                laidInkCount = stroke.points.size
-            }
+            layInkTail(stroke.points, mask)
             color = contactPenColor
         }
         val target = rasterForWrite(layer) ?: return false
@@ -2600,6 +2600,23 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             if (DISPLAY_SETTLES && run.intersect(0, 0, liveAlphaW, liveAlphaH)) pendingRuns.add(run)
         }
         return true
+    }
+
+    /**
+     * Whatever of a pen-path mark the last event did not reach — a pen-up carries the final
+     * samples, and the segment from the last laid point to them is the only part of the mark
+     * not yet on the panel. Laid into [mask] and shown, since it is new to the panel too.
+     */
+    private fun layInkTail(points: List<StrokePoint>, mask: ByteArray) {
+        if (points.size <= laidInkCount) return
+        val from = if (laidInkCount == 0) 0 else laidInkCount - 1
+        val tail = points.subList(from, points.size)
+        inkBounds(tail)?.let { rect ->
+            layInk(tail, rect, mask)
+            liveRect.union(rect)
+            toneAndPost(rect)
+        }
+        laidInkCount = points.size
     }
 
     /**
@@ -3024,9 +3041,15 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
         if (isStylus && firmware) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    // The last draw never ended (Phase 49): its mark bakes under its own
-                    // contact state, before this contact's is set up below.
-                    if (drawInProgress) endLostDraw()
+                    // The last contact never ended (Phase 49; a rub or a smudge too since
+                    // 0.1.70): its mark bakes under its own contact state, before this
+                    // contact's is set up below.
+                    endLostContact()
+                    // What a lost contact left in a live layer and committed nothing for
+                    // (0.1.70): a lasso trail, or a tap-sized direct mark — off the panel
+                    // and out of the mask, or the next contact's bake carries it.
+                    if (contactTrail) wipeTrail()
+                    if (contactDirect && !contactCommitted) dropLivePreview()
                     // No-hover backstop for the pen-approach re-arm (too late for this
                     // stroke's paint, but heals the session for the rest).
                     rearmOnPenApproach()
@@ -3194,6 +3217,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     override fun clearForContentSwap() {
+        // A contact still open (its lift lost) ends on its own page first (0.1.70), before
+        // the overlay goes — the base would end it too, but after.
+        endLostContact()
         // Bake + release FIRST (or the outgoing page's live overlay ink survives onto
         // the incoming page); the pixels then stay until the next loadStrokes repaints.
         releaseFirmwareOverlay()
@@ -3295,7 +3321,9 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     /** Let go of the panel: the fd, the mapping, the display thread and the live layer.
-     *  Idempotent, and never re-opened for this view — a dead view has nothing to preview. */
+     *  Idempotent. At detach it is not final: a view attached again is set up again, and
+     *  the setup opens the panel afresh ([EbcPanel.close] allows a working session to be
+     *  re-opened). After [release] nothing sets the view up, so nothing re-opens it. */
     private fun releasePanel() {
         clearLivePreview()
         // Before the fd goes: nothing may be left holding back a redraw for a rebuild that
