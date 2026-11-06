@@ -274,6 +274,15 @@ interface PaperListener {
     fun onTransformChanged(contentId: String, box: OrientedBox) {}
 
     /**
+     * One changed move/resize/rotate contact completed. Fires after the final
+     * [onTransformChanged], while transform mode remains active. [before] is this
+     * contact's starting box; [after] is its committed box. Cancelled contacts and
+     * contacts that return to their starting box do not fire this callback.
+     * Hosts can use this boundary to record one undo entry per gesture.
+     */
+    fun onTransformGestureCommitted(contentId: String, before: OrientedBox, after: OrientedBox) {}
+
+    /**
      * Transform mode ended — by [PaperView.endTransform], a contact outside the overlay,
      * a tool change, any data-in call, or a new [PaperView.beginTransform]. Fires exactly
      * once per mode, on every exit including the host's own, with the box the mode began

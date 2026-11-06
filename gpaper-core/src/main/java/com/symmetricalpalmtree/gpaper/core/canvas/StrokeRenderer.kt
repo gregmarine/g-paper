@@ -71,6 +71,7 @@ internal object StrokeRenderer {
         paint: Paint,
         seed: Int = 0,
         pencilInk: PencilInk? = null,
+        geometry: StrokeGeometry? = null,
     ) {
         if (points.isEmpty()) return
         resetPaint(paint, color, width)
@@ -78,15 +79,16 @@ internal object StrokeRenderer {
             StrokeStyle.PEN,
             StrokeStyle.BRUSH,
             StrokeStyle.CALLIGRAPHY,
-            -> drawPen(canvas, points, paint)
+            -> drawPen(canvas, points, paint, geometry)
 
             StrokeStyle.PENCIL -> drawPencil(
                 canvas, points, width, seed, paint,
                 pencilInk ?: PencilInk(color, opaque = false, density = 1f),
+                geometry,
             )
-            StrokeStyle.MARKER -> drawMarker(canvas, points, color, width, paint)
-            StrokeStyle.DASH -> drawDash(canvas, points, width, paint)
-            StrokeStyle.CROSS -> drawCross(canvas, points, width, paint)
+            StrokeStyle.MARKER -> drawMarker(canvas, points, color, width, paint, geometry)
+            StrokeStyle.DASH -> drawDash(canvas, points, width, paint, geometry)
+            StrokeStyle.CROSS -> drawCross(canvas, points, width, paint, geometry)
             StrokeStyle.FOUNTAIN -> drawFountain(canvas, points, width, paint)
         }
     }
@@ -113,8 +115,9 @@ internal object StrokeRenderer {
         seed: Int,
         paint: Paint,
         ink: PencilInk,
+        geometry: StrokeGeometry?,
     ) {
-        val grain = GraphiteGrain.of(points, width, seed, density = ink.density)
+        val grain = geometry?.grain ?: GraphiteGrain.of(points, width, seed, density = ink.density).also { geometry?.grain = it }
         drawPencilFlecks(canvas, grain, 0, ink, width, paint)
     }
 
@@ -170,12 +173,12 @@ internal object StrokeRenderer {
     }
 
     /** Baseline uniform-width round-cap polyline; single point → round dot. */
-    private fun drawPen(canvas: Canvas, points: List<StrokePoint>, paint: Paint) {
+    private fun drawPen(canvas: Canvas, points: List<StrokePoint>, paint: Paint, geometry: StrokeGeometry?) {
         if (points.size == 1) {
             canvas.drawPoint(points[0].x, points[0].y, paint)
             return
         }
-        canvas.drawPath(polylinePath(points), paint)
+        canvas.drawPath(polylinePath(points, geometry), paint)
     }
 
     private fun drawMarker(
@@ -184,6 +187,7 @@ internal object StrokeRenderer {
         color: Int,
         width: Float,
         paint: Paint,
+        geometry: StrokeGeometry?,
     ) {
         // One drawPath = one coverage pass, so the translucency stays uniform even where
         // the path self-overlaps.
@@ -202,10 +206,10 @@ internal object StrokeRenderer {
         // The ends kept flat (0.1.69): the samples inside half the width of either end are
         // dropped, so the butt cap sits on one straight segment rather than on a wobble —
         // see [MarkerTrim].
-        canvas.drawPath(polylinePath(MarkerTrim.trim(points, half)), paint)
+        canvas.drawPath(polylinePath(MarkerTrim.trim(points, half), geometry), paint)
     }
 
-    private fun drawDash(canvas: Canvas, points: List<StrokePoint>, width: Float, paint: Paint) {
+    private fun drawDash(canvas: Canvas, points: List<StrokePoint>, width: Float, paint: Paint, geometry: StrokeGeometry?) {
         paint.pathEffect = DashPathEffect(
             floatArrayOf(DASH_ON_FACTOR * width, DASH_OFF_FACTOR * width), 0f
         )
@@ -214,14 +218,14 @@ internal object StrokeRenderer {
             canvas.drawPoint(points[0].x, points[0].y, paint)
             return
         }
-        canvas.drawPath(polylinePath(points), paint)
+        canvas.drawPath(polylinePath(points, geometry), paint)
         paint.pathEffect = null
     }
 
-    private fun drawCross(canvas: Canvas, points: List<StrokePoint>, width: Float, paint: Paint) {
+    private fun drawCross(canvas: Canvas, points: List<StrokePoint>, width: Float, paint: Paint, geometry: StrokeGeometry?) {
         paint.strokeWidth = (width * CROSS_LINE_WIDTH_FACTOR).coerceAtLeast(1f)
         val arm = width * CROSS_ARM_FACTOR
-        val centers = Geometry.sampleAlongPolyline(points, width * CROSS_SPACING_FACTOR)
+        val centers = geometry?.crossCenters ?: Geometry.sampleAlongPolyline(points, width * CROSS_SPACING_FACTOR).also { geometry?.crossCenters = it }
         for (c in centers) {
             canvas.drawLine(c.x - arm, c.y - arm, c.x + arm, c.y + arm, paint)
             canvas.drawLine(c.x - arm, c.y + arm, c.x + arm, c.y - arm, paint)
@@ -259,10 +263,12 @@ internal object StrokeRenderer {
         paint.strokeJoin = Paint.Join.ROUND
     }
 
-    private fun polylinePath(points: List<StrokePoint>): Path {
+    private fun polylinePath(points: List<StrokePoint>, geometry: StrokeGeometry?): Path {
+        geometry?.path?.let { return it }
         val path = Path()
         path.moveTo(points[0].x, points[0].y)
         for (i in 1 until points.size) path.lineTo(points[i].x, points[i].y)
+        geometry?.path = path
         return path
     }
 

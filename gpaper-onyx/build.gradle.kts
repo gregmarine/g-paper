@@ -37,6 +37,8 @@ android {
 
 dependencies {
     api(project(":gpaper-core"))
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16.1")
 
     // Onyx BOOX SDK — same versions as the Notesprout reference (device-proven on the
     // five-device Tier-1 fleet). Served from repo.boox.com (see settings.gradle.kts).

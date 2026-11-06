@@ -3,12 +3,15 @@ package com.symmetricalpalmtree.gpaper.core
 /** Phase of a [RawInputEvent]. */
 enum class RawAction { DOWN, MOVE, UP, CANCEL, HOVER }
 
-/** Which end of the stylus produced a [RawInputEvent]. */
-enum class RawTool { STYLUS, STYLUS_ERASER }
+/** Which end of the stylus produced a [RawInputEvent]. [UNKNOWN] is used when a
+ * firmware callback reports an erase action without identifying the physical end. */
+enum class RawTool { STYLUS, STYLUS_ERASER, UNKNOWN }
 
 /**
- * One stylus sample delivered to the host's [RawInputListener], independent of the
- * active [Tool]. Plain data, not a `MotionEvent`: on BOOX the ink path runs through the
+ * One stylus sample delivered to the host's [RawInputListener]. [RawInputEvent.tool]
+ * describes the physical input independently of the active [Tool]; [RawInputEvent.isErasing]
+ * reports the effective erase action separately, including tool and barrel-button erasing.
+ * Plain data, not a `MotionEvent`: on BOOX the ink path runs through the
  * SDK's raw-drawing pipeline and never produces `MotionEvent`s, so a common shape is
  * synthesized from whatever channel the engine actually captures.
  *
@@ -23,6 +26,9 @@ data class RawInputEvent(
     val pressure: Float = 1f,
     val tilt: Float = 0f,
     val timeMillis: Long = 0L,
+    /** Whether this sample belongs to an erase operation. Hosts can exclude these
+     * samples from writing gestures without treating the pen tip as a physical eraser. */
+    val isErasing: Boolean = tool == RawTool.STYLUS_ERASER,
 )
 
 /**

@@ -99,6 +99,24 @@ class TransformGeometryTest {
         assertEquals(TransformGrab.E, classify(upright, 240f, 300f))
     }
 
+    @Test
+    fun `small and thin selections retain a movable interior without hiding handles`() {
+        for ((width, height) in listOf(41.2f to 41.2f, 8f to 8f, 8f to 100f, 100f to 8f)) {
+            for (rotation in listOf(0f, 37f, 90f)) {
+                val box = upright.copy(w = width, h = height, rotationDeg = rotation)
+                assertEquals(TransformGrab.BODY, classify(box, box.cx, box.cy))
+                val (insideX, insideY) = box.toPage(width / 10f, height / 10f)
+                assertEquals(TransformGrab.BODY, classify(box, insideX, insideY))
+                for (grab in TransformGrab.HANDLES) {
+                    val (x, y) = TransformGeometry.grabPoint(box, grab)
+                    assertEquals(grab, classify(box, x, y))
+                }
+                val (kx, ky) = TransformGeometry.grabPoint(box, TransformGrab.ROTATE, knobOff)
+                assertEquals(TransformGrab.ROTATE, classify(box, kx, ky))
+            }
+        }
+    }
+
     // ── Resize ───────────────────────────────────────────────────────────────
 
     @Test

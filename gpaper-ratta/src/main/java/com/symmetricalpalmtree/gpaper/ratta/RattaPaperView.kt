@@ -3379,6 +3379,8 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     override fun onDetachedFromWindow() {
+        // Settle a lost contact while its rendering resources are still available.
+        super.onDetachedFromWindow()
         overlayClearArmed = false
         removeCallbacks(overlayClearRunnable)
         removeCallbacks(smudgeMirror)
@@ -3393,7 +3395,6 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
             inkOwner = null // also drops the static view ref — no Activity leak
             Log.i(TAG, "firmware ink session released (detach)")
         }
-        super.onDetachedFromWindow()
     }
 
     override fun resumeDrawing() {
@@ -3405,6 +3406,7 @@ internal class RattaPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     override fun releaseForHandoff() {
+        super.releaseForHandoff()
         if (!firmware || inkOwner !== this) return
         releaseFirmwareOverlay()
         fullScreenDisable()

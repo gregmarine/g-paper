@@ -43,6 +43,8 @@ import com.symmetricalpalmtree.gpaper.core.geometry.SnapEngine
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapGuide
 import com.symmetricalpalmtree.gpaper.core.geometry.TransformGeometry
 import com.symmetricalpalmtree.gpaper.core.geometry.TransformGrab
+import com.symmetricalpalmtree.gpaper.core.geometry.isPenSampleWorthRecording
+import com.symmetricalpalmtree.gpaper.core.geometry.penSamplePressureStep
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
 import com.symmetricalpalmtree.gpaper.core.model.OrientedBox
 import com.symmetricalpalmtree.gpaper.core.model.Selection
@@ -69,7 +71,8 @@ import java.util.UUID
  * - **Committed layer** — template + host content + baked strokes, recorded into a
  *   hardware [RenderNode] display list. Re-recorded only when content changes (stroke
  *   commit, erase, load, template/renderer change), never per frame; [onDraw] blits it.
- *   A software-canvas fallback draws the vector content directly.
+ *   A bounded bitmap caches paper, below-stroke content and ink. Pen-up paints only the
+ *   appended stroke; edits repair intersecting ink in drawing order. Exports remain vector-rendered.
  * - **Live layer** — the in-progress stroke, drawn in [onDraw] at input rate through the
  *   same [StrokeRenderer] as the bake, so live and committed appearance always agree on
  *   this engine.
@@ -186,13 +189,16 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     private val strokeList = ArrayList<Stroke>()
 
-    /** Immutable copy for [getStrokes]' any-thread contract; replaced on every mutation. */
+    /** Immutable snapshot for [getStrokes]' any-thread contract; appends share completed blocks. */
     @Volatile
-    private var strokeSnapshot: List<Stroke> = emptyList()
+    private var strokeSnapshot = StrokeSnapshot.of(emptyList())
 
     // ── Rendering state ──────────────────────────────────────────────────────
 
     private val committedNode = RenderNode("gpaper-committed")
+    private val committedInk = CommittedInkCache()
+    private val strokeGeometry = StrokeGeometryCache()
+    private var committedBackgroundHidden: Set<String> = emptySet()
     private val scratchPaint = Paint()
     private var templateBitmap: Bitmap? = null
     /** The raster page's display-only underlay ([setSheet], Phase 46) — the host's bitmap,
@@ -273,6 +279,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     // ── Input state ──────────────────────────────────────────────────────────
 
     private val activePoints = ArrayList<StrokePoint>()
+
+    /** The newest sample [recordPenSample] dropped since the last recorded one, if any. */
+    private var droppedTailSample: StrokePoint? = null
 
     /**
      * The id the stroke now under the pen will be committed with, minted the first time
@@ -496,11 +505,11 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     /** Whether the stylus is currently on the glass — for device subclasses whose
      *  deferred hardware handoffs must never fire mid-stroke (the Ratta clear ladder). */
-    protected val isPenDown: Boolean get() = penDown
+    override val isPenDown: Boolean get() = !released && penDown
     @Volatile private var penLastLiftMs = 0L
     @Volatile private var penHovering = false
     @Volatile private var penLastHoverMs = 0L
-    private var released = false
+    @Volatile private var released = false
 
     // ── Listeners ────────────────────────────────────────────────────────────
 
@@ -683,6 +692,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         activePoints.clear()
         strokeList.clear()
         modelChanged()
+        committedInk.dropBitmap()
         dropRasters()
         // No re-record and no invalidate, so the pixels on the panel hold; an engine
         // keeping a second image of the page must drop it the same way rather than
@@ -1081,6 +1091,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun setTemplate(bitmap: Bitmap?) {
         templateBitmap = bitmap
+        committedInk.invalidateBackground()
         redrawCommitted()
     }
 
@@ -1096,6 +1107,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     override fun setPageSize(width: Int, height: Int) {
         pageWidth = width
         pageHeight = height
+        committedInk.invalidateBackground()
         redrawCommitted()
     }
 
@@ -1103,14 +1115,19 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun addContentRenderer(renderer: ContentRenderer) {
         contentRenderers.add(renderer)
+        committedInk.invalidateBackground()
         redrawCommitted()
     }
 
     override fun removeContentRenderer(renderer: ContentRenderer) {
-        if (contentRenderers.remove(renderer)) redrawCommitted()
+        if (contentRenderers.remove(renderer)) {
+            committedInk.invalidateBackground()
+            redrawCommitted()
+        }
     }
 
     override fun notifyContentChanged() {
+        if (contentRenderers.any { it.layer == ContentLayer.BELOW_STROKES }) committedInk.invalidateBackground()
         redrawCommitted()
     }
 
@@ -1126,6 +1143,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override val isPenActive: Boolean
         get() {
+            if (released) return false
             if (penDown || penHovering) return true
             val now = SystemClock.uptimeMillis()
             // The lift tail covers palm "double taps" after writing; the hover tail
@@ -1174,11 +1192,15 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     override fun releaseForHandoff() {
-        // Non-EPD engine: no process-global pen pipeline to hand off.
+        interruptInput()
     }
 
     override fun release() {
         released = true
+        penDown = false
+        penHovering = false
+        gestureMode = GestureMode.NONE
+        fingerMode = FingerMode.NONE
         // Drop selection state without callbacks — the host is tearing the view down.
         selection = null
         transform = null
@@ -1203,6 +1225,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         sheetBitmap = null
         dropRasters()
         committedNode.discardDisplayList()
+        committedInk.dropBitmap()
+        strokeGeometry.clear()
     }
 
     // ── PaperView: output & listeners ────────────────────────────────────────
@@ -1224,6 +1248,23 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     override fun setRawInputListener(listener: RawInputListener?) {
         rawInputListener = listener
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus) interruptInput()
+    }
+
+    /** Settle captured ink and cancel transient manipulation before input goes away.
+     * Device engines may also have native gestures to cancel before this cleanup. */
+    protected open fun interruptInput() {
+        if (released) return
+        // Reuse lost-contact handling: keep a real stroke and close erase/smudge history.
+        cancelActiveGesture()
+        if (isTransformGestureActive) transformGestureCancel()
+        fingerMode = FingerMode.NONE
+        markPenUp()
+        markPenOutOfRange()
     }
 
     // ── Input capture ────────────────────────────────────────────────────────
@@ -1461,6 +1502,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         redrawCommitted()
     }
 
+    override fun onDetachedFromWindow() {
+        interruptInput()
+        committedNode.discardDisplayList()
+        committedInk.dropBitmap()
+        strokeGeometry.clear()
+        super.onDetachedFromWindow()
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         // Committed layer: blit the retained display list; software canvases (and the
@@ -1512,10 +1561,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             val save = canvas.save()
             canvas.translate(dragDx, dragDy)
             for (s in dragStrokes) {
-                StrokeRenderer.draw(
-                    canvas, s.points, s.color, s.width, s.style, scratchPaint, s.id.hashCode(),
-                    pencilInk = pencilInk(s.color),
-                )
+                strokeGeometry.draw(canvas, s, scratchPaint, pencilInk(s.color))
             }
             for ((renderer, target) in dragContentTargets) {
                 if (!renderer.drawObject(canvas, target.contentId)) {
@@ -1548,7 +1594,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * Re-record the committed [RenderNode] and repaint. Every content mutation funnels
      * through here; nothing re-tessellates per frame. Open so deferred-bake engines can
      * interleave their overlay handoff between the record and the repaint (every
-     * re-record bakes the whole model, so the hardware overlay must drop its copy of
+     * re-record presents the current model, so the hardware overlay must drop its copy of
      * the ink *before* the fresh frame presents — ordering the hardware is sensitive to).
      */
     protected open fun redrawCommitted() {
@@ -1586,28 +1632,27 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * way.
      */
     protected open fun drawCommittedContent(canvas: Canvas, forDisplay: Boolean = true) {
-        canvas.drawColor(Color.WHITE)
-        templateBitmap?.let { canvas.drawBitmap(it, null, templateDestRect(), null) }
         // Renderers get the drag exclusion set (empty outside a drag) so opted-in hosts
         // hide originals whose live copies ride the drag layer; the default overload
         // ignores it.
         val hiddenContent = hiddenContentIds()
-        for (renderer in contentRenderers) {
-            if (renderer.layer == ContentLayer.BELOW_STROKES) {
-                renderer.draw(canvas, hiddenContent)
-            }
+        if (hiddenContent != committedBackgroundHidden) {
+            committedBackgroundHidden = hiddenContent.toSet()
+            committedInk.invalidateBackground()
         }
         if (pageMode == PageMode.RASTER) {
+            drawCommittedBackground(canvas)
             drawRasterLayers(canvas, forDisplay)
+        } else if (forDisplay && templateBitmap?.config != Bitmap.Config.HARDWARE) {
+            committedInk.draw(canvas, width, height, dragHiddenIds, ::drawCommittedBackground, ::drawCommittedStroke)
         } else {
+            // Hardware templates can be recorded directly, but cannot be drawn into
+            // the cache's software bitmap. Keep their original RenderNode path.
+            drawCommittedBackground(canvas)
             for (stroke in strokeList) {
                 // Mid-drag, the selected strokes live in the translated drag layer instead.
                 if (stroke.id in dragHiddenIds) continue
-                StrokeRenderer.draw(
-                    canvas, stroke.points, stroke.color, stroke.width, stroke.style, scratchPaint,
-                    stroke.id.hashCode(),
-                    pencilInk = pencilInk(stroke.color),
-                )
+                drawCommittedStroke(canvas, stroke)
             }
         }
         for (renderer in contentRenderers) {
@@ -1615,6 +1660,19 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 renderer.draw(canvas, hiddenContent)
             }
         }
+    }
+
+    private fun drawCommittedBackground(canvas: Canvas) {
+        canvas.drawColor(Color.WHITE)
+        templateBitmap?.let { canvas.drawBitmap(it, null, templateDestRect(), null) }
+        val hidden = hiddenContentIds()
+        for (renderer in contentRenderers) {
+            if (renderer.layer == ContentLayer.BELOW_STROKES) renderer.draw(canvas, hidden)
+        }
+    }
+
+    protected open fun drawCommittedStroke(canvas: Canvas, stroke: Stroke) {
+        strokeGeometry.draw(canvas, stroke, scratchPaint, pencilInk(stroke.color))
     }
 
     /**
@@ -1797,6 +1855,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     private fun commitActiveStroke(allowGestures: Boolean = true): Boolean {
+        flushDroppedTail()
         if (activePoints.isEmpty()) return true
         val points = activePoints.toList()
         activePoints.clear()
@@ -1866,7 +1925,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             return true
         }
         strokeList.add(stroke)
-        modelChanged()
+        modelChanged(stroke)
         bakeAfterCommit(stroke)
         paperListener?.onStrokeCommitted(stroke)
         return true
@@ -2012,9 +2071,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             }
             // One gesture, one callback — the host has to be able to record one undo entry
             // even when the scribble took ink and content together. The content is still on
-            // the committed layer at this point; the host removes it and calls
-            // notifyContentChanged, exactly as it does for the eraser tool.
+            // the committed layer at this point; the host removes it without a second
+            // notification, so invalidate the cached background before our redraw.
             paperListener?.onScribbleErased(hitIds, contentHits)
+            if (contentHits.isNotEmpty()) committedInk.invalidateBackground()
             finalizeEraseRedraw()
             onGestureStrokeConsumed()
             Log.i(
@@ -2139,23 +2199,42 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * actually painted.
      */
     private fun appendDrawPoints(points: List<StrokePoint>) {
-        if (exclusionRects.isEmpty()) {
-            activePoints.addAll(points)
-            onLiveStrokeExtended(activePoints)
-            return
-        }
+        val pressureStep = penSamplePressureStep(penStyle, penWidth)
         for (p in points) {
-            if (exclusionRects.any { it.contains(p.x.toInt(), p.y.toInt()) }) {
+            if (exclusionRects.isNotEmpty() && exclusionRects.any { it.contains(p.x.toInt(), p.y.toInt()) }) {
                 // Mid-contact fragment — never a completed gesture (allowGestures off).
+                flushDroppedTail()
                 if (activePoints.size >= 2) {
                     commitCapturedStroke(activePoints.toList(), allowGestures = false)
                 }
                 activePoints.clear()
             } else {
-                activePoints.add(p)
+                recordPenSample(p, pressureStep)
             }
         }
         onLiveStrokeExtended(activePoints)
+    }
+
+    /**
+     * Record [p] unless it is a sample that did not move ([isPenSampleWorthRecording]). The
+     * first sample of a contact is always recorded; a dropped one is held in
+     * [droppedTailSample] so the contact's last sample can still be kept at pen-up.
+     */
+    private fun recordPenSample(p: StrokePoint, pressureStep: Float) {
+        val last = activePoints.lastOrNull()
+        if (last == null || isPenSampleWorthRecording(last, p, pressureStep)) {
+            activePoints.add(p)
+            droppedTailSample = null
+        } else {
+            droppedTailSample = p
+        }
+    }
+
+    /** Record the last sample [recordPenSample] dropped, so a contact ends on its true last sample. */
+    private fun flushDroppedTail() {
+        val tail = droppedTailSample ?: return
+        droppedTailSample = null
+        if (activePoints.isNotEmpty()) activePoints.add(tail)
     }
 
     /**
@@ -2890,8 +2969,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             going?.let { onCommittedStrokesChanged(it) }
         }
         // One gesture, one callback. The content is still on the committed layer at this
-        // point; the host removes it and calls notifyContentChanged, as for the eraser tool.
+        // point; the host removes it without notifying, as for a scribble erase.
         paperListener?.onLassoErased(hitIds, contentHits)
+        if (contentHits.isNotEmpty()) committedInk.invalidateBackground()
         finalizeEraseRedraw()
         onGestureStrokeConsumed()
         Log.i(TAG, "lasso erase took ${hitIds.size} strokes, ${contentHits.size} content objects")
@@ -3017,10 +3097,14 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
 
     private fun transformGestureFinish(x: Float, y: Float) {
         val t = transform ?: return
-        t.box = transformBoxAt(t, x, y)
+        if (t.grab == TransformGrab.NONE) return
+        val before = t.gestureStart
+        val after = transformBoxAt(t, x, y)
+        t.box = after
         t.grab = TransformGrab.NONE
         onSelectionDragVisual(false)
         reportTransformChanged(t)
+        if (before != after) paperListener?.onTransformGestureCommitted(t.contentId, before, after)
         invalidate()
     }
 
@@ -3196,8 +3280,10 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
         maybeEndSmartLassoSession()
     }
 
-    private fun modelChanged() {
-        strokeSnapshot = ArrayList(strokeList)
+    private fun modelChanged(appended: Stroke? = null) {
+        strokeSnapshot = if (appended == null) StrokeSnapshot.of(strokeList) else strokeSnapshot.append(appended)
+        if (appended == null) committedInk.replace(strokeList) else committedInk.append(appended)
+        if (appended == null) strokeGeometry.retain(strokeList.mapTo(HashSet()) { it.id })
     }
 
     // ── Raw passthrough ──────────────────────────────────────────────────────
@@ -3240,6 +3326,8 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
             pressure = p.pressure,
             tilt = p.tilt,
             timeMillis = p.timeMillis,
+            // Use the latched contact mode: the barrel button may be released at UP.
+            isErasing = gestureMode == GestureMode.ERASE || tool == Tool.LASSO_ERASER,
         )
     }
 

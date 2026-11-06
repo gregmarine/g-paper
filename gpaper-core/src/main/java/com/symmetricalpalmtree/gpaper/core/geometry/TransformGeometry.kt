@@ -49,9 +49,10 @@ object TransformGeometry {
         }
 
     /**
-     * Classify a contact point. Handles win over the knob, the knob over the body, so a
-     * small box never hides its handles under its own body; among handles the nearest
-     * within [handleRadius] wins.
+     * Classify a contact point. The nearest handle within [handleRadius] wins, except
+     * an interior contact closer to the box centre remains a body grab. This keeps
+     * small or thin selections movable when their handle touch areas overlap the body,
+     * while every handle remains reachable at its own position. The knob follows handles.
      */
     fun classify(
         box: OrientedBox,
@@ -71,7 +72,12 @@ object TransformGeometry {
                 best = g
             }
         }
-        if (best != TransformGrab.NONE) return best
+        if (best != TransformGrab.NONE) {
+            val dx = x - box.cx
+            val dy = y - box.cy
+            if (box.contains(x, y) && dx * dx + dy * dy < bestD2) return TransformGrab.BODY
+            return best
+        }
         val (kx, ky) = grabPoint(box, TransformGrab.ROTATE, knobOffset)
         val kd2 = (x - kx) * (x - kx) + (y - ky) * (y - ky)
         if (kd2 <= knobRadius * knobRadius) return TransformGrab.ROTATE

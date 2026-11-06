@@ -21,6 +21,8 @@ import com.symmetricalpalmtree.gpaper.core.RawInputEvent
 import com.symmetricalpalmtree.gpaper.core.RawTool
 import com.symmetricalpalmtree.gpaper.core.Tool
 import com.symmetricalpalmtree.gpaper.core.canvas.CanvasPaperView
+import com.symmetricalpalmtree.gpaper.core.geometry.filterPenSamples
+import com.symmetricalpalmtree.gpaper.core.geometry.penSamplePressureStep
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import kotlin.math.hypot
@@ -118,6 +120,10 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
 
     private val touchHelper: TouchHelper by lazy { TouchHelper.create(this, rawInputCallback) }
     private var isSetup = false
+
+    // Android events own this flag only until the SDK begins a raw contact.
+    // Raw callbacks then own the shared pen-down gate through their own end.
+    @Volatile private var androidPenContact = false
 
     /**
      * Pen-proximity feed for the [isPenActive] gate — the palm lands a beat before the
@@ -578,6 +584,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
 
         override fun onBeginRawDrawing(shortcutDrawing: Boolean, touchPoint: TouchPoint) {
             // Before anything else: the pen is on the glass — close the palm gate.
+            androidPenContact = false
             markPenDown()
             if (capturesOutline) {
                 beginRawLasso(touchPoint)
@@ -650,7 +657,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 // current with the overlay's live ink. The SDK may deliver several
                 // batches per contact; each becomes its own stroke (matching the
                 // reference engine — onPenLifted still fires once, at the end callback).
-                commitCapturedStroke(points)
+                commitCapturedStroke(filterPenSamples(points, penSamplePressureStep(penStyle, penWidth)))
             }
         }
 
@@ -658,6 +665,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         // routes here whenever the raw path is enabled, regardless of the armed tool.
 
         override fun onBeginRawErasing(shortcutErasing: Boolean, touchPoint: TouchPoint) {
+            androidPenContact = false
             markPenDown()
             // Mid-lasso barrel press: drop the capture/drag so the erase contact is not
             // also interpreted as a lasso gesture; the SDK's hardware erase proceeds.
@@ -669,12 +677,13 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 touchHelper.setRawDrawingRenderEnabled(false)
                 invalidate()
             }
-            emitRaw(RawAction.DOWN, RawTool.STYLUS_ERASER, touchPoint)
+            // The SDK reports the action here, not whether a barrel or eraser tip caused it.
+            emitRaw(RawAction.DOWN, RawTool.UNKNOWN, touchPoint, isErasing = true)
         }
 
         override fun onEndRawErasing(shortcutErasing: Boolean, touchPoint: TouchPoint) {
             markPenUp()
-            emitRaw(RawAction.UP, RawTool.STYLUS_ERASER, touchPoint)
+            emitRaw(RawAction.UP, RawTool.UNKNOWN, touchPoint, isErasing = true)
             finalizeEraseRedraw()
             post {
                 EpdController.handwritingRepaint(this@OnyxPaperView, Rect(0, 0, width, height))
@@ -683,7 +692,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         }
 
         override fun onRawErasingTouchPointMoveReceived(touchPoint: TouchPoint) {
-            emitRaw(RawAction.MOVE, RawTool.STYLUS_ERASER, touchPoint)
+            emitRaw(RawAction.MOVE, RawTool.UNKNOWN, touchPoint, isErasing = true)
             eraseSweepStreamed = true
             eraseAlong(listOf(touchPoint.toStrokePoint()))
         }
@@ -760,7 +769,12 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         return Math.toRadians(degrees.toDouble()).toFloat()
     }
 
-    private fun emitRaw(action: RawAction, rawTool: RawTool, tp: TouchPoint) {
+    private fun emitRaw(
+        action: RawAction,
+        rawTool: RawTool,
+        tp: TouchPoint,
+        isErasing: Boolean = tool == Tool.ERASER || tool == Tool.LASSO_ERASER,
+    ) {
         val p = tp.toStrokePoint()
         emitRawInput(
             RawInputEvent(
@@ -771,6 +785,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 pressure = p.pressure,
                 tilt = p.tilt,
                 timeMillis = p.timeMillis,
+                isErasing = isErasing,
             )
         )
     }
@@ -778,6 +793,14 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     // ── MotionEvents ─────────────────────────────────────────────────────────
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // Android can normalize CANCEL to an unknown/finger pointer. End only a
+        // contact tracked through this path; an independent raw contact stays gated.
+        if (event.actionMasked == MotionEvent.ACTION_CANCEL && androidPenContact) {
+            androidPenContact = false
+            markPenUp()
+            if (isSetup) touchHelper.onTouchEvent(event)
+            return true
+        }
         // The pen among fingers (Phase 47): a mixed event is narrowed to the pen's pointer first.
         stylusOnly(event)?.let { only -> try { return onTouchEvent(only) } finally { only.recycle() } }
         // Finger input never feeds the SDK pen pipeline — the base decides (selection
@@ -800,54 +823,88 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         // loss), then feed the SDK. Never fall back to the base class's software ink —
         // a dead pipeline must fail loudly, not silently become the generic engine.
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> markPenDown()
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> markPenUp()
+            MotionEvent.ACTION_DOWN -> {
+                if (!isPenDown) androidPenContact = true
+                markPenDown()
+            }
+            MotionEvent.ACTION_UP -> if (androidPenContact) {
+                androidPenContact = false
+                markPenUp()
+            }
         }
-        return if (isSetup) touchHelper.onTouchEvent(event) else false
+        if (isSetup) touchHelper.onTouchEvent(event)
+        // Tracking DOWN makes this view the Android contact owner. The SDK may
+        // decline a posted MotionEvent because ink arrives through its raw path;
+        // returning false would then prevent Android from delivering UP/CANCEL,
+        // leaving the palm/sync gate latched even though the contact has ended.
+        // Consume the stream for gate tracking only; never synthesize software ink.
+        return true
     }
 
     // ── EPD content handoffs ─────────────────────────────────────────────────
 
-    /** The region a posted `handwritingRepaint` will cover, while one is pending — so
-     *  several content calls in one main-loop turn (setTemplate + setPageSize +
-     *  loadStrokes on a page turn) coalesce into a single panel refresh instead of
-     *  flashing once each. Null when nothing is posted. A full-view call and a regional
-     *  one landing together union to the full view, which is the right answer. */
+    /** Content changes before a frame commits share one panel refresh region. */
     private var epdRepaintRegion: Rect? = null
+    private var epdFrameObserver: ViewTreeObserver? = null
+    private var epdFrameCallback: Runnable? = null
+    private var epdRepaintGeneration = 0L
+
+    /** Unregister callbacks when possible; the generation also rejects ones already queued. */
+    private fun cancelPendingEpdRepaint() {
+        epdRepaintGeneration++
+        epdFrameCallback?.let { callback ->
+            removeCallbacks(callback)
+            epdFrameObserver?.takeIf { it.isAlive }?.unregisterFrameCommitCallback(callback)
+        }
+        epdFrameCallback = null
+        epdFrameObserver = null
+        epdRepaintRegion = null
+    }
 
     /**
-     * The overlay handoff every committed-content swap needs on this hardware:
-     * render off → repaint the view ([block] must leave the committed layer current) →
-     * `handwritingRepaint` (commits the pixels; without it the change is invisible or
-     * leaves gray residue) → re-arm the raw path for the current tool.
-     *
-     * [region] is what the panel is asked to refresh, in view space; null is the whole
-     * view, which every content swap wants. A raster undo (0.1.29) passes the patch it
-     * changed instead, because the full-view repaint is the flash the class doc warns
-     * against, and an undo of one mark that flashed the whole page would make taking a
-     * mark back cost more than making it. Whether a regional refresh at pen-idle lands
-     * as cleanly as the mid-contact one the eraser uses is a device fact, judged on the
-     * panel — the full view is one argument away if it does not.
+     * Render off → update the committed layer → submit its Android frame → refresh
+     * the handwriting layer → re-arm the current tool. A plain post can run before
+     * the new frame and expose old page pixels. Regional raster edits retain their
+     * smaller refresh region; multiple content changes union their regions.
      */
     private inline fun epdRepaintHandoff(region: Rect? = null, block: () -> Unit) {
-        if (!isSetup) {
+        if (!isSetup || penOwner !== this || !isAttachedToWindow) {
             block()
             return
         }
         touchHelper.setRawDrawingRenderEnabled(false)
         block()
-        val wanted = region ?: Rect(0, 0, width, height)
-        val pending = epdRepaintRegion
-        if (pending != null) {
-            pending.union(wanted)
-            return
-        }
-        epdRepaintRegion = Rect(wanted)
-        post {
-            val r = epdRepaintRegion ?: Rect(0, 0, width, height)
+        val wanted = Rect(region ?: Rect(0, 0, width, height))
+        epdRepaintRegion?.let { wanted.union(it) }
+        // A newer content change needs its own submitted frame, even if the previous
+        // frame's callback was captured by Android and is already waiting to run.
+        cancelPendingEpdRepaint()
+        epdRepaintRegion = wanted
+        val generation = epdRepaintGeneration
+        val repaint = Runnable {
+            if (generation != epdRepaintGeneration) return@Runnable
+            val dirty = epdRepaintRegion ?: return@Runnable
             epdRepaintRegion = null
-            EpdController.handwritingRepaint(this, r)
-            post { armRawForCurrentTool() }
+            epdFrameCallback = null
+            epdFrameObserver = null
+            if (!isSetup || penOwner !== this || !isAttachedToWindow || windowVisibility != View.VISIBLE) return@Runnable
+            EpdController.handwritingRepaint(this, dirty)
+            post {
+                // A dialog, teardown or a newer page change can happen before this turn.
+                if (generation == epdRepaintGeneration && isSetup && penOwner === this &&
+                    isAttachedToWindow && hasWindowFocus() && windowVisibility == View.VISIBLE
+                ) armRawForCurrentTool()
+            }
+        }
+        epdFrameCallback = repaint
+        if (isHardwareAccelerated) {
+            val observer = viewTreeObserver
+            epdFrameObserver = observer
+            observer.registerFrameCommitCallback(repaint)
+            invalidate()
+        } else {
+            // Frame-commit callbacks are not supported by the software renderer.
+            post(repaint)
         }
     }
 
@@ -971,6 +1028,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     // ── Pipeline lifecycle ───────────────────────────────────────────────────
 
     private fun openRawDrawing() {
+        cancelPendingEpdRepaint()
         if (!isSetup) {
             applyLimitRect()
             touchHelper.openRawDrawing()
@@ -1005,6 +1063,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
      * refresh management.
      */
     private fun closeRawDrawingIfOwner(caller: String) {
+        cancelPendingEpdRepaint()
         if (!isSetup) return
         // Never carry an in-flight lasso gesture across a pipeline teardown.
         cancelRawLasso(caller)
@@ -1043,6 +1102,12 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
         if (isSetup && penOwner === this) {
             post { if (isSetup && penOwner === this) applyLimitRect() }
         }
+    }
+
+    override fun interruptInput() {
+        androidPenContact = false
+        cancelRawLasso("input interruption")
+        super.interruptInput()
     }
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
@@ -1102,10 +1167,12 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
     }
 
     override fun releaseForHandoff() {
+        super.releaseForHandoff()
         closeRawDrawingIfOwner("releaseForHandoff")
     }
 
     override fun release() {
+        androidPenContact = false
         unsubscribePenProximity()
         closeRawDrawingIfOwner("release")
         super.release()

@@ -499,6 +499,11 @@ interface PaperView {
      */
     val isPenActive: Boolean
 
+    /** Actual captured pen contact, excluding hover and the palm-rejection tail.
+     * Hosts may use this for contact-sensitive controls; [isPenActive] remains the
+     * broader palm-rejection gate. False after input interruption or release. */
+    val isPenDown: Boolean
+
     // ── Selection (lasso) ────────────────────────────────────────────────────
 
     /**

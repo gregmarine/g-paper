@@ -34,6 +34,7 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }
 
 // mavenLocal-only publishing (Phase 6 decision): `./gradlew publishToMavenLocal`.
