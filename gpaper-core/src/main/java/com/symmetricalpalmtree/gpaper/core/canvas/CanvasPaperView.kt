@@ -43,6 +43,7 @@ import com.symmetricalpalmtree.gpaper.core.geometry.SnapEngine
 import com.symmetricalpalmtree.gpaper.core.geometry.SnapGuide
 import com.symmetricalpalmtree.gpaper.core.geometry.TransformGeometry
 import com.symmetricalpalmtree.gpaper.core.geometry.TransformGrab
+import com.symmetricalpalmtree.gpaper.core.geometry.isPenSampleWorthRecording
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
 import com.symmetricalpalmtree.gpaper.core.model.OrientedBox
 import com.symmetricalpalmtree.gpaper.core.model.Selection
@@ -277,6 +278,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     // ── Input state ──────────────────────────────────────────────────────────
 
     private val activePoints = ArrayList<StrokePoint>()
+
+    /** The newest sample [recordPenSample] dropped since the last recorded one, if any. */
+    private var droppedTailSample: StrokePoint? = null
 
     /**
      * The id the stroke now under the pen will be committed with, minted the first time
@@ -1850,6 +1854,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
     }
 
     private fun commitActiveStroke(allowGestures: Boolean = true): Boolean {
+        flushDroppedTail()
         if (activePoints.isEmpty()) return true
         val points = activePoints.toList()
         activePoints.clear()
@@ -2193,23 +2198,41 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * actually painted.
      */
     private fun appendDrawPoints(points: List<StrokePoint>) {
-        if (exclusionRects.isEmpty()) {
-            activePoints.addAll(points)
-            onLiveStrokeExtended(activePoints)
-            return
-        }
         for (p in points) {
-            if (exclusionRects.any { it.contains(p.x.toInt(), p.y.toInt()) }) {
+            if (exclusionRects.isNotEmpty() && exclusionRects.any { it.contains(p.x.toInt(), p.y.toInt()) }) {
                 // Mid-contact fragment — never a completed gesture (allowGestures off).
+                flushDroppedTail()
                 if (activePoints.size >= 2) {
                     commitCapturedStroke(activePoints.toList(), allowGestures = false)
                 }
                 activePoints.clear()
             } else {
-                activePoints.add(p)
+                recordPenSample(p)
             }
         }
         onLiveStrokeExtended(activePoints)
+    }
+
+    /**
+     * Record [p] unless it is a sample that did not move ([isPenSampleWorthRecording]). The
+     * first sample of a contact is always recorded; a dropped one is held in
+     * [droppedTailSample] so the contact's last sample can still be kept at pen-up.
+     */
+    private fun recordPenSample(p: StrokePoint) {
+        val last = activePoints.lastOrNull()
+        if (last == null || isPenSampleWorthRecording(last, p)) {
+            activePoints.add(p)
+            droppedTailSample = null
+        } else {
+            droppedTailSample = p
+        }
+    }
+
+    /** Record the last sample [recordPenSample] dropped, so a contact ends on its true last sample. */
+    private fun flushDroppedTail() {
+        val tail = droppedTailSample ?: return
+        droppedTailSample = null
+        if (activePoints.isNotEmpty()) activePoints.add(tail)
     }
 
     /**

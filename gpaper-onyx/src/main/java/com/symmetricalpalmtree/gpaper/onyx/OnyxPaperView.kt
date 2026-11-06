@@ -21,6 +21,7 @@ import com.symmetricalpalmtree.gpaper.core.RawInputEvent
 import com.symmetricalpalmtree.gpaper.core.RawTool
 import com.symmetricalpalmtree.gpaper.core.Tool
 import com.symmetricalpalmtree.gpaper.core.canvas.CanvasPaperView
+import com.symmetricalpalmtree.gpaper.core.geometry.filterPenSamples
 import com.symmetricalpalmtree.gpaper.core.model.Stroke
 import com.symmetricalpalmtree.gpaper.core.model.StrokePoint
 import kotlin.math.hypot
@@ -655,7 +656,7 @@ internal class OnyxPaperView(context: Context) : CanvasPaperView(context) {
                 // current with the overlay's live ink. The SDK may deliver several
                 // batches per contact; each becomes its own stroke (matching the
                 // reference engine — onPenLifted still fires once, at the end callback).
-                commitCapturedStroke(points)
+                commitCapturedStroke(filterPenSamples(points))
             }
         }
 

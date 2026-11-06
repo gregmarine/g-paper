@@ -81,6 +81,12 @@ override fun onDestroy() { paper.release(); super.onDestroy() }
   sample's raw `AXIS_TILT` and `AXIS_ORIENTATION`, defaulting to Android's own contract
   (`AXIS_TILT` *is* the polar lean in radians, no direction). Supernote's overrides them,
   because that HAL means signed tilt-X and tilt-Y in degrees by those two axes.
+- **Captured strokes keep only samples that moved.** The digitizer reports about 480 Hz, and
+  a sample that did not move adds bytes but nothing visible. Every engine (generic, BOOX,
+  Supernote) records a pen sample only when it is at least `PEN_SAMPLE_MIN_DISTANCE_PX` (1 px)
+  from the last recorded one or its pressure differs by at least `PEN_SAMPLE_MIN_PRESSURE_DELTA`
+  (0.03); tilt, azimuth and time do not count. The first and last sample of a contact are always
+  kept, and kept samples are exact originals. Strokes the host loads are never filtered.
 - **Color is an ARGB Int**, width is px. No serialization opinions anywhere — the host
   persists strokes however it likes.
 - `Stroke.translated(dx, dy)` is the sanctioned way to move/copy a stroke: it shifts
