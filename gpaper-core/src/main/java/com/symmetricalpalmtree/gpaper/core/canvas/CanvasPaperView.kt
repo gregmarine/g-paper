@@ -44,6 +44,7 @@ import com.symmetricalpalmtree.gpaper.core.geometry.SnapGuide
 import com.symmetricalpalmtree.gpaper.core.geometry.TransformGeometry
 import com.symmetricalpalmtree.gpaper.core.geometry.TransformGrab
 import com.symmetricalpalmtree.gpaper.core.geometry.isPenSampleWorthRecording
+import com.symmetricalpalmtree.gpaper.core.geometry.penSamplePressureStep
 import com.symmetricalpalmtree.gpaper.core.model.Bounds
 import com.symmetricalpalmtree.gpaper.core.model.OrientedBox
 import com.symmetricalpalmtree.gpaper.core.model.Selection
@@ -2198,6 +2199,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * actually painted.
      */
     private fun appendDrawPoints(points: List<StrokePoint>) {
+        val pressureStep = penSamplePressureStep(penStyle, penWidth)
         for (p in points) {
             if (exclusionRects.isNotEmpty() && exclusionRects.any { it.contains(p.x.toInt(), p.y.toInt()) }) {
                 // Mid-contact fragment — never a completed gesture (allowGestures off).
@@ -2207,7 +2209,7 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
                 }
                 activePoints.clear()
             } else {
-                recordPenSample(p)
+                recordPenSample(p, pressureStep)
             }
         }
         onLiveStrokeExtended(activePoints)
@@ -2218,9 +2220,9 @@ open class CanvasPaperView(context: Context) : View(context), PaperView {
      * first sample of a contact is always recorded; a dropped one is held in
      * [droppedTailSample] so the contact's last sample can still be kept at pen-up.
      */
-    private fun recordPenSample(p: StrokePoint) {
+    private fun recordPenSample(p: StrokePoint, pressureStep: Float) {
         val last = activePoints.lastOrNull()
-        if (last == null || isPenSampleWorthRecording(last, p)) {
+        if (last == null || isPenSampleWorthRecording(last, p, pressureStep)) {
             activePoints.add(p)
             droppedTailSample = null
         } else {
